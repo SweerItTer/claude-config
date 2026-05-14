@@ -198,15 +198,20 @@ setup_rtk() {
             local arch; arch="$(uname -m)"
             local tarball="rtk-${arch}-unknown-linux-gnu.tar.gz"
 
-            # musl (静态链接) 在 x86_64 可用；fallback 到 gnu
+            # musl (静态链接) 在 x86_64 可用
             [[ "$arch" == "x86_64" ]] && tarball="rtk-x86_64-unknown-linux-musl.tar.gz"
 
             local url="https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/${tarball}"
             local tmpdir; tmpdir="$(mktemp -d)"
-            curl -sL "$url" -o "$tmpdir/$tarball"
+            curl --fail -sL "$url" -o "$tmpdir/$tarball" || {
+                err "下载 RTK 失败: $url"; exit 1
+            }
             tar -xzf "$tmpdir/$tarball" -C "$tmpdir"
             mkdir -p "$RTK_INSTALL_DIR"
-            mv "$tmpdir/rtk" "$RTK_INSTALL_DIR/rtk"
+            # 查找 rtk 二进制 (可能在子目录中)
+            local bin; bin="$(find "$tmpdir" -name rtk -type f | head -1)"
+            [[ -n "$bin" ]] || { err "未在压缩包中找到 rtk 二进制"; exit 1; }
+            mv "$bin" "$RTK_INSTALL_DIR/rtk"
             chmod +x "$RTK_INSTALL_DIR/rtk"
             rm -rf "$tmpdir"
             log "RTK 安装完成: $(rtk --version 2>&1)"

@@ -1,0 +1,239 @@
+name: Test setup.sh
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REPO_ROOT: /home/runner/claude-config
+
+jobs:
+  verify:
+    name: Verify setup.sh on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js (for ECC npm install)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run setup.sh
+        run: |
+          chmod +x ./setup.sh
+          ./setup.sh
+        env:
+          REPO_ROOT: ${{ github.workspace }}
+
+      - name: Verify symlinks — core config
+        run: |
+          set -euo pipefail
+          echo "=== 核心配置符号链接 ==="
+          for f in CLAUDE.md RTK.md AGENTS.md; do
+            target="$HOME/.claude/$f"
+            [[ -L "$target" ]] || { echo "FAIL: $target 不是符号链接"; exit 1; }
+            link=$(readlink "$target")
+            [[ "$link" == "$REPO_ROOT/config/claude/$f" ]] || { echo "FAIL: $target -> $link (期望 -> $REPO_ROOT/config/claude/$f)"; exit 1; }
+            echo "  OK: $f -> $link"
+          done
+
+      - name: Verify symlinks — rules
+        run: |
+          set -euo pipefail
+          target="$HOME/.claude/rules"
+          [[ -L "$target" ]] || { echo "FAIL: $target 不是符号链接"; exit 1; }
+          link=$(readlink "$target")
+          expected="$REPO_ROOT/config/claude/rules"
+          [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
+          echo "OK: rules -> $link"
+
+          # 抽样检查几个 rule 文件
+          for f in common/coding-style.md common/security.md common/git-workflow.md; do
+            [[ -f "$HOME/.claude/rules/$f" ]] || { echo "FAIL: rules/$f 不存在"; exit 1; }
+          done
+          echo "OK: rules 文件抽样通过"
+
+      - name: Verify symlinks — agents (ECC + custom)
+        run: |
+          set -euo pipefail
+          target="$HOME/.claude/agents"
+          [[ -L "$target" ]] || { echo "FAIL: $target 不是符号链接"; exit 1; }
+          link=$(readlink "$target")
+          expected="$REPO_ROOT/external/everything-claude-code/agents"
+          [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
+          echo "OK: agents dir -> $link"
+
+          # ECC agent 文件存在
+          for f in architect.md code-reviewer.md planner.md tdd-guide.md; do
+            [[ -f "$target/$f" ]] || { echo "FAIL: agents/$f 不存在"; exit 1; }
+          done
+          echo "OK: ECC agents 抽样通过"
+
+          # 自定义 agent 文件已复制 (非符号链接)
+          for f in git.md progress.md rules.md validation.md; do
+            fp="$target/$f"
+            [[ -f "$fp" ]] || { echo "FAIL: custom agent $f 不存在"; exit 1; }
+            [[ -L "$fp" ]] && { echo "FAIL: custom agent $f 是符号链接 (应为普通文件)"; exit 1; }
+          done
+          echo "OK: 自定义 agents (git, progress, rules, validation) 均为普通文件"
+
+      - name: Verify symlinks — commands (ECC)
+        run: |
+          set -euo pipefail
+          target="$HOME/.claude/commands"
+          [[ -L "$target" ]] || { echo "FAIL: $target 不是符号链接"; exit 1; }
+          link=$(readlink "$target")
+          expected="$REPO_ROOT/external/everything-claude-code/commands"
+          [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
+          echo "OK: commands -> $link"
+
+      - name: Verify skills — ECC + OMC + superpowers
+        run: |
+          set -euo pipefail
+          sd="$HOME/.claude/skills"
+
+          # ECC skills (符号链接)
+          for name in tdd code-review brainstorming; do
+            sp="$sd/$name"
+            [[ -d "$sp" ]] || { echo "FAIL: skill $name 目录不存在"; exit 1; }
+            [[ -L "$sp" ]] || { echo "FAIL: skill $name 不是符号链接 (应为 ECC symlink)"; exit 1; }
+          done
+          echo "OK: ECC skills 抽样通过 (符号链接)"
+
+          # OMC skill
+          [[ -L "$sd/omc-reference" ]] || { echo "FAIL: omc-reference 不是符号链接"; exit 1; }
+          echo "OK: omc-reference skill"
+
+          # Superpowers skills (普通目录 — 已复制)
+          for name in using-superpowers verification-before-completion test-driven-development; do
+            sp="$sd/$name"
+            [[ -d "$sp" ]] || { echo "FAIL: superpowers skill $name 目录不存在"; exit 1; }
+            [[ -L "$sp" ]] && { echo "FAIL: superpowers skill $name 是符号链接 (应为复制目录)"; exit 1; }
+          done
+          echo "OK: superpowers skills 抽样通过 (普通目录)"
+
+      - name: Verify marketplace registrations
+        run: |
+          set -euo pipefail
+          mp="$HOME/.claude/plugins/marketplaces"
+
+          declare -A markets=(
+            [omc]="oh-my-claudecode"
+            [context-mode]="context-mode"
+            [everything-claude-code]="everything-claude-code"
+            [claude-plugins-official]="claude-plugins-official"
+          )
+
+          for name in "${!markets[@]}"; do
+            submod="${markets[$name]}"
+            target="$mp/$name"
+            [[ -L "$target" ]] || { echo "FAIL: marketplace $name 不是符号链接"; exit 1; }
+            link=$(readlink "$target")
+            expected="$REPO_ROOT/external/$submod"
+            [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
+            echo "OK: marketplace $name -> $link"
+          done
+
+          # known_marketplaces.json — REPO_ROOT 已被替换
+          km="$HOME/.claude/plugins/known_marketplaces.json"
+          [[ -f "$km" ]] || { echo "FAIL: known_marketplaces.json 不存在"; exit 1; }
+          # 确保不包含未替换的 REPO_ROOT 占位符
+          if grep -q "REPO_ROOT" "$km"; then
+            echo "FAIL: known_marketplaces.json 仍包含 REPO_ROOT 占位符"
+            exit 1
+          fi
+          echo "OK: known_marketplaces.json 路径已替换"
+
+      - name: Verify RTK binary
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          rtk --version || { echo "FAIL: rtk --version 失败"; exit 1; }
+          echo "OK: RTK $(rtk --version)"
+
+      - name: Verify RTK config
+        run: |
+          set -euo pipefail
+          for f in config.toml filters.toml; do
+            target="$HOME/.config/rtk/$f"
+            [[ -L "$target" ]] || { echo "FAIL: rtk/$f 不是符号链接"; exit 1; }
+            link=$(readlink "$target")
+            expected="$REPO_ROOT/config/rtk/$f"
+            [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
+            echo "OK: rtk/$f -> $link"
+          done
+
+      - name: Verify ECC node_modules
+        run: |
+          set -euo pipefail
+          nm="$REPO_ROOT/external/everything-claude-code/node_modules"
+          [[ -d "$nm" ]] || { echo "FAIL: ECC node_modules 不存在"; exit 1; }
+          echo "OK: ECC node_modules 已安装"
+
+      - name: Verify OMC config
+        run: |
+          set -euo pipefail
+          # wiki
+          wt="$HOME/.omc/wiki"
+          [[ -L "$wt" ]] || { echo "FAIL: OMC wiki 不是符号链接"; exit 1; }
+          echo "OK: OMC wiki -> $(readlink "$wt")"
+
+          # rules-injector
+          ri="$HOME/.omc/rules-injector"
+          [[ -L "$ri" ]] || { echo "FAIL: OMC rules-injector 不是符号链接"; exit 1; }
+          echo "OK: OMC rules-injector -> $(readlink "$ri")"
+
+  # ---- 可选: claude 输出测试 (需要 secrets) ----
+  claude-smoke:
+    name: Claude smoke test
+    runs-on: ubuntu-24.04
+    needs: verify
+    if: ${{ vars.CLAUDE_BASEURL != '' && secrets.CLAUDE_APIKEY != '' }}
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run setup.sh
+        run: |
+          chmod +x ./setup.sh
+          ./setup.sh
+
+      - name: Write settings.json
+        run: |
+          mkdir -p "$HOME/.claude"
+          cat > "$HOME/.claude/settings.json" << EOF
+          {
+            "baseURL": "${{ vars.CLAUDE_BASEURL }}",
+            "apiKeyHelper": "echo $CLAUDE_APIKEY"
+          }
+          EOF
+        env:
+          CLAUDE_APIKEY: ${{ secrets.CLAUDE_APIKEY }}
+
+      - name: Smoke test — claude output
+        run: |
+          echo '回应 "OK" 即可。' | claude --print --output-format text 2>&1 | head -20
+        timeout-minutes: 3
