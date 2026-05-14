@@ -115,13 +115,13 @@ jobs:
           [[ -L "$sd/omc-reference" ]] || { echo "FAIL: omc-reference 不是符号链接"; exit 1; }
           echo "OK: omc-reference skill"
 
-          # Superpowers skills (普通目录 — 已复制)
+          # Superpowers skills (由 plugin marketplace 运行时发现，不在 skills/ 目录)
+          # 验证旧版 cp -r 残留已清理
           for name in using-superpowers verification-before-completion test-driven-development; do
             sp="$sd/$name"
-            [[ -d "$sp" ]] || { echo "FAIL: superpowers skill $name 目录不存在"; exit 1; }
-            [[ -L "$sp" ]] && { echo "FAIL: superpowers skill $name 是符号链接 (应为复制目录)"; exit 1; }
+            [[ -d "$sp" ]] && { echo "FAIL: 旧 superpowers skill $name 仍存在 (应为 plugin 发现)"; exit 1; }
           done
-          echo "OK: superpowers skills 抽样通过 (普通目录)"
+          echo "OK: superpowers skills 已迁移至 plugin marketplace (无残留)"
 
       - name: Verify marketplace registrations
         run: |
@@ -132,6 +132,7 @@ jobs:
             [omc]="oh-my-claudecode"
             [context-mode]="context-mode"
             [ecc]="everything-claude-code"
+            [superpowers]="superpowers"
             [claude-plugins-official]="claude-plugins-official"
           )
 
@@ -174,12 +175,26 @@ jobs:
             echo "OK: rtk/$f -> $link"
           done
 
-      - name: Verify ECC node_modules
+      - name: Verify OMC hooks in settings.json
         run: |
           set -euo pipefail
-          nm="$REPO_ROOT/external/everything-claude-code/node_modules"
-          [[ -d "$nm" ]] || { echo "FAIL: ECC node_modules 不存在"; exit 1; }
-          echo "OK: ECC node_modules 已安装"
+          sf="$HOME/.claude/settings.json"
+          [[ -f "$sf" ]] || { echo "FAIL: settings.json 不存在"; exit 1; }
+          hook_count=$(python3 -c "import json; d=json.load(open('$sf')); print(len(d.get('hooks', {})))" 2>/dev/null || echo 0)
+          if [[ "$hook_count" -lt 3 ]]; then
+            echo "FAIL: settings.json 中 hooks 数量不足 ($hook_count, 期望 >= 3)"
+            exit 1
+          fi
+          echo "OK: settings.json 包含 $hook_count 个 hook 条目 (OMC 已注入)"
+
+      - name: Verify ECC + context-mode node_modules
+        run: |
+          set -euo pipefail
+          for dir in everything-claude-code context-mode; do
+            nm="$REPO_ROOT/external/$dir/node_modules"
+            [[ -d "$nm" ]] || { echo "FAIL: $dir node_modules 不存在"; exit 1; }
+            echo "OK: $dir node_modules 已安装"
+          done
 
       - name: Verify OMC config
         run: |

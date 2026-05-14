@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
 # ============================================================
-# Claude Code 配置迁移 — 一键初始化脚本
+# Claude Code Config Migration — 一键初始化脚本 v3
 # 用法: git clone --recurse-submodules <repo-url> && ./setup.sh
+#
+# 5 阶段:
+#   0. 环境检测 (OS, deps, Claude Code)
+#   1. 安装 Claude Code (可选)
+#   2. Git Submodules
+#   3. 安装插件 (RTK → ECC → context-mode → superpowers 前半)
+#   4. 生成 settings.json + OMC setup (后半)
+#   5. 文件验证 + claude --print 功能测试
 # ============================================================
+set -euo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -13,269 +20,187 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SCRIPT_DIR="$REPO_ROOT/script"
+
 DRY_RUN=false
 CI_MODE=false
+NO_CLAUDE=false
+NO_VERIFY=false
 
-log()  { echo -e "${GREEN}[OK]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()  { echo -e "${RED}[ERR]${NC} $*"; }
-info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+# ----- helpers -----
+log()   { echo -e "${GREEN}[OK]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+err()   { echo -e "${RED}[ERR]${NC} $*"; }
+info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
+phase() { echo ""; echo -e "${BLUE}═══ $* ═══${NC}"; echo ""; }
 
-# --------------- 参数解析 ---------------
+run_installer() {
+    local name="$1"
+    local script="$SCRIPT_DIR/install-${name}.sh"
+    if [[ ! -f "$script" ]]; then
+        err "安装脚本不存在: $script"
+        return 1
+    fi
+    info "--- ${name} ---"
+    bash "$script" "$REPO_ROOT" "$DRY_RUN"
+}
+
+# ----- 参数解析 -----
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=true; shift ;;
         --ci) CI_MODE=true; shift ;;
+        --no-claude) NO_CLAUDE=true; shift ;;
+        --no-verify) NO_VERIFY=true; shift ;;
         -h|--help)
-            echo "用法: ./setup.sh [--dry-run]"
-            echo ""
-            echo "一键初始化 Claude Code 配置环境。"
-            echo "符号链接所有配置、注册 marketplace、安装 RTK。"
-            exit 0
-            ;;
+            echo "用法: ./setup.sh [选项]"
+            echo "  --ci            CI 模式 (跳过手动提示)"
+            echo "  --dry-run       预览，不实际修改"
+            echo "  --no-claude     跳过 Claude Code 安装"
+            echo "  --no-verify     跳过验证"
+            exit 0 ;;
         *) err "未知参数: $1"; exit 1 ;;
     esac
 done
 
-# --------------- 前置检查 ---------------
-check_deps() {
-    info "检查前置依赖..."
+# ============================================================
+# Main
+# ============================================================
+main() {
+    echo ""
+    echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║  Claude Code Config Migration v3    ║${NC}"
+    echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
+    echo ""
+    [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
+    [[ "$CI_MODE" == true ]] && info "CI 模式"
 
+    # === Phase 0: 环境检测 ===
+    phase "Phase 0: 环境检测"
     local missing=()
+    for dep in git curl tar node; do
+        command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+    done
+    [[ ${#missing[@]} -gt 0 ]] && { err "缺少依赖: ${missing[*]}"; exit 1; }
+    log "git, curl, tar, node 已就绪"
+    info "系统: $(uname -s) / $(uname -m)"
 
-    command -v git    >/dev/null 2>&1 || missing+=(git)
-    command -v curl   >/dev/null 2>&1 || missing+=(curl)
-    command -v tar    >/dev/null 2>&1 || missing+=(tar)
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        err "缺少依赖: ${missing[*]}"
-        exit 1
+    # === Phase 1: Claude Code ===
+    if [[ "$NO_CLAUDE" == true ]]; then
+        info "Phase 1: 跳过 Claude Code 安装 (--no-claude)"
+    elif command -v claude >/dev/null 2>&1; then
+        log "Phase 1: Claude Code 已安装: $(claude --version 2>&1 | head -1)"
+    else
+        phase "Phase 1: 安装 Claude Code"
+        [[ "$DRY_RUN" == true ]] && { info "[DRY-RUN] npm install -g @anthropic-ai/claude-code"; }
+        [[ "$DRY_RUN" == false ]] && { npm install -g @anthropic-ai/claude-code; log "Claude Code 安装完成"; }
     fi
-    log "所有依赖已满足"
-}
 
-# --------------- 符号链接辅助 ---------------
-link_file() {
-    local src="$1" dst="$2"
-    [[ "$DRY_RUN" == true ]] && { info "[DRY-RUN] ln -sf $src -> $dst"; return; }
-    mkdir -p "$(dirname "$dst")"
-    [[ -L "$dst" ]] || [[ -f "$dst" ]] && rm -f "$dst"
-    ln -s "$src" "$dst"
-}
-
-link_dir() {
-    local src="$1" dst="$2"
-    [[ "$DRY_RUN" == true ]] && { info "[DRY-RUN] ln -sfn $src -> $dst"; return; }
-    mkdir -p "$(dirname "$dst")"
-    [[ -L "$dst" ]] || [[ -d "$dst" ]] && rm -rf "$dst"
-    ln -sfn "$src" "$dst"
-}
-
-# --------------- Submodule 初始化 ---------------
-init_submodules() {
-    info "初始化 git submodules..."
+    # === Phase 2: Submodules ===
+    phase "Phase 2: Git Submodules"
+    info "初始化 git submodules (5 个)..."
     [[ "$DRY_RUN" == false ]] && { cd "$REPO_ROOT" && git submodule update --init --recursive; }
     log "Submodules 就绪"
-}
 
-# --------------- Claude 核心配置 ---------------
-setup_claude_core() {
-    info "链接 Claude Code 核心配置..."
-    local cfg="$REPO_ROOT/config/claude"
-    local target="$HOME/.claude"
+    # === Phase 3: 安装插件 ===
+    phase "Phase 3: 安装插件"
+    run_installer rtk
+    run_installer ecc
+    run_installer context-mode
+    run_installer superpowers
 
-    link_file "$cfg/CLAUDE.md"  "$target/CLAUDE.md"
-    link_file "$cfg/RTK.md"     "$target/RTK.md"
-    link_file "$cfg/AGENTS.md"  "$target/AGENTS.md"
-    link_dir  "$cfg/rules"      "$target/rules"
+    # === Phase 4: settings.json + OMC ===
+    phase "Phase 4: 生成 settings.json + OMC setup"
+    local tmpl="$REPO_ROOT/config/claude/settings.template.json"
+    local target="$CLAUDE_HOME/settings.json"
 
-    log "核心配置已链接"
-}
-
-# --------------- Agents (来自 ECC + 自定义) ---------------
-setup_agents() {
-    info "设置 Agents..."
-    local ecc_agents="$REPO_ROOT/external/everything-claude-code/agents"
-    local custom="$REPO_ROOT/config/claude/agents-custom"
-    local target="$HOME/.claude/agents"
-
-    # 整个 agents 目录符号链接到 ECC
-    link_dir "$ecc_agents" "$target"
-
-    # 覆盖自定义 agent 文件 (ECC 之外的 4 个)
-    [[ "$DRY_RUN" == false ]] && {
-        for f in "$custom"/*.md; do
-            cp "$f" "$target/$(basename "$f")"
-        done
-    }
-
-    log "Agents 已设置 (ECC + 自定义)"
-}
-
-# --------------- Skills (来自 ECC + OMC + superpowers) ---------------
-setup_skills() {
-    info "设置 Skills..."
-    local ecc_skills="$REPO_ROOT/external/everything-claude-code/skills"
-    local omc_skills="$REPO_ROOT/external/oh-my-claudecode/skills"
-    local super_skills="$REPO_ROOT/config/claude/skills-superpowers"
-    local target="$HOME/.claude/skills"
-
-    # 创建真实目录
-    [[ "$DRY_RUN" == false ]] && { mkdir -p "$target"; }
-
-    # 1. 符号链接 ECC 的所有 skills
-    if [[ -d "$ecc_skills" ]]; then
-        for skill_dir in "$ecc_skills"/*/; do
-            local name; name="$(basename "$skill_dir")"
-            link_dir "$skill_dir" "$target/$name"
-        done
+    if [[ ! -f "$tmpl" ]]; then
+        warn "settings.template.json 不存在，跳过"
+    elif [[ -f "$target" ]] && [[ "$CI_MODE" != true ]]; then
+        warn "已有 ~/.claude/settings.json，跳过生成"
+    else
+        info "从模板生成 settings.json..."
+        [[ "$DRY_RUN" == false ]] && {
+            mkdir -p "$CLAUDE_HOME"
+            local content; content="$(cat "$tmpl")"
+            for var in CLAUDE_BASE_URL CLAUDE_API_KEY CLAUDE_MODEL \
+                       CLAUDE_HAIKU_MODEL CLAUDE_SONNET_MODEL CLAUDE_OPUS_MODEL; do
+                content="${content//"{{${var}}}"/${!var:-}}"
+            done
+            content="${content//"{{REPO_ROOT}}"/$REPO_ROOT}"
+            echo "$content" > "$target"
+        }
+        log "settings.json 已生成"
     fi
 
-    # 2. 符号链接 OMC 的 omc-reference skill
-    if [[ -d "$omc_skills/omc-reference" ]]; then
-        link_dir "$omc_skills/omc-reference" "$target/omc-reference"
-    fi
+    # OMC setup 依赖 settings.json 存在 (合并 hooks)
+    run_installer omc
 
-    # 3. 复制 superpowers skills (不在 submodule 中，纳入仓库)
-    if [[ -d "$super_skills" ]]; then
-        for skill_dir in "$super_skills"/*/; do
-            local name; name="$(basename "$skill_dir")"
-            # superpowers skills 作为目录复制（非符号链接）
-            [[ "$DRY_RUN" == false ]] && {
-                [[ -d "$target/$name" ]] && rm -rf "$target/$name"
-                cp -r "$skill_dir" "$target/$name"
+    # === Phase 5: 验证 ===
+    if [[ "$NO_VERIFY" == true ]]; then
+        info "Phase 5: 跳过验证 (--no-verify)"
+    else
+        phase "Phase 5: 功能验证"
+        local fails=0
+        check() {
+            if eval "$1" 2>/dev/null; then echo "  ${GREEN}✓${NC} $2"; else echo "  ${RED}✗${NC} $2"; fails=$((fails+1)); fi
+        }
+
+        for f in CLAUDE.md RTK.md AGENTS.md; do
+            check "[[ -L '$CLAUDE_HOME/$f' ]]" "核心配置 $f 符号链接"
+        done
+        check "[[ -L '$CLAUDE_HOME/rules' ]]" "rules 目录"
+        check "grep -q 'OMC:START' '$CLAUDE_HOME/CLAUDE.md'" "OMC 已注入 CLAUDE.md"
+        check "[[ -L '$CLAUDE_HOME/agents' ]]" "agents 目录 (ECC)"
+        check "[[ -f '$CLAUDE_HOME/agents/architect.md' ]]" "  architect.md"
+        check "[[ -f '$CLAUDE_HOME/agents/git.md' && ! -L '$CLAUDE_HOME/agents/git.md' ]]" "  自定义 git.md"
+        check "[[ -L '$CLAUDE_HOME/skills/tdd-workflow' ]]" "ECC skill: tdd-workflow"
+        check "[[ -L '$CLAUDE_HOME/commands' ]]" "commands 目录"
+        check "[[ -L '$CLAUDE_HOME/plugins/marketplaces/superpowers' ]]" "superpowers mkt"
+        check "[[ -L '$CLAUDE_HOME/plugins/marketplaces/context-mode' ]]" "context-mode mkt"
+        check "[[ -d '$REPO_ROOT/external/context-mode/node_modules' ]]" "ctx node_modules"
+
+        export PATH="$HOME/.local/bin:$PATH"
+        check "command -v rtk >/dev/null 2>&1" "RTK 二进制"
+        check "rtk --version >/dev/null 2>&1" "RTK --version"
+        check "[[ -L '$HOME/.config/rtk/config.toml' ]]" "RTK config"
+
+        local mp="$CLAUDE_HOME/plugins/marketplaces"
+        for name in ecc omc context-mode superpowers claude-plugins-official; do
+            check "[[ -L '$mp/$name' ]]" "marketplace: $name"
+        done
+
+        local km="$CLAUDE_HOME/plugins/known_marketplaces.json"
+        check "[[ -f '$km' ]]" "known_marketplaces.json"
+        check "! grep -q 'REPO_ROOT' '$km'" "km.json 路径已替换"
+
+        [[ $fails -gt 0 ]] && warn "文件验证: $fails 项失败" || log "文件验证: 全部通过"
+
+        # 功能测试 (仅非 CI)
+        if [[ "$CI_MODE" != true ]]; then
+            echo ""
+            info "功能测试 (claude --print)..."
+            vc() {
+                echo -n "  $1 ... "
+                local out rc
+                if out=$(timeout 120 claude --print --output-format text "$2" 2>&1); then
+                    echo "$out" | grep -qi "$3" && echo -e "${GREEN}OK${NC}" || {
+                        echo -e "${YELLOW}?${NC}"; echo "    $(echo "$out" | head -1)"
+                    }
+                else
+                    rc=$?; [[ $rc -eq 124 ]] && echo -e "${RED}TIMEOUT${NC}" || echo -e "${RED}FAIL ($rc)${NC}"
+                fi
             }
-            [[ "$DRY_RUN" == true ]] && info "[DRY-RUN] cp -r $skill_dir -> $target/$name"
-        done
+            vc "基础连通" "say OK" "OK"
+            vc "OMC 检测"  "简短回答: 你的 agent 框架名称?" "OMC|oh-my-claudecode|agent"
+            vc "superpowers" "你是否可以访问 using-superpowers 这个 skill? 只回答是或否" "是|yes|可以"
+            echo ""
+        fi
+        log "验证完成"
     fi
 
-    log "Skills 已设置 (ECC + OMC + superpowers)"
-}
-
-# --------------- Commands (来自 ECC) ---------------
-setup_commands() {
-    info "设置 Commands..."
-    local ecc_commands="$REPO_ROOT/external/everything-claude-code/commands"
-    local target="$HOME/.claude/commands"
-
-    link_dir "$ecc_commands" "$target"
-    log "Commands 已链接 (ECC)"
-}
-
-# --------------- Marketplace 注册 ---------------
-setup_marketplaces() {
-    info "注册插件市场..."
-    local ext="$REPO_ROOT/external"
-    local mp_dir="$HOME/.claude/plugins/marketplaces"
-
-    link_dir "$ext/oh-my-claudecode"         "$mp_dir/omc"
-    link_dir "$ext/context-mode"              "$mp_dir/context-mode"
-    link_dir "$ext/everything-claude-code"    "$mp_dir/ecc"
-    link_dir "$ext/claude-plugins-official"   "$mp_dir/claude-plugins-official"
-
-    [[ "$DRY_RUN" == false ]] && {
-        mkdir -p "$HOME/.claude/plugins"
-        sed "s|REPO_ROOT|$REPO_ROOT|g" "$REPO_ROOT/known_marketplaces.json" \
-            > "$HOME/.claude/plugins/known_marketplaces.json"
-    }
-
-    log "Marketplace 已注册 (4 个)"
-}
-
-# --------------- RTK ---------------
-RTK_VERSION="v0.40.0"
-RTK_INSTALL_DIR="$HOME/.local/bin"
-
-setup_rtk() {
-    info "安装 RTK..."
-    local cfg="$REPO_ROOT/config/rtk"
-    local target="$HOME/.config/rtk"
-
-    # 安装二进制 (从 GitHub Releases 下载预编译静态二进制)
-    if command -v rtk >/dev/null 2>&1; then
-        log "RTK 已安装: $(rtk --version 2>&1)"
-    else
-        info "下载 RTK ${RTK_VERSION} 预编译二进制..."
-        [[ "$DRY_RUN" == false ]] && {
-            local arch; arch="$(uname -m)"
-            local tarball="rtk-${arch}-unknown-linux-gnu.tar.gz"
-
-            # musl (静态链接) 在 x86_64 可用
-            [[ "$arch" == "x86_64" ]] && tarball="rtk-x86_64-unknown-linux-musl.tar.gz"
-
-            local url="https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/${tarball}"
-            local tmpdir; tmpdir="$(mktemp -d)"
-            curl --fail -sL "$url" -o "$tmpdir/$tarball" || {
-                err "下载 RTK 失败: $url"; exit 1
-            }
-            tar -xzf "$tmpdir/$tarball" -C "$tmpdir"
-            mkdir -p "$RTK_INSTALL_DIR"
-            # 查找 rtk 二进制 (可能在子目录中)
-            local bin; bin="$(find "$tmpdir" -name rtk -type f | head -1)"
-            [[ -n "$bin" ]] || { err "未在压缩包中找到 rtk 二进制"; exit 1; }
-            mv "$bin" "$RTK_INSTALL_DIR/rtk"
-            chmod +x "$RTK_INSTALL_DIR/rtk"
-            rm -rf "$tmpdir"
-            log "RTK 安装完成: $(rtk --version 2>&1)"
-        }
-    fi
-
-    # 配置文件
-    link_file "$cfg/config.toml"  "$target/config.toml"
-    link_file "$cfg/filters.toml" "$target/filters.toml"
-
-    # 不在此运行 rtk init: RTK.md 已由 setup_claude_core 符号链接,
-    # settings.json 由用户自行管理。hooks 需手动注册 (见 finish 消息)。
-    log "RTK 配置就绪 (hooks 需手动注册到 settings.json)"
-}
-
-# --------------- ECC 依赖 ---------------
-setup_ecc_deps() {
-    info "安装 ECC 依赖..."
-    local ecc_dir="$REPO_ROOT/external/everything-claude-code"
-
-    if [[ ! -d "$ecc_dir/node_modules" ]]; then
-        [[ "$DRY_RUN" == false ]] && {
-            (cd "$ecc_dir" && npm install --no-audit --no-fund --loglevel=error)
-        }
-        log "ECC 依赖已安装"
-    else
-        log "ECC 依赖已存在"
-    fi
-}
-
-# --------------- OMC 配置 ---------------
-setup_omc() {
-    info "配置 OMC..."
-    local omc_dir="$REPO_ROOT/external/oh-my-claudecode"
-    local cfg="$REPO_ROOT/config/omc"
-    local target="$HOME/.omc"
-
-    # 安装 OMC npm 依赖 (MCP server, hooks, runtime 需要)
-    if [[ ! -d "$omc_dir/node_modules" ]]; then
-        [[ "$DRY_RUN" == false ]] && {
-            (cd "$omc_dir" && npm install --no-audit --no-fund --loglevel=error)
-        }
-        log "OMC 依赖已安装"
-    else
-        log "OMC 依赖已存在"
-    fi
-
-    if [[ -d "$cfg/wiki" ]]; then
-        link_dir "$cfg/wiki" "$target/wiki"
-    fi
-
-    # OMC rules-injector 在新版本 (v4.13+) 的 OMC 中已移除
-    local omc_ri="$REPO_ROOT/external/oh-my-claudecode/rules-injector"
-    if [[ -d "$omc_ri" ]]; then
-        link_dir "$omc_ri" "$target/rules-injector"
-    fi
-
-    log "OMC 配置已链接"
-}
-
-# --------------- 完成 ---------------
-finish() {
+    # --------------- 完成 ---------------
     echo ""
     echo -e "${GREEN}============================================${NC}"
     echo -e "${GREEN}  Claude Code 配置迁移完成!${NC}"
@@ -284,52 +209,10 @@ finish() {
     if [[ "$CI_MODE" == true ]]; then
         log "CI 模式 — 所有配置已自动完成"
     else
-        echo -e "${YELLOW}下一步 (手动):${NC}"
-        echo ""
-        echo -e "  1. 放入 ${YELLOW}~/.claude/settings.json${NC} (含 API key 和 hooks)"
-        echo -e "  2. 启动一次 ${YELLOW}claude${NC} — 让插件系统发现 marketplace 并完成缓存"
-        echo -e "  3. 确认插件已激活: 在 claude 内运行 ${YELLOW}/plugin list${NC}"
-        echo ""
-        echo -e "${BLUE}Hook 配置参考 (需手动写入 settings.json):${NC}"
-        echo ""
-        echo -e "  RTK:   运行 ${YELLOW}rtk init --hook-only${NC} 获取 hooks 片段"
-        echo -e "  ECC:   hooks 由 Claude Code 插件系统自动注册 (启动 claude 即可)"
-        echo -e "  OMC:   hooks 由 Claude Code 插件系统自动注册"
-        echo -e "  ctx:   hooks 由 Claude Code 插件系统自动注册"
-        echo ""
-        echo "验证:"
-        echo "  claude --version"
-        echo "  rtk --version"
-        echo "  ls -la ~/.claude/CLAUDE.md            # 符号链接"
-        echo "  ls ~/.claude/agents/                  # ECC agents + 自定义"
-        echo "  ls ~/.claude/skills/                  # ECC + OMC + superpowers"
-        echo "  ls ~/.claude/commands/                # ECC commands"
-        echo "  ls ~/.claude/plugins/marketplaces/    # 4 个 marketplace"
+        echo "验证: claude --version  |  rtk --version"
+        echo "      ls ~/.claude/plugins/marketplaces/"
         echo ""
     fi
-}
-
-# --------------- Main ---------------
-main() {
-    echo ""
-    echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║  Claude Code Config Migration Setup  ║${NC}"
-    echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    echo ""
-
-    [[ "$DRY_RUN" == true ]] && warn "DRY-RUN 模式 — 不会实际修改文件"
-
-    check_deps
-    init_submodules
-    setup_claude_core
-    setup_agents
-    setup_skills
-    setup_commands
-    setup_marketplaces
-    setup_ecc_deps
-    setup_rtk
-    setup_omc
-    finish
 }
 
 main "$@"

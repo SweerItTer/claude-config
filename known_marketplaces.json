@@ -30,5 +30,13 @@
         },
         "installLocation": "REPO_ROOT/external/oh-my-claudecode",
         "lastUpdated": "2026-05-14T00:00:00.000Z"
+    },
+    "superpowers": {
+        "source": {
+            "source": "git",
+            "url": "https://github.com/obra/superpowers.git"
+        },
+        "installLocation": "REPO_ROOT/external/superpowers",
+        "lastUpdated": "2026-05-14T00:00:00.000Z"
     }
 }

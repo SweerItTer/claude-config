@@ -1,6 +1,5 @@
 # Config files that contain secrets — managed separately
 config/claude/settings.json
-config/claude/settings.template.json
 
 # Auto-generated OMC state at repo root
 .omc/

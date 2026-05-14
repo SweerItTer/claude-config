@@ -1,0 +1,62 @@
+{
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "env": {
+        "ANTHROPIC_BASE_URL": "{{CLAUDE_BASE_URL}}",
+        "ANTHROPIC_AUTH_TOKEN": "{{CLAUDE_API_KEY}}",
+        "ANTHROPIC_MODEL": "{{CLAUDE_MODEL}}",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{CLAUDE_HAIKU_MODEL}}",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{CLAUDE_SONNET_MODEL}}",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{CLAUDE_OPUS_MODEL}}",
+        "DISABLE_AUTOUPDATER": "1",
+        "CLAUDE_CODE_NEW_INIT": "1",
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    },
+    "think": false,
+    "permissions": {
+        "defaultMode": "bypassPermissions"
+    },
+    "skipDangerousModePermissionPrompt": true,
+    "enabledPlugins": {
+        "obra/superpowers@superpowers": true,
+        "Yeachan-Heo/oh-my-claudecode@omc": true,
+        "affaan-m/everything-claude-code@ecc": true,
+        "mksglu/context-mode@context-mode": true,
+        "code-review@claude-plugins-official": true,
+        "feature-dev@claude-plugins-official": true,
+        "playwright@claude-plugins-official": true,
+        "skill-creator@claude-plugins-official": true,
+        "claude-code-setup@claude-plugins-official": true
+    },
+    "extraKnownMarketplaces": {
+        "context-mode": {
+            "source": {
+                "source": "github",
+                "repo": "mksglu/context-mode"
+            }
+        },
+        "ecc": {
+            "source": {
+                "source": "github",
+                "repo": "affaan-m/everything-claude-code"
+            }
+        },
+        "omc": {
+            "source": {
+                "source": "git",
+                "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"
+            }
+        },
+        "superpowers": {
+            "source": {
+                "source": "git",
+                "url": "https://github.com/obra/superpowers.git"
+            }
+        }
+    },
+    "attribution": {
+        "commit": "",
+        "pr": ""
+    },
+    "language": "简体中文",
+    "effortLevel": "medium"
+}
