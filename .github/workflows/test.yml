@@ -32,7 +32,7 @@ jobs:
       - name: Run setup.sh
         run: |
           chmod +x ./setup.sh
-          ./setup.sh
+          ./setup.sh --ci
         env:
           REPO_ROOT: ${{ github.workspace }}
 
@@ -238,7 +238,7 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         run: |
           chmod +x ./setup.sh
-          ./setup.sh
+          ./setup.sh --ci
         env:
           REPO_ROOT: ${{ github.workspace }}
 

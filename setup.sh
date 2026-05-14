@@ -14,6 +14,7 @@ NC='\033[0m'
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 DRY_RUN=false
+CI_MODE=false
 
 log()  { echo -e "${GREEN}[OK]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -24,6 +25,7 @@ info() { echo -e "${BLUE}[INFO]${NC} $*"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=true; shift ;;
+        --ci) CI_MODE=true; shift ;;
         -h|--help)
             echo "用法: ./setup.sh [--dry-run]"
             echo ""
@@ -268,28 +270,32 @@ finish() {
     echo -e "${GREEN}  Claude Code 配置迁移完成!${NC}"
     echo -e "${GREEN}============================================${NC}"
     echo ""
-    echo -e "${YELLOW}下一步 (手动):${NC}"
-    echo ""
-    echo -e "  1. 放入 ${YELLOW}~/.claude/settings.json${NC} (含 API key 和 hooks)"
-    echo -e "  2. 启动一次 ${YELLOW}claude${NC} — 让插件系统发现 marketplace 并完成缓存"
-    echo -e "  3. 确认插件已激活: 在 claude 内运行 ${YELLOW}/plugin list${NC}"
-    echo ""
-    echo -e "${BLUE}Hook 配置参考 (需手动写入 settings.json):${NC}"
-    echo ""
-    echo -e "  RTK:   运行 ${YELLOW}rtk init --hook-only${NC} 获取 hooks 片段"
-    echo -e "  ECC:   hooks 由 Claude Code 插件系统自动注册 (启动 claude 即可)"
-    echo -e "  OMC:   hooks 由 Claude Code 插件系统自动注册"
-    echo -e "  ctx:   hooks 由 Claude Code 插件系统自动注册"
-    echo ""
-    echo "验证:"
-    echo "  claude --version"
-    echo "  rtk --version"
-    echo "  ls -la ~/.claude/CLAUDE.md            # 符号链接"
-    echo "  ls ~/.claude/agents/                  # ECC agents + 自定义"
-    echo "  ls ~/.claude/skills/                  # ECC + OMC + superpowers"
-    echo "  ls ~/.claude/commands/                # ECC commands"
-    echo "  ls ~/.claude/plugins/marketplaces/    # 4 个 marketplace"
-    echo ""
+    if [[ "$CI_MODE" == true ]]; then
+        log "CI 模式 — 所有配置已自动完成"
+    else
+        echo -e "${YELLOW}下一步 (手动):${NC}"
+        echo ""
+        echo -e "  1. 放入 ${YELLOW}~/.claude/settings.json${NC} (含 API key 和 hooks)"
+        echo -e "  2. 启动一次 ${YELLOW}claude${NC} — 让插件系统发现 marketplace 并完成缓存"
+        echo -e "  3. 确认插件已激活: 在 claude 内运行 ${YELLOW}/plugin list${NC}"
+        echo ""
+        echo -e "${BLUE}Hook 配置参考 (需手动写入 settings.json):${NC}"
+        echo ""
+        echo -e "  RTK:   运行 ${YELLOW}rtk init --hook-only${NC} 获取 hooks 片段"
+        echo -e "  ECC:   hooks 由 Claude Code 插件系统自动注册 (启动 claude 即可)"
+        echo -e "  OMC:   hooks 由 Claude Code 插件系统自动注册"
+        echo -e "  ctx:   hooks 由 Claude Code 插件系统自动注册"
+        echo ""
+        echo "验证:"
+        echo "  claude --version"
+        echo "  rtk --version"
+        echo "  ls -la ~/.claude/CLAUDE.md            # 符号链接"
+        echo "  ls ~/.claude/agents/                  # ECC agents + 自定义"
+        echo "  ls ~/.claude/skills/                  # ECC + OMC + superpowers"
+        echo "  ls ~/.claude/commands/                # ECC commands"
+        echo "  ls ~/.claude/plugins/marketplaces/    # 4 个 marketplace"
+        echo ""
+    fi
 }
 
 # --------------- Main ---------------
