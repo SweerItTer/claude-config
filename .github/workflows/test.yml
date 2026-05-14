@@ -7,9 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  REPO_ROOT: /home/runner/claude-config
-
 jobs:
   verify:
     name: Verify setup.sh on ${{ matrix.os }}
@@ -18,6 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
+    env:
+      REPO_ROOT: ${{ github.workspace }}
 
     steps:
       - name: Checkout with submodules
