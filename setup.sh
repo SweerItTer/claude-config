@@ -120,6 +120,17 @@ main() {
         [[ -L "$rules_dst" ]] || [[ -d "$rules_dst" ]] && rm -rf "$rules_dst"
         ln -s "$REPO_ROOT/config/claude/rules" "$rules_dst"
     }
+    # claude-plugins-official marketplace
+    local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
+    local cpo_src="$REPO_ROOT/external/claude-plugins-official"
+    if [[ -d "$cpo_src" ]]; then
+        [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $cpo_src -> $cpo_dst"; }
+        [[ "$DRY_RUN" == false ]] && {
+            mkdir -p "$CLAUDE_HOME/plugins/marketplaces"
+            [[ -L "$cpo_dst" ]] || [[ -d "$cpo_dst" ]] && rm -rf "$cpo_dst"
+            ln -s "$cpo_src" "$cpo_dst"
+        }
+    fi
     log "核心配置符号链接已创建"
 
     # === Phase 3: 安装插件 ===
@@ -179,7 +190,7 @@ main() {
         check "[[ -L '$CLAUDE_HOME/rules' ]]" "rules 目录"
         check "grep -q 'OMC:START' '$CLAUDE_HOME/CLAUDE.md'" "OMC 已注入 CLAUDE.md"
         check "[[ -L '$CLAUDE_HOME/agents' ]]" "agents 目录 (ECC)"
-        check "[[ -f '$CLAUDE_HOME/agents/architect.md' ]]" "  architect.md"
+        check "[[ -f '$CLAUDE_HOME/agents/rules.md' && ! -L '$CLAUDE_HOME/agents/rules.md' ]]" "  自定义 rules.md"
         check "[[ -f '$CLAUDE_HOME/agents/git.md' && ! -L '$CLAUDE_HOME/agents/git.md' ]]" "  自定义 git.md"
         check "[[ -L '$CLAUDE_HOME/skills/tdd-workflow' ]]" "ECC skill: tdd-workflow"
         check "[[ -L '$CLAUDE_HOME/commands' ]]" "commands 目录"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install-ecc.sh — Everything Claude Code 插件安装
-# npm install + symlink agents/commands + skills 逐个符号链接 + 自定义 agents 覆盖
+# npm install + marketplace + symlink agents/commands + skills 逐个符号链接 + 自定义 agents 覆盖
 set -euo pipefail
 
 install_ecc() {
@@ -25,7 +25,18 @@ install_ecc() {
     # 确保 CLAUDE_CONFIG_DIR 存在 (CI 环境中可能不存在)
     mkdir -p "$claude_home"
 
-    # 2. agents 整目录符号链接
+    # 2. marketplace 注册 (ECC 本身也是一个 marketplace)
+    local mp_dir="$claude_home/plugins/marketplaces"
+    local ecc_mp="$mp_dir/ecc"
+    [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $ecc_dir -> $ecc_mp"; }
+    [[ "$dry_run" == false ]] && {
+        mkdir -p "$mp_dir"
+        [[ -L "$ecc_mp" ]] || [[ -d "$ecc_mp" ]] && rm -rf "$ecc_mp"
+        ln -sfn "$ecc_dir" "$ecc_mp"
+    }
+    echo "  [OK] ECC marketplace 已注册"
+
+    # 3. agents 整目录符号链接
     local agents_dst="$claude_home/agents"
     [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $ecc_dir/agents -> $agents_dst"; }
     [[ "$dry_run" == false ]] && {
@@ -34,7 +45,7 @@ install_ecc() {
     }
     echo "  [OK] ECC agents symlinked"
 
-    # 3. 覆盖自定义 agents
+    # 4. 覆盖自定义 agents
     if [[ -d "$custom_agents" ]]; then
         for f in "$custom_agents"/*.md; do
             local name; name="$(basename "$f")"
@@ -44,7 +55,7 @@ install_ecc() {
         echo "  [OK] 自定义 agents 覆盖完成"
     fi
 
-    # 4. commands 整目录符号链接
+    # 5. commands 整目录符号链接
     local cmds_dst="$claude_home/commands"
     [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $ecc_dir/commands -> $cmds_dst"; }
     [[ "$dry_run" == false ]] && {
@@ -53,7 +64,7 @@ install_ecc() {
     }
     echo "  [OK] ECC commands symlinked"
 
-    # 5. skills 逐个符号链接
+    # 6. skills 逐个符号链接
     local skills_src="$ecc_dir/skills"
     local skills_dst="$claude_home/skills"
     mkdir -p "$skills_dst"
