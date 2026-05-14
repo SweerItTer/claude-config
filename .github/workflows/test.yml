@@ -263,20 +263,12 @@ jobs:
           }
           SETEOF
 
-      - name: Integration test — 验证 CLAUDE.md 加载
+      - name: Integration test — 配置 + skills
         if: steps.check.outputs.skip == 'false'
         run: |
-          echo "验证 claude 能读取 CLAUDE.md 中的 OMC 指令..."
-          claude --print --output-format text \
-            '根据你的 CLAUDE.md 配置，简要说明你可以使用的 agent 类型（一行即可）' \
-            2>&1 | head -10
-        timeout-minutes: 3
-
-      - name: Integration test — 验证 skills 可发现
-        if: steps.check.outputs.skip == 'false'
-        run: |
-          echo "验证 claude 可以列出 skills..."
-          claude --print --output-format text \
-            '列出你已知的 3 个 skill 名称（仅名称，无需描述）' \
-            2>&1 | head -10
-        timeout-minutes: 3
+          echo "验证 claude 配置加载 + skills 发现..."
+          PROMPT="简短回答两个问题（共两行即可）"
+          PROMPT="$PROMPT -- 1) 你的 agent 框架名称（来自 CLAUDE.md）"
+          PROMPT="$PROMPT -- 2) 列出 2 个你知道的 skill 名"
+          claude --print --output-format text "$PROMPT" 2>&1 | head -15
+        timeout-minutes: 5
