@@ -104,7 +104,7 @@ jobs:
           sd="$HOME/.claude/skills"
 
           # ECC skills (符号链接)
-          for name in tdd code-review brainstorming; do
+          for name in tdd-workflow security-review plan-orchestrate; do
             sp="$sd/$name"
             [[ -d "$sp" ]] || { echo "FAIL: skill $name 目录不存在"; exit 1; }
             [[ -L "$sp" ]] || { echo "FAIL: skill $name 不是符号链接 (应为 ECC symlink)"; exit 1; }
