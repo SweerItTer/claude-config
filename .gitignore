@@ -1,0 +1,10 @@
+# Config files that contain secrets — managed separately
+config/claude/settings.json
+
+# Auto-generated OMC state at repo root
+.omc/
+
+# OS files
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
