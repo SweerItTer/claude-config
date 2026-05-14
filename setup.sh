@@ -87,6 +87,13 @@ setup_claude_core() {
     link_file "$cfg/AGENTS.md"  "$target/AGENTS.md"
     link_dir  "$cfg/rules"      "$target/rules"
 
+    # 复制 settings 模板 (仅当 settings.json 不存在时)
+    if [[ ! -f "$target/settings.json" ]] && [[ -f "$cfg/settings.template.json" ]]; then
+        [[ "$DRY_RUN" == false ]] && cp "$cfg/settings.template.json" "$target/settings.json"
+        [[ "$DRY_RUN" == true ]] && info "[DRY-RUN] cp $cfg/settings.template.json -> $target/settings.json"
+        warn "已复制 settings 模板 — 请编辑 ~/.claude/settings.json 填入实际的 env 值"
+    fi
+
     log "核心配置已链接"
 }
 

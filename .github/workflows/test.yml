@@ -198,21 +198,21 @@ jobs:
             echo "SKIP: rules-injector (OMC 子模块中不存在此目录)"
           fi
 
-  # ---- 可选: claude 输出测试 (需要 repo vars + secrets) ----
+  # ---- 可选: claude 集成测试 (需要 repo vars + secrets) ----
   claude-smoke:
-    name: Claude smoke test
+    name: Claude integration test
     runs-on: ubuntu-24.04
     needs: verify
     if: ${{ vars.CLAUDE_BASEURL != '' }}
     env:
-      CLAUDE_APIKEY: ${{ secrets.CLAUDE_APIKEY }}
+      ANTHROPIC_AUTH_TOKEN: ${{ secrets.CLAUDE_APIKEY }}
 
     steps:
       - name: Check API key
         id: check
         run: |
-          if [[ -z "$CLAUDE_APIKEY" ]]; then
-            echo "CLAUDE_APIKEY secret 未配置，跳过 smoke test"
+          if [[ -z "$ANTHROPIC_AUTH_TOKEN" ]]; then
+            echo "CLAUDE_APIKEY secret 未配置，跳过集成测试"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -239,22 +239,44 @@ jobs:
         run: |
           chmod +x ./setup.sh
           ./setup.sh
+        env:
+          REPO_ROOT: ${{ github.workspace }}
 
       - name: Write settings.json
         if: steps.check.outputs.skip == 'false'
         run: |
           mkdir -p "$HOME/.claude"
-          cat > "$HOME/.claude/settings.json" << EOF
+          cat > "$HOME/.claude/settings.json" << 'SETEOF'
           {
-            "baseURL": "${{ vars.CLAUDE_BASEURL }}",
-            "apiKeyHelper": "echo \$CLAUDE_APIKEY"
+            "$schema": "https://json.schemastore.org/claude-code-settings.json",
+            "env": {
+              "ANTHROPIC_BASE_URL": "${{ vars.CLAUDE_BASEURL }}",
+              "ANTHROPIC_AUTH_TOKEN": "$ANTHROPIC_AUTH_TOKEN"
+            },
+            "permissions": { "defaultMode": "bypassPermissions" },
+            "skipDangerousModePermissionPrompt": true,
+            "enabledPlugins": {
+              "context-mode@context-mode": true,
+              "ecc@ecc": true,
+              "superpowers@claude-plugins-official": true
+            }
           }
-          EOF
-        env:
-          CLAUDE_APIKEY: ${{ secrets.CLAUDE_APIKEY }}
+          SETEOF
 
-      - name: Smoke test — claude output
+      - name: Integration test — 验证 CLAUDE.md 加载
         if: steps.check.outputs.skip == 'false'
         run: |
-          echo '回应 "OK" 即可。' | claude --print --output-format text 2>&1 | head -20
+          echo "验证 claude 能读取 CLAUDE.md 中的 OMC 指令..."
+          claude --print --output-format text \
+            '根据你的 CLAUDE.md 配置，简要说明你可以使用的 agent 类型（一行即可）' \
+            2>&1 | head -10
+        timeout-minutes: 3
+
+      - name: Integration test — 验证 skills 可发现
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          echo "验证 claude 可以列出 skills..."
+          claude --print --output-format text \
+            '列出你已知的 3 个 skill 名称（仅名称，无需描述）' \
+            2>&1 | head -10
         timeout-minutes: 3
