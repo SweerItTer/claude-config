@@ -131,7 +131,7 @@ jobs:
           declare -A markets=(
             [omc]="oh-my-claudecode"
             [context-mode]="context-mode"
-            [everything-claude-code]="everything-claude-code"
+            [ecc]="everything-claude-code"
             [claude-plugins-official]="claude-plugins-official"
           )
 

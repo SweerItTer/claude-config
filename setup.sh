@@ -170,7 +170,7 @@ setup_marketplaces() {
 
     link_dir "$ext/oh-my-claudecode"         "$mp_dir/omc"
     link_dir "$ext/context-mode"              "$mp_dir/context-mode"
-    link_dir "$ext/everything-claude-code"    "$mp_dir/everything-claude-code"
+    link_dir "$ext/everything-claude-code"    "$mp_dir/ecc"
     link_dir "$ext/claude-plugins-official"   "$mp_dir/claude-plugins-official"
 
     [[ "$DRY_RUN" == false ]] && {
@@ -247,8 +247,19 @@ setup_ecc_deps() {
 # --------------- OMC 配置 ---------------
 setup_omc() {
     info "配置 OMC..."
+    local omc_dir="$REPO_ROOT/external/oh-my-claudecode"
     local cfg="$REPO_ROOT/config/omc"
     local target="$HOME/.omc"
+
+    # 安装 OMC npm 依赖 (MCP server, hooks, runtime 需要)
+    if [[ ! -d "$omc_dir/node_modules" ]]; then
+        [[ "$DRY_RUN" == false ]] && {
+            (cd "$omc_dir" && npm install --no-audit --no-fund --loglevel=error)
+        }
+        log "OMC 依赖已安装"
+    else
+        log "OMC 依赖已存在"
+    fi
 
     if [[ -d "$cfg/wiki" ]]; then
         link_dir "$cfg/wiki" "$target/wiki"
