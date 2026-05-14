@@ -22,6 +22,9 @@ install_ecc() {
         echo "  [OK] ECC node_modules 已存在"
     fi
 
+    # 确保 CLAUDE_CONFIG_DIR 存在 (CI 环境中可能不存在)
+    mkdir -p "$claude_home"
+
     # 2. agents 整目录符号链接
     local agents_dst="$claude_home/agents"
     [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $ecc_dir/agents -> $agents_dst"; }
