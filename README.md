@@ -46,14 +46,14 @@ setup.sh 是幂等的 — 可安全重复运行。
 ```
 
 ### 自动安装
-- **RTK** — `cargo install rtk` + `rtk init --no-patch`
+- **RTK** — 从 GitHub Releases 下载预编译二进制 (无需 Rust 工具链)
 - **ECC 依赖** — `npm install` 在 ECC 目录
 - **Marketplace 注册** — known_marketplaces.json
 
 ## 前置依赖
 
 - `git`
-- `cargo` + Rust 工具链 (用于安装 RTK)
+- `curl` + `tar` (RTK 预编译二进制从此获取)
 
 ## setup.sh 完成后
 

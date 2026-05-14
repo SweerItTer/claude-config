@@ -39,17 +39,14 @@ done
 check_deps() {
     info "检查前置依赖..."
 
-    # 尝试 source cargo env
-    [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env" 2>/dev/null || true
-
     local missing=()
 
-    command -v git   >/dev/null 2>&1 || missing+=(git)
-    command -v cargo >/dev/null 2>&1 || missing+=(cargo)
+    command -v git    >/dev/null 2>&1 || missing+=(git)
+    command -v curl   >/dev/null 2>&1 || missing+=(curl)
+    command -v tar    >/dev/null 2>&1 || missing+=(tar)
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         err "缺少依赖: ${missing[*]}"
-        echo "  cargo: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
         exit 1
     fi
     log "所有依赖已满足"
@@ -184,18 +181,34 @@ setup_marketplaces() {
 }
 
 # --------------- RTK ---------------
+RTK_VERSION="v0.40.0"
+RTK_INSTALL_DIR="$HOME/.local/bin"
+
 setup_rtk() {
     info "安装 RTK..."
     local cfg="$REPO_ROOT/config/rtk"
     local target="$HOME/.config/rtk"
 
-    # 安装二进制
+    # 安装二进制 (从 GitHub Releases 下载预编译静态二进制)
     if command -v rtk >/dev/null 2>&1; then
         log "RTK 已安装: $(rtk --version 2>&1)"
     else
-        info "正在 cargo install rtk (可能需要几分钟)..."
+        info "下载 RTK ${RTK_VERSION} 预编译二进制..."
         [[ "$DRY_RUN" == false ]] && {
-            cargo install rtk
+            local arch; arch="$(uname -m)"
+            local tarball="rtk-${arch}-unknown-linux-gnu.tar.gz"
+
+            # musl (静态链接) 在 x86_64 可用；fallback 到 gnu
+            [[ "$arch" == "x86_64" ]] && tarball="rtk-x86_64-unknown-linux-musl.tar.gz"
+
+            local url="https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/${tarball}"
+            local tmpdir; tmpdir="$(mktemp -d)"
+            curl -sL "$url" -o "$tmpdir/$tarball"
+            tar -xzf "$tmpdir/$tarball" -C "$tmpdir"
+            mkdir -p "$RTK_INSTALL_DIR"
+            mv "$tmpdir/rtk" "$RTK_INSTALL_DIR/rtk"
+            chmod +x "$RTK_INSTALL_DIR/rtk"
+            rm -rf "$tmpdir"
             log "RTK 安装完成: $(rtk --version 2>&1)"
         }
     fi
