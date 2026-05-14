@@ -74,11 +74,12 @@ jobs:
           [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
           echo "OK: agents dir -> $link"
 
-          # ECC agent 文件存在
+          # ECC agent 定义存在 (.kiro/agents，非 agents/)
           for f in architect.md code-reviewer.md planner.md tdd-guide.md; do
-            [[ -f "$target/$f" ]] || { echo "FAIL: agents/$f 不存在"; exit 1; }
+            fp="$REPO_ROOT/external/everything-claude-code/.kiro/agents/$f"
+            [[ -f "$fp" ]] || { echo "FAIL: .kiro/agents/$f 不存在"; exit 1; }
           done
-          echo "OK: ECC agents 抽样通过"
+          echo "OK: ECC agent 定义抽样通过"
 
           # 自定义 agent 文件已复制 (非符号链接)
           for f in git.md progress.md rules.md validation.md; do
