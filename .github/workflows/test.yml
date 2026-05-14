@@ -195,45 +195,63 @@ jobs:
           [[ -L "$ri" ]] || { echo "FAIL: OMC rules-injector 不是符号链接"; exit 1; }
           echo "OK: OMC rules-injector -> $(readlink "$ri")"
 
-  # ---- 可选: claude 输出测试 (需要 secrets) ----
+  # ---- 可选: claude 输出测试 (需要 repo vars + secrets) ----
   claude-smoke:
     name: Claude smoke test
     runs-on: ubuntu-24.04
     needs: verify
-    if: ${{ vars.CLAUDE_BASEURL != '' && secrets.CLAUDE_APIKEY != '' }}
+    if: ${{ vars.CLAUDE_BASEURL != '' }}
+    env:
+      CLAUDE_APIKEY: ${{ secrets.CLAUDE_APIKEY }}
 
     steps:
+      - name: Check API key
+        id: check
+        run: |
+          if [[ -z "$CLAUDE_APIKEY" ]]; then
+            echo "CLAUDE_APIKEY secret 未配置，跳过 smoke test"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout with submodules
+        if: steps.check.outputs.skip == 'false'
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Setup Node.js
+        if: steps.check.outputs.skip == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Install Claude Code
+        if: steps.check.outputs.skip == 'false'
         run: npm install -g @anthropic-ai/claude-code
 
       - name: Run setup.sh
+        if: steps.check.outputs.skip == 'false'
         run: |
           chmod +x ./setup.sh
           ./setup.sh
 
       - name: Write settings.json
+        if: steps.check.outputs.skip == 'false'
         run: |
           mkdir -p "$HOME/.claude"
           cat > "$HOME/.claude/settings.json" << EOF
           {
             "baseURL": "${{ vars.CLAUDE_BASEURL }}",
-            "apiKeyHelper": "echo $CLAUDE_APIKEY"
+            "apiKeyHelper": "echo \$CLAUDE_APIKEY"
           }
           EOF
         env:
           CLAUDE_APIKEY: ${{ secrets.CLAUDE_APIKEY }}
 
       - name: Smoke test — claude output
+        if: steps.check.outputs.skip == 'false'
         run: |
           echo '回应 "OK" 即可。' | claude --print --output-format text 2>&1 | head -20
         timeout-minutes: 3
