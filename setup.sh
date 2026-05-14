@@ -174,6 +174,34 @@ main() {
         log "RTK hooks 已注入"
     fi
 
+    # known_marketplaces.json 生成 (Claude Code 运行时产物, 提前生成供 CI 验证)
+    info "生成 known_marketplaces.json..."
+    [[ "$DRY_RUN" == false ]] && {
+        mkdir -p "$CLAUDE_HOME/plugins"
+        python3 - "$REPO_ROOT" "$CLAUDE_HOME" << 'PYEOF' > "$CLAUDE_HOME/plugins/known_marketplaces.json"
+import json, sys, os
+repo = sys.argv[1]
+ts = "2026-01-01T00:00:00.000Z"
+markets = {
+    "claude-plugins-official": {"source": {"source": "github", "repo": "anthropics/claude-plugins-official"}, "dir": "external/claude-plugins-official"},
+    "context-mode":            {"source": {"source": "github", "repo": "mksglu/context-mode"}, "dir": "external/context-mode"},
+    "ecc":                     {"source": {"source": "github", "repo": "affaan-m/everything-claude-code"}, "dir": "external/everything-claude-code"},
+    "omc":                     {"source": {"source": "git", "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"}, "dir": "external/oh-my-claudecode"},
+    "superpowers":             {"source": {"source": "git", "url": "https://github.com/obra/superpowers.git"}, "dir": "external/superpowers"},
+}
+out = {}
+for name, info in markets.items():
+    out[name] = {
+        "source": info["source"],
+        "installLocation": os.path.join(repo, info["dir"]),
+        "lastUpdated": ts,
+    }
+json.dump(out, sys.stdout, indent=4)
+print()
+PYEOF
+    }
+    log "known_marketplaces.json 已生成"
+
     # === Phase 5: 验证 ===
     if [[ "$NO_VERIFY" == true ]]; then
         info "Phase 5: 跳过验证 (--no-verify)"
