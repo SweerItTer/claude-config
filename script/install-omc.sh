@@ -32,8 +32,23 @@ install_omc() {
     }
     echo "  [OK] OMC marketplace 已注册"
 
-    # 3. 运行 OMC setup (处理 hooks, HUD, CLAUDE.md 合并, MCP registry)
-    # --plugin-dir-mode: 跳过 agent/skill 复制 (由 plugin 系统发现), 仍处理 hooks + HUD + CLAUDE.md
+    # 3. OMC skills 逐个符号链接 (omc setup --plugin-dir-mode 跳过了此步骤)
+    local skills_src="$omc_dir/skills"
+    local skills_dst="$claude_home/skills"
+    mkdir -p "$skills_dst"
+    if [[ -d "$skills_src" ]]; then
+        for skill_dir in "$skills_src"/*/; do
+            local name; name="$(basename "$skill_dir")"
+            local dst="$skills_dst/$name"
+            [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $skill_dir -> $dst"; continue; }
+            [[ -L "$dst" ]] || [[ -d "$dst" ]] && rm -rf "$dst"
+            ln -sfn "$skill_dir" "$dst"
+        done
+    fi
+    echo "  [OK] OMC skills symlinked"
+
+    # 4. 运行 OMC setup (处理 hooks, HUD, CLAUDE.md 合并, MCP registry)
+    # --plugin-dir-mode: 跳过 agent/skill 复制 (已由步骤 3 处理), 仍处理 hooks + HUD + CLAUDE.md
     echo "  [INFO] 运行 omc setup..."
     [[ "$dry_run" == false ]] && {
         cd "$omc_dir"
@@ -44,7 +59,7 @@ install_omc() {
     [[ "$dry_run" == true ]] && echo "  [DRY-RUN] node bridge/cli.cjs setup --plugin-dir-mode --quiet"
     echo "  [OK] OMC setup 完成 (hooks, HUD, CLAUDE.md)"
 
-    # 4. 链接 wiki (自定义内容)
+    # 5. 链接 wiki (自定义内容)
     local wiki_src="$repo_root/config/omc/wiki"
     local wiki_dst="$HOME/.omc/wiki"
     if [[ -d "$wiki_src" ]]; then
