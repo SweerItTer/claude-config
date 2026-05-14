@@ -137,6 +137,13 @@ main() {
     # OMC setup 依赖 settings.json 存在 (合并 hooks)
     run_installer omc
 
+    # RTK hooks 注入 (必须在 settings.json 生成 + OMC 合并之后)
+    if command -v rtk >/dev/null 2>&1; then
+        info "RTK hook 注入 (rtk init)..."
+        [[ "$DRY_RUN" == false ]] && { rtk init -g --auto-patch 2>&1 || true; }
+        log "RTK hooks 已注入"
+    fi
+
     # === Phase 5: 验证 ===
     if [[ "$NO_VERIFY" == true ]]; then
         info "Phase 5: 跳过验证 (--no-verify)"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install-rtk.sh — RTK (Rust Token Killer) 安装
-# 从 GitHub Releases 下载预编译静态二进制，链接配置文件
+# 从 GitHub Releases 下载预编译静态二进制，链接配置文件，注入 hooks
 set -euo pipefail
 
 install_rtk() {
@@ -50,6 +50,35 @@ install_rtk() {
         ln -s "$src" "$dst"
         echo "  [OK] RTK config: $f"
     done
+
+    # RTK hooks + RTK.md 注入 (rtk init 仅注册 hook 到 settings.json，脚本需单独安装)
+    local hooks_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks"
+    mkdir -p "$hooks_dir"
+
+    echo "  [INFO] RTK init (hooks, RTK.md)..."
+    [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] rtk init -g --auto-patch"; }
+    [[ "$dry_run" == false ]] && {
+        "$install_dir/rtk" init -g --auto-patch 2>&1 || {
+            echo "  [WARN] rtk init 有非致命警告"
+        }
+    }
+
+    # rtk-rewrite.sh hook 脚本 (rtk init 不自动安装脚本文件本身)
+    local hook_script="$hooks_dir/rtk-rewrite.sh"
+    local hook_url="https://raw.githubusercontent.com/rtk-ai/rtk/master/hooks/claude/rtk-rewrite.sh"
+    if [[ -f "$hook_script" ]]; then
+        echo "  [OK] rtk-rewrite.sh 已存在"
+    else
+        echo "  [INFO] 下载 rtk-rewrite.sh..."
+        [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] curl -sL $hook_url -o $hook_script"; }
+        [[ "$dry_run" == false ]] && {
+            curl --fail -sL "$hook_url" -o "$hook_script" && chmod +x "$hook_script" || {
+                echo "  [ERR] 下载 rtk-rewrite.sh 失败"
+            }
+        }
+        echo "  [OK] rtk-rewrite.sh 已安装"
+    fi
+    echo "  [OK] RTK hooks + RTK.md 已完成"
 }
 
 install_rtk "$@"
