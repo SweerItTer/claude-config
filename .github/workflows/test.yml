@@ -189,10 +189,14 @@ jobs:
           [[ -L "$wt" ]] || { echo "FAIL: OMC wiki 不是符号链接"; exit 1; }
           echo "OK: OMC wiki -> $(readlink "$wt")"
 
-          # rules-injector
+          # rules-injector: 仅当源目录存在时才检查 (OMC 版本间可能不存在)
           ri="$HOME/.omc/rules-injector"
-          [[ -L "$ri" ]] || { echo "FAIL: OMC rules-injector 不是符号链接"; exit 1; }
-          echo "OK: OMC rules-injector -> $(readlink "$ri")"
+          if [[ -d "$REPO_ROOT/external/oh-my-claudecode/rules-injector" ]]; then
+            [[ -L "$ri" ]] || { echo "FAIL: OMC rules-injector 不是符号链接"; exit 1; }
+            echo "OK: OMC rules-injector -> $(readlink "$ri")"
+          else
+            echo "SKIP: rules-injector (OMC 子模块中不存在此目录)"
+          fi
 
   # ---- 可选: claude 输出测试 (需要 repo vars + secrets) ----
   claude-smoke:

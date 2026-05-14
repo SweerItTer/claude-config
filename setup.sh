@@ -252,10 +252,10 @@ setup_omc() {
         link_dir "$cfg/wiki" "$target/wiki"
     fi
 
-    # 链接 OMC 的 CLAUDE.md 注入规则
-    local omc_rules_injector="$REPO_ROOT/external/oh-my-claudecode/rules-injector"
-    if [[ -d "$omc_rules_injector" ]]; then
-        link_dir "$omc_rules_injector" "$target/rules-injector"
+    # OMC rules-injector 在新版本 (v4.13+) 的 OMC 中已移除
+    local omc_ri="$REPO_ROOT/external/oh-my-claudecode/rules-injector"
+    if [[ -d "$omc_ri" ]]; then
+        link_dir "$omc_ri" "$target/rules-injector"
     fi
 
     log "OMC 配置已链接"
