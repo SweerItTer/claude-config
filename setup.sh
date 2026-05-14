@@ -103,6 +103,25 @@ main() {
     [[ "$DRY_RUN" == false ]] && { cd "$REPO_ROOT" && git submodule update --init --recursive; }
     log "Submodules 就绪"
 
+    # 核心配置符号链接 (必须在插件安装之前, 因为 rtk init / omc setup 会修改这些文件)
+    info "创建核心配置符号链接..."
+    mkdir -p "$CLAUDE_HOME"
+    for f in CLAUDE.md RTK.md AGENTS.md; do
+        local src="$REPO_ROOT/config/claude/$f" dst="$CLAUDE_HOME/$f"
+        [[ -f "$src" ]] || continue
+        [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $src -> $dst"; continue; }
+        [[ -L "$dst" ]] || [[ -f "$dst" ]] && rm -f "$dst"
+        ln -s "$src" "$dst"
+    done
+    # rules 目录
+    local rules_dst="$CLAUDE_HOME/rules"
+    [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $REPO_ROOT/config/claude/rules -> $rules_dst"; }
+    [[ "$DRY_RUN" == false ]] && {
+        [[ -L "$rules_dst" ]] || [[ -d "$rules_dst" ]] && rm -rf "$rules_dst"
+        ln -s "$REPO_ROOT/config/claude/rules" "$rules_dst"
+    }
+    log "核心配置符号链接已创建"
+
     # === Phase 3: 安装插件 ===
     phase "Phase 3: 安装插件"
     run_installer rtk
