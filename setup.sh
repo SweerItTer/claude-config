@@ -204,10 +204,9 @@ setup_rtk() {
     link_file "$cfg/config.toml"  "$target/config.toml"
     link_file "$cfg/filters.toml" "$target/filters.toml"
 
-    # rtk init (创建 RTK.md + 注入 hooks，不修改 settings.json)
-    [[ "$DRY_RUN" == false ]] && {
-        rtk init --no-patch 2>/dev/null || true
-    }
+    # 不在此运行 rtk init: RTK.md 已由 setup_claude_core 符号链接,
+    # settings.json 由用户自行管理。hooks 需手动注册 (见 finish 消息)。
+    log "RTK 配置就绪 (hooks 需手动注册到 settings.json)"
 }
 
 # --------------- ECC 依赖 ---------------
@@ -251,16 +250,27 @@ finish() {
     echo -e "${GREEN}  Claude Code 配置迁移完成!${NC}"
     echo -e "${GREEN}============================================${NC}"
     echo ""
-    echo -e "请确保 ${YELLOW}~/.claude/settings.json${NC} 已配置。"
+    echo -e "${YELLOW}下一步 (手动):${NC}"
+    echo ""
+    echo -e "  1. 放入 ${YELLOW}~/.claude/settings.json${NC} (含 API key 和 hooks)"
+    echo -e "  2. 启动一次 ${YELLOW}claude${NC} — 让插件系统发现 marketplace 并完成缓存"
+    echo -e "  3. 确认插件已激活: 在 claude 内运行 ${YELLOW}/plugin list${NC}"
+    echo ""
+    echo -e "${BLUE}Hook 配置参考 (需手动写入 settings.json):${NC}"
+    echo ""
+    echo -e "  RTK:   运行 ${YELLOW}rtk init --hook-only${NC} 获取 hooks 片段"
+    echo -e "  ECC:   hooks 由 Claude Code 插件系统自动注册 (启动 claude 即可)"
+    echo -e "  OMC:   hooks 由 Claude Code 插件系统自动注册"
+    echo -e "  ctx:   hooks 由 Claude Code 插件系统自动注册"
     echo ""
     echo "验证:"
     echo "  claude --version"
     echo "  rtk --version"
-    echo "  ls -la ~/.claude/CLAUDE.md     # 符号链接"
-    echo "  ls ~/.claude/agents/           # ECC agents"
-    echo "  ls ~/.claude/skills/           # ECC + OMC + superpowers"
-    echo "  ls ~/.claude/commands/         # ECC commands"
-    echo "  ls ~/.claude/plugins/marketplaces/  # 4 个 marketplace"
+    echo "  ls -la ~/.claude/CLAUDE.md            # 符号链接"
+    echo "  ls ~/.claude/agents/                  # ECC agents + 自定义"
+    echo "  ls ~/.claude/skills/                  # ECC + OMC + superpowers"
+    echo "  ls ~/.claude/commands/                # ECC commands"
+    echo "  ls ~/.claude/plugins/marketplaces/    # 4 个 marketplace"
     echo ""
 }
 
