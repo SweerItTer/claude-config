@@ -304,3 +304,7 @@ jobs:
             echo "claude 退出码: $rc (124=超时)"
           }
         timeout-minutes: 3
+        env:
+          ANTHROPIC_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.CLAUDE_APIKEY }}
+          ANTHROPIC_MODEL: deepseek-v4-pro
