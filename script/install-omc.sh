@@ -36,16 +36,19 @@ install_omc() {
     local skills_src="$omc_dir/skills"
     local skills_dst="$claude_home/skills"
     mkdir -p "$skills_dst"
+    local skill_count=0
     if [[ -d "$skills_src" ]]; then
         for skill_dir in "$skills_src"/*/; do
+            [[ -d "$skill_dir" ]] || continue
             local name; name="$(basename "$skill_dir")"
             local dst="$skills_dst/$name"
-            [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $skill_dir -> $dst"; continue; }
+            [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn ${skill_dir%/} -> $dst"; continue; }
             [[ -L "$dst" ]] || [[ -d "$dst" ]] && rm -rf "$dst"
-            ln -sfn "$skill_dir" "$dst"
+            ln -sfn "${skill_dir%/}" "$dst"
+            skill_count=$((skill_count + 1))
         done
     fi
-    echo "  [OK] OMC skills symlinked"
+    echo "  [OK] OMC skills symlinked ($skill_count)"
 
     # 4. 运行 OMC setup (处理 hooks, HUD, CLAUDE.md 合并, MCP registry)
     # --plugin-dir-mode: 跳过 agent/skill 复制 (已由步骤 3 处理), 仍处理 hooks + HUD + CLAUDE.md
