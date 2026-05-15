@@ -27,6 +27,8 @@ DRY_RUN=false
 CI_MODE=false
 NO_CLAUDE=false
 NO_VERIFY=false
+FORCE=false
+SMOKE_TEST=false
 
 # ----- helpers -----
 log()   { echo -e "${GREEN}[OK]${NC} $*"; }
@@ -46,6 +48,21 @@ run_installer() {
     bash "$script" "$REPO_ROOT" "$DRY_RUN"
 }
 
+# 幂等跳过: 检测命令成功则跳过 (除非 --force)
+skip_if_done() {
+    local desc="$1"
+    local check_cmd="$2"
+    if [[ "$FORCE" == true ]]; then
+        info "$desc: --force 强制重跑"
+        return 1
+    fi
+    if eval "$check_cmd" >/dev/null 2>&1; then
+        echo -e "${BLUE}[PASS]${NC} $desc: 已完成，跳过"
+        return 0
+    fi
+    return 1
+}
+
 # ----- 参数解析 -----
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -53,12 +70,16 @@ while [[ $# -gt 0 ]]; do
         --ci) CI_MODE=true; shift ;;
         --no-claude) NO_CLAUDE=true; shift ;;
         --no-verify) NO_VERIFY=true; shift ;;
+        --force) FORCE=true; shift ;;
+        --smoke-test) SMOKE_TEST=true; shift ;;
         -h|--help)
             echo "用法: ./setup.sh [选项]"
             echo "  --ci            CI 模式 (跳过手动提示)"
             echo "  --dry-run       预览，不实际修改"
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
+            echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
+            echo "  --smoke-test    运行 claude --print 冒烟测试"
             exit 0 ;;
         *) err "未知参数: $1"; exit 1 ;;
     esac
@@ -70,7 +91,7 @@ done
 main() {
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║  Claude Code Config Migration v3    ║${NC}"
+    echo -e "${BLUE}║   Claude Code Config Migration v3    ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
     echo ""
     [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
@@ -87,21 +108,23 @@ main() {
     info "系统: $(uname -s) / $(uname -m)"
 
     # === Phase 1: Claude Code ===
+    phase "Phase 1: Claude Code"
     if [[ "$NO_CLAUDE" == true ]]; then
-        info "Phase 1: 跳过 Claude Code 安装 (--no-claude)"
+        info "跳过 Claude Code 安装 (--no-claude)"
     elif command -v claude >/dev/null 2>&1; then
-        log "Phase 1: Claude Code 已安装: $(claude --version 2>&1 | head -1)"
+        log "Claude Code 已安装: $(claude --version 2>&1 | head -1)"
     else
-        phase "Phase 1: 安装 Claude Code"
         [[ "$DRY_RUN" == true ]] && { info "[DRY-RUN] npm install -g @anthropic-ai/claude-code"; }
         [[ "$DRY_RUN" == false ]] && { npm install -g @anthropic-ai/claude-code; log "Claude Code 安装完成"; }
     fi
 
     # === Phase 2: Submodules ===
     phase "Phase 2: Git Submodules"
-    info "初始化 git submodules (5 个)..."
-    [[ "$DRY_RUN" == false ]] && { cd "$REPO_ROOT" && git submodule update --init --recursive; }
-    log "Submodules 就绪"
+    if ! skip_if_done "Submodules" "cd '$REPO_ROOT' && [[ \$(git submodule status | grep -c '^-') -eq 0 ]]"; then
+        info "初始化 git submodules (5 个)..."
+        [[ "$DRY_RUN" == false ]] && { cd "$REPO_ROOT" && git submodule update --init --recursive; }
+        log "Submodules 就绪"
+    fi
 
     # 核心配置符号链接 (必须在插件安装之前, 因为 rtk init / omc setup 会修改这些文件)
     info "创建核心配置符号链接..."
@@ -109,21 +132,26 @@ main() {
     for f in CLAUDE.md RTK.md AGENTS.md; do
         local src="$REPO_ROOT/config/claude/$f" dst="$CLAUDE_HOME/$f"
         [[ -f "$src" ]] || continue
+        if skip_if_done "$f symlink" "[[ -L '$dst' ]] && [[ \$(readlink -f '$dst') = \$(readlink -f '$src') ]]"; then
+            continue
+        fi
         [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $src -> $dst"; continue; }
         [[ -L "$dst" ]] || [[ -f "$dst" ]] && rm -f "$dst"
         ln -s "$src" "$dst"
     done
     # rules 目录
     local rules_dst="$CLAUDE_HOME/rules"
-    [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $REPO_ROOT/config/claude/rules -> $rules_dst"; }
-    [[ "$DRY_RUN" == false ]] && {
-        [[ -L "$rules_dst" ]] || [[ -d "$rules_dst" ]] && rm -rf "$rules_dst"
-        ln -s "$REPO_ROOT/config/claude/rules" "$rules_dst"
-    }
+    if ! skip_if_done "rules symlink" "[[ -L '$rules_dst' ]]"; then
+        [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $REPO_ROOT/config/claude/rules -> $rules_dst"; }
+        [[ "$DRY_RUN" == false ]] && {
+            [[ -L "$rules_dst" ]] || [[ -d "$rules_dst" ]] && rm -rf "$rules_dst"
+            ln -s "$REPO_ROOT/config/claude/rules" "$rules_dst"
+        }
+    fi
     # claude-plugins-official marketplace
     local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
     local cpo_src="$REPO_ROOT/external/claude-plugins-official"
-    if [[ -d "$cpo_src" ]]; then
+    if [[ -d "$cpo_src" ]] && ! skip_if_done "cpo marketplace" "[[ -L '$cpo_dst' ]]"; then
         [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $cpo_src -> $cpo_dst"; }
         [[ "$DRY_RUN" == false ]] && {
             mkdir -p "$CLAUDE_HOME/plugins/marketplaces"
@@ -131,14 +159,32 @@ main() {
             ln -s "$cpo_src" "$cpo_dst"
         }
     fi
-    log "核心配置符号链接已创建"
+    log "核心配置符号链接已检查"
 
     # === Phase 3: 安装插件 ===
     phase "Phase 3: 安装插件"
-    run_installer rtk
-    run_installer ecc
-    run_installer context-mode
-    run_installer superpowers
+    if ! skip_if_done "RTK" "command -v rtk"; then
+        run_installer rtk
+    fi
+    if ! skip_if_done "ECC" "[[ -L '$CLAUDE_HOME/agents' ]]"; then
+        run_installer ecc
+    fi
+    if ! skip_if_done "context-mode" "[[ -d '$CLAUDE_HOME/plugins/cache/context-mode/context-mode' ]] && ls -d '$CLAUDE_HOME/plugins/cache/context-mode/context-mode'/*/ >/dev/null 2>&1"; then
+        run_installer context-mode
+    fi
+    # context-mode: 创建 current 符号链接指向最新版本，避免 hooks 硬编码版本号
+    local ctx_cache="$CLAUDE_HOME/plugins/cache/context-mode/context-mode"
+    local ctx_latest; ctx_latest="$(ls -d "$ctx_cache"/*/ 2>/dev/null | sort -V | tail -1)"
+    if [[ -n "$ctx_latest" ]]; then
+        ctx_latest="${ctx_latest%/}"
+        if ! skip_if_done "context-mode current" "[[ -L '$ctx_cache/current' ]] && [[ \$(readlink '$ctx_cache/current') = '$ctx_latest' ]]"; then
+            [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -sfn $ctx_latest $ctx_cache/current"; }
+            [[ "$DRY_RUN" == false ]] && { ln -sfn "$ctx_latest" "$ctx_cache/current"; log "context-mode current → $ctx_latest"; }
+        fi
+    fi
+    if ! skip_if_done "superpowers" "[[ -L '$CLAUDE_HOME/plugins/marketplaces/superpowers' ]]"; then
+        run_installer superpowers
+    fi
 
     # === Phase 4: settings.json + OMC ===
     phase "Phase 4: 生成 settings.json + OMC setup"
@@ -165,19 +211,24 @@ main() {
     fi
 
     # OMC setup 依赖 settings.json 存在 (合并 hooks)
-    run_installer omc
+    if ! skip_if_done "OMC" "grep -q 'OMC:START' '$CLAUDE_HOME/CLAUDE.md' 2>/dev/null"; then
+        run_installer omc
+    fi
 
     # RTK hooks 注入 (必须在 settings.json 生成 + OMC 合并之后)
     if command -v rtk >/dev/null 2>&1; then
-        info "RTK hook 注入 (rtk init)..."
-        [[ "$DRY_RUN" == false ]] && { rtk init -g --auto-patch 2>&1 || true; }
-        log "RTK hooks 已注入"
+        if ! skip_if_done "RTK hooks" "grep -q 'rtk-rewrite' '$CLAUDE_HOME/settings.json' 2>/dev/null"; then
+            info "RTK hook 注入 (rtk init)..."
+            [[ "$DRY_RUN" == false ]] && { rtk init -g --auto-patch 2>&1 || true; }
+            log "RTK hooks 已注入"
+        fi
     fi
 
     # known_marketplaces.json 生成 (Claude Code 运行时产物, 提前生成供 CI 验证)
-    info "生成 known_marketplaces.json..."
-    [[ "$DRY_RUN" == false ]] && {
-        mkdir -p "$CLAUDE_HOME/plugins"
+    if ! skip_if_done "known_marketplaces" "[[ -f '$CLAUDE_HOME/plugins/known_marketplaces.json' ]]"; then
+        info "生成 known_marketplaces.json..."
+        [[ "$DRY_RUN" == false ]] && {
+            mkdir -p "$CLAUDE_HOME/plugins"
         python3 - "$REPO_ROOT" "$CLAUDE_HOME" << 'PYEOF' > "$CLAUDE_HOME/plugins/known_marketplaces.json"
 import json, sys, os
 repo = sys.argv[1]
@@ -201,6 +252,7 @@ print()
 PYEOF
     }
     log "known_marketplaces.json 已生成"
+    fi
 
     # === Phase 5: 验证 ===
     if [[ "$NO_VERIFY" == true ]]; then
@@ -209,7 +261,7 @@ PYEOF
         phase "Phase 5: 功能验证"
         local fails=0
         check() {
-            if eval "$1" 2>/dev/null; then echo "  ${GREEN}✓${NC} $2"; else echo "  ${RED}✗${NC} $2"; fails=$((fails+1)); fi
+            if eval "$1" 2>/dev/null; then echo -e "  ${GREEN}✓${NC} $2"; else echo -e "  ${RED}✗${NC} $2"; fails=$((fails+1)); fi
         }
 
         for f in CLAUDE.md RTK.md AGENTS.md; do
@@ -242,8 +294,8 @@ PYEOF
 
         [[ $fails -gt 0 ]] && warn "文件验证: $fails 项失败" || log "文件验证: 全部通过"
 
-        # 功能测试 (仅非 CI)
-        if [[ "$CI_MODE" != true ]]; then
+        # 功能测试 (仅 --smoke-test 时执行)
+        if [[ "$SMOKE_TEST" == true ]]; then
             echo ""
             info "功能测试 (claude --print)..."
             vc() {
