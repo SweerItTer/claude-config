@@ -63,6 +63,52 @@
         "commit": "",
         "pr": ""
     },
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/context-mode/context-mode/current/hooks/posttooluse.mjs"
+                    }
+                ]
+            }
+        ],
+        "PreToolUse": [
+            {
+                "matcher": "Read",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/context-mode/context-mode/current/hooks/pretooluse.mjs"
+                    }
+                ]
+            },
+            {
+                "matcher": "WebFetch",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/context-mode/context-mode/current/hooks/pretooluse.mjs"
+                    }
+                ]
+            },
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rtk-rewrite.sh"
+                    }
+                ]
+            }
+        ]
+    },
+    "statusLine": {
+        "type": "command",
+        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud.mjs"
+    },
     "language": "简体中文",
     "effortLevel": "medium"
 }

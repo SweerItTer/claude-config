@@ -201,7 +201,7 @@ jobs:
           with open(sys.argv[1]) as f:
               d = json.load(f)
           hooks = d.get("hooks", {})
-          expected = ["SessionStart", "PostToolUse", "PreToolUse"]
+          expected = ["PostToolUse", "PreToolUse"]
           missing = [k for k in expected if k not in hooks]
           if missing:
               print(f"FAIL: settings.json 缺少 hook 条目: {missing}")
