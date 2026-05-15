@@ -196,7 +196,7 @@ jobs:
           set -euo pipefail
           sf="$HOME/.claude/settings.json"
           [[ -f "$sf" ]] || { echo "FAIL: settings.json 不存在"; exit 1; }
-          python3 << 'PYEOF'
+          python3 - "$sf" << 'PYEOF'
           import json, sys
           with open(sys.argv[1]) as f:
               d = json.load(f)
@@ -208,7 +208,7 @@ jobs:
               print(f"  实际 hooks: {list(hooks.keys())}")
               sys.exit(1)
           print(f"OK: settings.json 包含 {len(hooks)} 个 hook 条目: {list(hooks.keys())}")
-          PYEOF "$sf"
+          PYEOF
 
       - name: Verify ECC + context-mode node_modules
         run: |
