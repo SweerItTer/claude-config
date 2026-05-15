@@ -286,7 +286,9 @@ jobs:
             "env": {
               "ANTHROPIC_BASE_URL": "${{ vars.CLAUDE_BASEURL }}",
               "ANTHROPIC_AUTH_TOKEN": "$ANTHROPIC_AUTH_TOKEN",
-              "ANTHROPIC_MODEL": "deepseek-v4-pro"
+              "ANTHROPIC_MODEL": "deepseek-v4-pro",
+              "CLAUDE_CODE_NEW_INIT": "1",
+              "DISABLE_AUTOUPDATER": "1"
             },
             "permissions": { "defaultMode": "bypassPermissions" },
             "skipDangerousModePermissionPrompt": true
@@ -296,10 +298,6 @@ jobs:
       - name: Smoke test — claude --print
         if: steps.check.outputs.skip == 'false'
         run: |
-          echo "完成 Claude Code 首次启动 onboarding..."
-          # 首次启动有 3 次交互提示: 样式选择、条款确认、目录信任
-          printf '\n\n\n' | timeout 30 claude --print "say OK" 2>&1 || true
-          sleep 2
           echo "验证 claude 基础连通性..."
           timeout 120 claude --print --output-format text "say OK" 2>&1 || {
             rc=$?
