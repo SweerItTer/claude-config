@@ -237,7 +237,7 @@ main() {
     fi
 
     # OMC setup 依赖 settings.json 存在 (合并 hooks)
-    if ! skip_if_done "OMC" "grep -q 'OMC:START' '$CLAUDE_HOME/CLAUDE.md' 2>/dev/null"; then
+    if ! skip_if_done "OMC" "[[ -L '$CLAUDE_HOME/skills/omc-reference' ]]"; then
         run_installer omc
     fi
 
