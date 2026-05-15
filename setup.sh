@@ -173,14 +173,21 @@ main() {
         run_installer context-mode
     fi
     # context-mode: 创建 current 符号链接指向最新版本，避免 hooks 硬编码版本号
+    # 需要 Claude Code 已安装且至少运行过一次（产生插件缓存）
     local ctx_cache="$CLAUDE_HOME/plugins/cache/context-mode/context-mode"
-    local ctx_latest; ctx_latest="$(ls -d "$ctx_cache"/*/ 2>/dev/null | sort -V | tail -1)"
-    if [[ -n "$ctx_latest" ]]; then
-        ctx_latest="${ctx_latest%/}"
-        if ! skip_if_done "context-mode current" "[[ -L '$ctx_cache/current' ]] && [[ \$(readlink '$ctx_cache/current') = '$ctx_latest' ]]"; then
-            [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -sfn $ctx_latest $ctx_cache/current"; }
-            [[ "$DRY_RUN" == false ]] && { ln -sfn "$ctx_latest" "$ctx_cache/current"; log "context-mode current → $ctx_latest"; }
+    if [[ -d "$ctx_cache" ]]; then
+        local ctx_latest; ctx_latest="$(ls -d "$ctx_cache"/*/ 2>/dev/null | sort -V | tail -1)" || true
+        if [[ -n "$ctx_latest" ]]; then
+            ctx_latest="${ctx_latest%/}"
+            if ! skip_if_done "context-mode current" "[[ -L '$ctx_cache/current' ]] && [[ \$(readlink '$ctx_cache/current') = '$ctx_latest' ]]"; then
+                [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -sfn $ctx_latest $ctx_cache/current"; }
+                [[ "$DRY_RUN" == false ]] && { ln -sfn "$ctx_latest" "$ctx_cache/current"; log "context-mode current → $ctx_latest"; }
+            fi
+        else
+            info "context-mode: 缓存目录存在但无版本，跳过 current 链接"
         fi
+    else
+        info "context-mode: 缓存目录不存在 (需要 Claude Code 运行后产生)，跳过 current 链接"
     fi
     if ! skip_if_done "superpowers" "[[ -L '$CLAUDE_HOME/plugins/marketplaces/superpowers' ]]"; then
         run_installer superpowers
