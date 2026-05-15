@@ -261,10 +261,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Claude Code
-        if: steps.check.outputs.skip == 'false'
-        run: npm install -g @anthropic-ai/claude-code
-
       - name: Run setup.sh
         if: steps.check.outputs.skip == 'false'
         run: |

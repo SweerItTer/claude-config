@@ -109,13 +109,28 @@ main() {
 
     # === Phase 1: Claude Code ===
     phase "Phase 1: Claude Code"
+    local CLAUDE_BOOTSTRAP=false
     if [[ "$NO_CLAUDE" == true ]]; then
         info "跳过 Claude Code 安装 (--no-claude)"
-    elif command -v claude >/dev/null 2>&1; then
-        log "Claude Code 已安装: $(claude --version 2>&1 | head -1)"
-    else
+    elif ! command -v claude >/dev/null 2>&1; then
+        # 未安装 → 安装 + 后台启动
         [[ "$DRY_RUN" == true ]] && { info "[DRY-RUN] npm install -g @anthropic-ai/claude-code"; }
-        [[ "$DRY_RUN" == false ]] && { npm install -g @anthropic-ai/claude-code; log "Claude Code 安装完成"; }
+        [[ "$DRY_RUN" == false ]] && {
+            npm install -g @anthropic-ai/claude-code;
+            log "Claude Code 安装完成";
+            claude </dev/null >/dev/null 2>&1 &
+            info "Claude Code 已在后台启动 (PID $!)，等待初始化...";
+            CLAUDE_BOOTSTRAP=true
+        }
+    elif [[ ! -d "$CLAUDE_HOME" ]]; then
+        # 已安装但 CLAUDE_HOME 未初始化 → 后台启动
+        log "Claude Code 已安装: $(claude --version 2>&1 | head -1)"
+        claude </dev/null >/dev/null 2>&1 &
+        info "CLAUDE_HOME 未初始化，后台启动 Claude Code (PID $!)...";
+        CLAUDE_BOOTSTRAP=true
+    else
+        # 已安装且 CLAUDE_HOME 已就绪 → PASS
+        skip_if_done "Claude Code" "true"
     fi
 
     # === Phase 2: Submodules ===
@@ -169,12 +184,16 @@ main() {
     if ! skip_if_done "ECC" "[[ -L '$CLAUDE_HOME/agents' ]]"; then
         run_installer ecc
     fi
-    if ! skip_if_done "context-mode" "[[ -d '$CLAUDE_HOME/plugins/cache/context-mode/context-mode' ]] && ls -d '$CLAUDE_HOME/plugins/cache/context-mode/context-mode'/*/ >/dev/null 2>&1"; then
+    if ! skip_if_done "context-mode" "[[ -d '$REPO_ROOT/external/context-mode/node_modules' ]]"; then
         run_installer context-mode
     fi
     # context-mode: 创建 current 符号链接指向最新版本，避免 hooks 硬编码版本号
-    # 需要 Claude Code 已安装且至少运行过一次（产生插件缓存）
+    # 等待 Claude Code 后台初始化产生插件缓存目录
     local ctx_cache="$CLAUDE_HOME/plugins/cache/context-mode/context-mode"
+    if [[ ! -d "$ctx_cache" ]]; then
+        info "context-mode: 等待缓存目录 (3s)..."
+        sleep 3
+    fi
     if [[ -d "$ctx_cache" ]]; then
         local ctx_latest; ctx_latest="$(ls -d "$ctx_cache"/*/ 2>/dev/null | sort -V | tail -1)" || true
         if [[ -n "$ctx_latest" ]]; then
@@ -187,7 +206,7 @@ main() {
             info "context-mode: 缓存目录存在但无版本，跳过 current 链接"
         fi
     else
-        info "context-mode: 缓存目录不存在 (需要 Claude Code 运行后产生)，跳过 current 链接"
+        info "context-mode: 缓存目录未就绪，跳过 current 链接"
     fi
     if ! skip_if_done "superpowers" "[[ -L '$CLAUDE_HOME/plugins/marketplaces/superpowers' ]]"; then
         run_installer superpowers
