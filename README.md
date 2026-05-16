@@ -95,5 +95,5 @@ ls ~/.claude/skills/                # 100+ skills
 ls ~/.claude/commands/              # ECC commands
 ls ~/.claude/plugins/marketplaces/  # 5 个 marketplace
 grep "OMC:START" ~/.claude/CLAUDE.md  # OMC 已注入
-claude --print "say OK"               # 功能测试
+script/check-claude-doctor.sh         # 插件安装状态检查
 ```

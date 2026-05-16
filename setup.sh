@@ -9,7 +9,7 @@
 #   2. Git Submodules
 #   3. 安装插件 (RTK → ECC → context-mode → superpowers 前半)
 #   4. 生成 settings.json + OMC setup (后半)
-#   5. 文件验证 + claude --print 功能测试
+#   5. 文件验证 + script/check-claude-doctor.sh 插件迁移检查
 # ============================================================
 set -euo pipefail
 
@@ -79,7 +79,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
-            echo "  --smoke-test    运行 claude --print 冒烟测试"
+            echo "  --smoke-test    运行 script/check-claude-doctor.sh 插件迁移检查"
             exit 0 ;;
         *) err "未知参数: $1"; exit 1 ;;
     esac
@@ -320,24 +320,17 @@ PYEOF
 
         [[ $fails -gt 0 ]] && warn "文件验证: $fails 项失败" || log "文件验证: 全部通过"
 
-        # 功能测试 (仅 --smoke-test 时执行)
+        # 插件迁移检查 (仅 --smoke-test 时执行)
         if [[ "$SMOKE_TEST" == true ]]; then
             echo ""
-            info "功能测试 (claude --print)..."
-            vc() {
-                echo -n "  $1 ... "
-                local out rc
-                if out=$(timeout 120 claude --print --output-format text "$2" 2>&1); then
-                    echo "$out" | grep -qi "$3" && echo -e "${GREEN}OK${NC}" || {
-                        echo -e "${YELLOW}?${NC}"; echo "    $(echo "$out" | head -1)"
-                    }
-                else
-                    rc=$?; [[ $rc -eq 124 ]] && echo -e "${RED}TIMEOUT${NC}" || echo -e "${RED}FAIL ($rc)${NC}"
-                fi
-            }
-            vc "基础连通" "say OK" "OK"
-            vc "OMC 检测"  "简短回答: 你的 agent 框架名称?" "OMC|oh-my-claudecode|agent"
-            vc "superpowers" "你是否可以访问 using-superpowers 这个 skill? 只回答是或否" "是|yes|可以"
+            info "插件迁移检查 (script/check-claude-doctor.sh)..."
+            if timeout 120 script/check-claude-doctor.sh; then
+                echo -e "  Claude doctor ... ${GREEN}OK${NC}"
+            else
+                rc=$?
+                [[ $rc -eq 124 ]] && echo -e "  Claude doctor ... ${RED}TIMEOUT${NC}" || echo -e "  Claude doctor ... ${RED}FAIL ($rc)${NC}"
+                fails=$((fails+1))
+            fi
             echo ""
         fi
         log "验证完成"

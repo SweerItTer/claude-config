@@ -70,7 +70,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/context-mode/context-mode/current/hooks/posttooluse.mjs"
+                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/posttooluse.mjs"
                     }
                 ]
             }
@@ -81,7 +81,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/context-mode/context-mode/current/hooks/pretooluse.mjs"
+                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/pretooluse.mjs"
                     }
                 ]
             },
@@ -90,7 +90,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/context-mode/context-mode/current/hooks/pretooluse.mjs"
+                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/pretooluse.mjs"
                     }
                 ]
             },

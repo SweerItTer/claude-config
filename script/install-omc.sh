@@ -62,7 +62,21 @@ install_omc() {
     [[ "$dry_run" == true ]] && echo "  [DRY-RUN] node bridge/cli.cjs setup --plugin-dir-mode --quiet"
     echo "  [OK] OMC setup 完成 (hooks, HUD, CLAUDE.md)"
 
-    # 5. 链接 wiki (自定义内容)
+    # 5. 修复插件缓存布局：Claude doctor 期望顶层 commands 目录
+    local cache_root="$claude_home/plugins/cache/omc/oh-my-claudecode"
+    if [[ -d "$cache_root" ]]; then
+        local cache_version
+        for cache_version in "$cache_root"/*; do
+            [[ -d "$cache_version" ]] || continue
+            if [[ ! -e "$cache_version/commands" && -d "$cache_version/dist/commands" ]]; then
+                [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn dist/commands -> $cache_version/commands"; continue; }
+                ln -sfn dist/commands "$cache_version/commands"
+                echo "  [OK] OMC cache commands -> dist/commands ($(basename "$cache_version"))"
+            fi
+        done
+    fi
+
+    # 6. 链接 wiki (自定义内容)
     local wiki_src="$repo_root/config/omc/wiki"
     local wiki_dst="$HOME/.omc/wiki"
     if [[ -d "$wiki_src" ]]; then
