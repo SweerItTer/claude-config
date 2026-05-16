@@ -35,9 +35,18 @@ if ! grep -q 'Oh-My-ClaudeCode Conflict Diagnostic' "$tmp"; then
     exit 1
 fi
 
-if [[ $rc -ne 0 ]]; then
-    echo "FAIL: OMC doctor conflicts 返回 $rc，插件/配置诊断未通过"
-    exit "$rc"
+if grep -q 'Skills colliding with plugin skill names' "$tmp"; then
+    echo "FAIL: OMC doctor 发现 legacy skills shadow plugin skills"
+    exit 1
 fi
 
-echo "OK: OMC doctor 插件/配置诊断通过"
+if [[ $rc -ne 0 ]]; then
+    if grep -q 'No unified MCP registry found' "$tmp" && ! grep -Eq 'Missing from Claude MCP config|Missing from Codex config.toml|Registry exists but has no MCP servers' "$tmp"; then
+        echo "WARN: OMC doctor conflicts 返回 $rc；可选 MCP registry 未配置，不阻断基础迁移"
+    else
+        echo "FAIL: OMC doctor conflicts 返回 $rc，插件/配置诊断未通过"
+        exit "$rc"
+    fi
+fi
+
+echo "OK: OMC doctor 核心插件迁移诊断通过"

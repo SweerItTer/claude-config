@@ -126,17 +126,13 @@ jobs:
           done
           echo "OK: ECC skills 抽样通过 (符号链接)"
 
-          # OMC skill
-          [[ -L "$sd/omc-reference" ]] || { echo "FAIL: omc-reference 不是符号链接"; exit 1; }
-          echo "OK: omc-reference skill"
-
-          # Superpowers skills (由 plugin marketplace 运行时发现，不在 skills/ 目录)
-          # 验证旧版 cp -r 残留已清理
-          for name in using-superpowers verification-before-completion test-driven-development; do
+          # OMC / superpowers skills (由 plugin marketplace 运行时发现，不在 skills/ 目录)
+          # 验证旧版 symlink/cp -r 残留已清理，避免 shadow plugin skills
+          for name in omc-reference omc-setup omc-doctor ai-slop-cleaner using-superpowers verification-before-completion test-driven-development; do
             sp="$sd/$name"
-            [[ -d "$sp" ]] && { echo "FAIL: 旧 superpowers skill $name 仍存在 (应为 plugin 发现)"; exit 1; }
+            [[ -d "$sp" ]] && { echo "FAIL: 旧 plugin skill $name 仍存在 (应为 plugin 发现)"; exit 1; }
           done
-          echo "OK: superpowers skills 已迁移至 plugin marketplace (无残留)"
+          echo "OK: OMC/superpowers skills 已迁移至 plugin marketplace (无残留)"
 
       - name: Verify marketplace registrations
         run: |

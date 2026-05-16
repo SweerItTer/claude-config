@@ -48,7 +48,7 @@ setup.sh 是幂等的，可安全重复运行；它会自动串起 submodules、
 ```
 ~/.claude/agents    → external/everything-claude-code/agents (+ 自定义覆盖)
 ~/.claude/commands  → external/everything-claude-code/commands
-~/.claude/skills/   → ECC skills + OMC skills (逐个 symlink)
+~/.claude/skills/   → ECC skills；OMC/superpowers skills 由 plugin marketplace 发现
 ~/.claude/rules     → config/claude/rules
 ~/.claude/CLAUDE.md → config/claude/CLAUDE.md
 ~/.claude/RTK.md    → config/claude/RTK.md

@@ -269,13 +269,13 @@ main() {
 
     # === Phase 3: 安装插件 ===
     phase "Phase 3: 安装插件"
-    if ! skip_if_done "RTK" "command -v rtk"; then
+    if ! skip_if_done "RTK" "command -v rtk >/dev/null 2>&1 && [[ -L '$HOME/.config/rtk/config.toml' ]]"; then
         run_installer rtk
     fi
     if ! skip_if_done "ECC" "[[ -L '$CLAUDE_HOME/agents' ]]"; then
         run_installer ecc
     fi
-    if ! skip_if_done "context-mode" "[[ -d '$REPO_ROOT/external/context-mode/node_modules' ]]"; then
+    if ! skip_if_done "context-mode" "[[ -d '$REPO_ROOT/external/context-mode/node_modules' ]] && [[ -L '$CLAUDE_HOME/plugins/marketplaces/context-mode' ]]"; then
         run_installer context-mode
     fi
     # context-mode: 创建 current 符号链接指向最新版本，避免 hooks 硬编码版本号
@@ -333,9 +333,7 @@ main() {
     fi
 
     # OMC setup 依赖 settings.json 存在 (合并 hooks)
-    if ! skip_if_done "OMC" "[[ -L '$CLAUDE_HOME/skills/omc-reference' ]]"; then
-        run_installer omc
-    fi
+    run_installer omc
 
     # RTK hooks 注入 (必须在 settings.json 生成 + OMC 合并之后)
     if command -v rtk >/dev/null 2>&1; then
@@ -428,6 +426,10 @@ PYEOF
                 fails=$((fails+1))
             fi
             echo ""
+        fi
+        if [[ $fails -gt 0 ]]; then
+            err "验证失败: $fails 项未通过"
+            exit 1
         fi
         log "验证完成"
     fi

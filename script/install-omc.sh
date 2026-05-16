@@ -32,26 +32,27 @@ install_omc() {
     }
     echo "  [OK] OMC marketplace 已注册"
 
-    # 3. OMC skills 逐个符号链接 (omc setup --plugin-dir-mode 跳过了此步骤)
+    # 3. 清理旧版 OMC skills 链接，skills 由 plugin marketplace 运行时发现
     local skills_src="$omc_dir/skills"
     local skills_dst="$claude_home/skills"
-    mkdir -p "$skills_dst"
-    local skill_count=0
-    if [[ -d "$skills_src" ]]; then
+    local removed_count=0
+    if [[ -d "$skills_src" && -d "$skills_dst" ]]; then
         for skill_dir in "$skills_src"/*/; do
             [[ -d "$skill_dir" ]] || continue
             local name; name="$(basename "$skill_dir")"
             local dst="$skills_dst/$name"
-            [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn ${skill_dir%/} -> $dst"; continue; }
-            [[ -L "$dst" ]] || [[ -d "$dst" ]] && rm -rf "$dst"
-            ln -sfn "${skill_dir%/}" "$dst"
-            skill_count=$((skill_count + 1))
+            [[ -L "$dst" ]] || continue
+            local target; target="$(readlink -f "$dst")"
+            [[ "$target" == "$(readlink -f "${skill_dir%/}")" ]] || continue
+            [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] rm $dst"; continue; }
+            rm -f "$dst"
+            removed_count=$((removed_count + 1))
         done
     fi
-    echo "  [OK] OMC skills symlinked ($skill_count)"
+    echo "  [OK] OMC legacy skills cleaned ($removed_count)"
 
-    # 4. 运行 OMC setup (处理 hooks, HUD, CLAUDE.md 合并, MCP registry)
-    # --plugin-dir-mode: 跳过 agent/skill 复制 (已由步骤 3 处理), 仍处理 hooks + HUD + CLAUDE.md
+    # 4. 运行 OMC setup (处理 hooks, HUD, CLAUDE.md 合并)
+    # --plugin-dir-mode: 跳过 agent/skill 复制，skills 通过 plugin marketplace 提供
     echo "  [INFO] 运行 omc setup..."
     [[ "$dry_run" == false ]] && {
         cd "$omc_dir"
@@ -76,13 +77,14 @@ install_omc() {
         done
     fi
 
-    # 6. 链接 wiki (自定义内容)
+    # 6. 链接 OMC wiki (自定义内容)
+    mkdir -p "$HOME/.omc"
+
     local wiki_src="$repo_root/config/omc/wiki"
     local wiki_dst="$HOME/.omc/wiki"
     if [[ -d "$wiki_src" ]]; then
         [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $wiki_src -> $wiki_dst"; }
         [[ "$dry_run" == false ]] && {
-            mkdir -p "$HOME/.omc"
             [[ -L "$wiki_dst" ]] || [[ -d "$wiki_dst" ]] && rm -rf "$wiki_dst"
             ln -sfn "$wiki_src" "$wiki_dst"
         }
