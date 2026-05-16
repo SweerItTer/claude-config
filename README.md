@@ -4,6 +4,8 @@
 
 ## 快速开始
 
+先准备认证环境变量。若机器上已经有标准的 `ANTHROPIC_*` 环境变量，`setup.sh` 会自动复用；否则设置仓库约定的 `CLAUDE_*` 变量也可以。
+
 ```bash
 git clone --recurse-submodules git@github.com:SweerItTer/claude-config.git
 cd claude-config
@@ -11,7 +13,7 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-setup.sh 是幂等的 — 可安全重复运行。支持 `--ci`、`--dry-run`、`--no-claude`、`--no-verify`。
+setup.sh 是幂等的，可安全重复运行；它会自动串起 submodules、RTK、ECC、context-mode、OMC、superpowers、settings.json 和验证。支持 `--ci`、`--dry-run`、`--no-claude`、`--no-verify`、`--smoke-test`。
 
 ## 包含内容
 
@@ -73,15 +75,15 @@ setup.sh 是幂等的 — 可安全重复运行。支持 `--ci`、`--dry-run`、
 
 ## setup.sh 完成后
 
-1. 确保 `CLAUDE_API_KEY` 和 `CLAUDE_BASE_URL` 环境变量已设置
-2. 启动 `claude` — 插件系统自动发现 marketplace 并完成缓存
+1. 若此前未设置认证变量，补充 `ANTHROPIC_*` 或 `CLAUDE_*` 环境变量后重新运行 `./setup.sh`
+2. 启动 `claude` — 插件系统会自动发现 marketplace 并补全缓存
 
 ## 更新
 
 ```bash
 cd ~/claude-config
 git pull --recurse-submodules
-./setup.sh    # 幂等 — 重新链接全部文件
+./setup.sh    # 幂等，会重新收敛整条迁移链路
 ```
 
 ## 验证
@@ -95,5 +97,5 @@ ls ~/.claude/skills/                # 100+ skills
 ls ~/.claude/commands/              # ECC commands
 ls ~/.claude/plugins/marketplaces/  # 5 个 marketplace
 grep "OMC:START" ~/.claude/CLAUDE.md  # OMC 已注入
-script/check-claude-doctor.sh         # 插件安装状态检查
+script/check-claude-doctor.sh         # doctor 检查插件迁移状态，不调用模型 API
 ```

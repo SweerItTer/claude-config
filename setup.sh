@@ -48,6 +48,97 @@ run_installer() {
     bash "$script" "$REPO_ROOT" "$DRY_RUN"
 }
 
+render_settings_template() {
+    local tmpl="$1"
+    local content; content="$(cat "$tmpl")"
+    local claude_base_url="${CLAUDE_BASE_URL:-${ANTHROPIC_BASE_URL:-}}"
+    local claude_api_key="${CLAUDE_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}"
+    local claude_model="${CLAUDE_MODEL:-${ANTHROPIC_MODEL:-}}"
+    local claude_haiku_model="${CLAUDE_HAIKU_MODEL:-${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}}"
+    local claude_sonnet_model="${CLAUDE_SONNET_MODEL:-${ANTHROPIC_DEFAULT_SONNET_MODEL:-}}"
+    local claude_opus_model="${CLAUDE_OPUS_MODEL:-${ANTHROPIC_DEFAULT_OPUS_MODEL:-}}"
+    content="${content//"{{CLAUDE_BASE_URL}}"/$claude_base_url}"
+    content="${content//"{{CLAUDE_API_KEY}}"/$claude_api_key}"
+    content="${content//"{{CLAUDE_MODEL}}"/$claude_model}"
+    content="${content//"{{CLAUDE_HAIKU_MODEL}}"/$claude_haiku_model}"
+    content="${content//"{{CLAUDE_SONNET_MODEL}}"/$claude_sonnet_model}"
+    content="${content//"{{CLAUDE_OPUS_MODEL}}"/$claude_opus_model}"
+    content="${content//"{{REPO_ROOT}}"/$REPO_ROOT}"
+    printf '%s\n' "$content"
+}
+
+merge_settings_json() {
+    local target="$1"
+    local rendered_template="$2"
+    TARGET_SETTINGS_PATH="$target" RENDERED_TEMPLATE_JSON="$rendered_template" python3 - <<'PYEOF'
+import json
+import os
+import sys
+
+
+def merge_object(dst, src, skip_empty=False, prefer_existing=False):
+    base = dict(dst) if isinstance(dst, dict) else {}
+    if isinstance(src, dict):
+        for key, value in src.items():
+            if skip_empty and value == '':
+                continue
+            if prefer_existing and key in base:
+                continue
+            base[key] = value
+    return base
+
+
+def merge_list(existing, template):
+    existing_list = existing if isinstance(existing, list) else []
+    template_list = template if isinstance(template, list) else []
+    merged = list(existing_list)
+    seen = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in existing_list}
+    for item in template_list:
+        key = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        if key not in seen:
+            merged.append(item)
+            seen.add(key)
+    return merged
+
+
+def merge_permissions(existing, template):
+    merged = merge_object(existing, template, prefer_existing=True)
+    if isinstance(template, dict):
+        for key, value in template.items():
+            if isinstance(value, list):
+                merged[key] = merge_list(merged.get(key), value)
+    return merged
+
+
+path = os.environ['TARGET_SETTINGS_PATH']
+rendered_template = os.environ['RENDERED_TEMPLATE_JSON']
+with open(path, 'r', encoding='utf-8') as fh:
+    current = json.load(fh)
+template = json.loads(rendered_template)
+
+current['env'] = merge_object(current.get('env'), template.get('env'), skip_empty=True, prefer_existing=True)
+current['enabledPlugins'] = merge_object(current.get('enabledPlugins'), template.get('enabledPlugins'), prefer_existing=True)
+current['extraKnownMarketplaces'] = merge_object(current.get('extraKnownMarketplaces'), template.get('extraKnownMarketplaces'), prefer_existing=True)
+
+hooks = current.get('hooks') if isinstance(current.get('hooks'), dict) else {}
+template_hooks = template.get('hooks') if isinstance(template.get('hooks'), dict) else {}
+for hook_name, template_items in template_hooks.items():
+    hooks[hook_name] = merge_list(hooks.get(hook_name), template_items)
+current['hooks'] = hooks
+
+if 'permissions' in template:
+    current['permissions'] = merge_permissions(current.get('permissions'), template.get('permissions'))
+
+for key in ['think', 'skipDangerousModePermissionPrompt', 'attribution', 'statusLine', 'language', 'effortLevel']:
+    if key in template and key not in current:
+        current[key] = template[key]
+
+with open(path, 'w', encoding='utf-8') as fh:
+    json.dump(current, fh, indent=4, ensure_ascii=False)
+    fh.write('\n')
+PYEOF
+}
+
 # 幂等跳过: 检测命令成功则跳过 (除非 --force)
 skip_if_done() {
     local desc="$1"
@@ -219,21 +310,26 @@ main() {
 
     if [[ ! -f "$tmpl" ]]; then
         warn "settings.template.json 不存在，跳过"
-    elif [[ -f "$target" ]] && [[ "$CI_MODE" != true ]]; then
-        warn "已有 ~/.claude/settings.json，跳过生成"
     else
-        info "从模板生成 settings.json..."
-        [[ "$DRY_RUN" == false ]] && {
-            mkdir -p "$CLAUDE_HOME"
-            local content; content="$(cat "$tmpl")"
-            for var in CLAUDE_BASE_URL CLAUDE_API_KEY CLAUDE_MODEL \
-                       CLAUDE_HAIKU_MODEL CLAUDE_SONNET_MODEL CLAUDE_OPUS_MODEL; do
-                content="${content//"{{${var}}}"/${!var:-}}"
-            done
-            content="${content//"{{REPO_ROOT}}"/$REPO_ROOT}"
-            echo "$content" > "$target"
-        }
-        log "settings.json 已生成"
+        local rendered_settings
+        rendered_settings="$(render_settings_template "$tmpl")"
+        if [[ -f "$target" ]] && [[ "$CI_MODE" != true ]]; then
+            info "已有 ~/.claude/settings.json，合并迁移所需关键项..."
+            [[ "$DRY_RUN" == false ]] && {
+                mkdir -p "$CLAUDE_HOME"
+                merge_settings_json "$target" "$rendered_settings"
+            }
+            [[ "$DRY_RUN" == true ]] && echo "  [DRY-RUN] merge settings.json with template-backed migration keys"
+            log "settings.json 已合并关键迁移配置"
+        else
+            info "从模板生成 settings.json..."
+            [[ "$DRY_RUN" == false ]] && {
+                mkdir -p "$CLAUDE_HOME"
+                printf '%s\n' "$rendered_settings" > "$target"
+            }
+            [[ "$DRY_RUN" == true ]] && echo "  [DRY-RUN] write rendered settings.json"
+            log "settings.json 已生成"
+        fi
     fi
 
     # OMC setup 依赖 settings.json 存在 (合并 hooks)
@@ -329,22 +425,6 @@ PYEOF
             else
                 rc=$?
                 [[ $rc -eq 124 ]] && echo -e "  Claude doctor ... ${RED}TIMEOUT${NC}" || echo -e "  Claude doctor ... ${RED}FAIL ($rc)${NC}"
-                fails=$((fails+1))
-            fi
-
-            echo ""
-            info "Claude 反馈检查 (claude --print)..."
-            if output=$(timeout 120 claude --print --output-format text "简短回答：setup 和 doctor 检查是否成功？只回答 OK 或 FAIL" 2>&1); then
-                echo "$output"
-                if echo "$output" | grep -qi '^OK$'; then
-                    echo -e "  Claude 反馈 ... ${GREEN}OK${NC}"
-                else
-                    echo -e "  Claude 反馈 ... ${YELLOW}?${NC}"
-                    fails=$((fails+1))
-                fi
-            else
-                rc=$?
-                [[ $rc -eq 124 ]] && echo -e "  Claude 反馈 ... ${RED}TIMEOUT${NC}" || echo -e "  Claude 反馈 ... ${RED}FAIL ($rc)${NC}"
                 fails=$((fails+1))
             fi
             echo ""
