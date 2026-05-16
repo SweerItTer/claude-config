@@ -31,6 +31,9 @@ jobs:
           ./setup.sh --ci --smoke-test
         env:
           REPO_ROOT: ${{ github.workspace }}
+          CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
+          CLAUDE_MODEL: deepseek-v4-flash
 
       - name: Verify idempotency — second run should skip
         run: |

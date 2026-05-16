@@ -331,6 +331,22 @@ PYEOF
                 [[ $rc -eq 124 ]] && echo -e "  Claude doctor ... ${RED}TIMEOUT${NC}" || echo -e "  Claude doctor ... ${RED}FAIL ($rc)${NC}"
                 fails=$((fails+1))
             fi
+
+            echo ""
+            info "Claude 反馈检查 (claude --print)..."
+            if output=$(timeout 120 claude --print --output-format text "简短回答：setup 和 doctor 检查是否成功？只回答 OK 或 FAIL" 2>&1); then
+                echo "$output"
+                if echo "$output" | grep -qi '^OK$'; then
+                    echo -e "  Claude 反馈 ... ${GREEN}OK${NC}"
+                else
+                    echo -e "  Claude 反馈 ... ${YELLOW}?${NC}"
+                    fails=$((fails+1))
+                fi
+            else
+                rc=$?
+                [[ $rc -eq 124 ]] && echo -e "  Claude 反馈 ... ${RED}TIMEOUT${NC}" || echo -e "  Claude 反馈 ... ${RED}FAIL ($rc)${NC}"
+                fails=$((fails+1))
+            fi
             echo ""
         fi
         log "验证完成"
