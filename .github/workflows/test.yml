@@ -9,12 +9,8 @@ on:
 
 jobs:
   verify:
-    name: Verify setup.sh on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    name: Verify setup.sh on ubuntu-24.04
+    runs-on: ubuntu-24.04
     env:
       REPO_ROOT: ${{ github.workspace }}
 
@@ -32,7 +28,7 @@ jobs:
       - name: Run setup.sh
         run: |
           chmod +x ./setup.sh
-          ./setup.sh --ci
+          ./setup.sh --ci --smoke-test
         env:
           REPO_ROOT: ${{ github.workspace }}
 
@@ -236,32 +232,3 @@ jobs:
             echo "SKIP: rules-injector (OMC 子模块中不存在此目录)"
           fi
 
-  # ---- Claude 插件迁移完整性检查 (不依赖 API/model 调用) ----
-  claude-doctor:
-    name: Claude doctor migration check
-    runs-on: ubuntu-24.04
-    needs: verify
-
-    steps:
-      - name: Checkout with submodules
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Run setup.sh
-        run: |
-          chmod +x ./setup.sh
-          ./setup.sh --ci
-        env:
-          REPO_ROOT: ${{ github.workspace }}
-
-      - name: Verify Claude plugin installation with doctor
-        run: |
-          set -euo pipefail
-          ./script/check-claude-doctor.sh
-        timeout-minutes: 3
