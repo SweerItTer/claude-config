@@ -36,7 +36,8 @@ if ! grep -q 'Oh-My-ClaudeCode Conflict Diagnostic' "$tmp"; then
 fi
 
 if [[ $rc -ne 0 ]]; then
-    echo "WARN: OMC doctor conflicts 返回 $rc；当前仅将安装路径/模块缺失作为迁移阻断项"
+    echo "FAIL: OMC doctor conflicts 返回 $rc，插件/配置诊断未通过"
+    exit "$rc"
 fi
 
-echo "OK: OMC doctor 插件安装状态检查完成"
+echo "OK: OMC doctor 插件/配置诊断通过"
