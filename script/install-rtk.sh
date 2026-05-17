@@ -37,9 +37,17 @@ hook_script_ready() {
     [[ -x "$HOOK_SCRIPT" ]]
 }
 
+rtk_bin() {
+    if [[ -x "$RTK_BIN" ]]; then
+        printf '%s\n' "$RTK_BIN"
+    else
+        printf '%s\n' rtk
+    fi
+}
+
 is_ready() {
-    command -v rtk >/dev/null 2>&1 || return 1
-    rtk --version >/dev/null 2>&1 || return 1
+    command -v "$(rtk_bin)" >/dev/null 2>&1 || return 1
+    "$(rtk_bin)" --version >/dev/null 2>&1 || return 1
     symlink_points_to "$CFG_DST/config.toml" "$CFG_SRC/config.toml" || return 1
     symlink_points_to "$CFG_DST/filters.toml" "$CFG_SRC/filters.toml" || return 1
     hook_script_ready || return 1
@@ -71,7 +79,7 @@ download_rtk() {
     mv "$bin" "$RTK_BIN"
     chmod +x "$RTK_BIN"
     rm -rf "$tmpdir"
-    ok "RTK 安装完成: $(rtk --version 2>&1)"
+    ok "RTK 安装完成: $("$RTK_BIN" --version 2>&1)"
 }
 
 link_config() {
@@ -96,7 +104,7 @@ link_config() {
 run_rtk_init() {
     info "执行 rtk init..."
     if [[ "$RTK_BIN" == "$(command -v rtk 2>/dev/null || true)" ]]; then
-        rtk init -g --auto-patch 2>&1 || info "rtk init 返回非零，继续用 verify 判定结果"
+        "$RTK_BIN" init -g --auto-patch 2>&1 || info "rtk init 返回非零，继续用 verify 判定结果"
     else
         "$RTK_BIN" init -g --auto-patch 2>&1 || info "rtk init 返回非零，继续用 verify 判定结果"
     fi
@@ -118,8 +126,8 @@ ensure_hook_script() {
 }
 
 install() {
-    if command -v rtk >/dev/null 2>&1; then
-        ok "RTK 已安装: $(rtk --version 2>&1)"
+    if command -v "$(rtk_bin)" >/dev/null 2>&1; then
+        ok "RTK 已安装: $("$(rtk_bin)" --version 2>&1)"
     else
         info "下载 RTK ${RTK_VERSION}..."
         if [[ "$DRY_RUN" == true ]]; then
@@ -148,8 +156,8 @@ verify() {
         return 0
     fi
 
-    command -v rtk >/dev/null 2>&1 || { err "rtk 命令不存在"; return 1; }
-    rtk --version >/dev/null 2>&1 || { err "rtk --version 失败"; return 1; }
+    { command -v rtk >/dev/null 2>&1 || [[ -x "$RTK_BIN" ]]; } || { err "rtk 命令不存在"; return 1; }
+    { rtk --version >/dev/null 2>&1 || "$RTK_BIN" --version >/dev/null 2>&1; } || { err "rtk --version 失败"; return 1; }
     symlink_points_to "$CFG_DST/config.toml" "$CFG_SRC/config.toml" || { err "config.toml symlink 错误"; return 1; }
     symlink_points_to "$CFG_DST/filters.toml" "$CFG_SRC/filters.toml" || { err "filters.toml symlink 错误"; return 1; }
     hook_script_ready || { err "rtk-rewrite.sh 缺失或不可执行"; return 1; }
