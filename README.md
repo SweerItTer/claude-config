@@ -38,9 +38,10 @@ setup.sh 是幂等的，可安全重复运行；它会自动串起 submodules、
 | 脚本 | 职责 |
 |------|------|
 | install-rtk.sh | 下载 RTK 预编译二进制 → `~/.local/bin/rtk`，symlink config |
-| install-ecc.sh | npm install + agents/commands 整目录 symlink + skills 逐个 symlink + 自定义 agents 覆盖 |
+| install-ecc.sh | 官方 `install.sh --profile full --target claude` + 自定义 agents 覆盖 |
 | install-context-mode.sh | npm install (含 native better-sqlite3) + marketplace symlink |
 | install-superpowers.sh | marketplace symlink + 清理旧版 cp -r 残留 |
+| install-openspec.sh | 官方 `npm install -g @fission-ai/openspec@latest` |
 | install-omc.sh | npm install + `omc setup --plugin-dir-mode` (hooks, HUD, CLAUDE.md, MCP) + wiki symlink |
 
 ### 符号链接关系 (由 setup.sh 建立)
@@ -63,7 +64,7 @@ setup.sh 是幂等的，可安全重复运行；它会自动串起 submodules、
 ### 自动安装
 - **Claude Code** — `npm install -g @anthropic-ai/claude-code` (已有则跳过)
 - **RTK** — 从 GitHub Releases 下载预编译二进制 (无需 Rust 工具链)
-- **ECC / OMC / context-mode** — 各自 `npm install`
+- **ECC / OMC / context-mode** — 各自按官方安装入口执行；OpenSpec 使用官方全局 npm 安装
 - **OMC setup** — 自动注入 20+ hooks 到 settings.json、合并 CLAUDE.md、注册 MCP 等
 - **settings.json** — 从模板生成，env var 替换路径和 API 配置
 
@@ -98,4 +99,5 @@ ls ~/.claude/commands/              # ECC commands
 ls ~/.claude/plugins/marketplaces/  # 5 个 marketplace
 grep "OMC:START" ~/.claude/CLAUDE.md  # OMC 已注入
 script/check-claude-doctor.sh         # doctor 检查插件迁移状态，不调用模型 API
+openspec --version                     # OpenSpec CLI 可用
 ```

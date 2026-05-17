@@ -7,7 +7,7 @@
 #   0. 环境检测 (OS, deps, Claude Code)
 #   1. 安装 Claude Code (可选)
 #   2. Git Submodules
-#   3. 安装插件 (RTK → ECC → context-mode → superpowers 前半)
+#   3. 安装插件 (RTK → ECC → context-mode → OpenSpec → superpowers 前半)
 #   4. 生成 settings.json + OMC setup (后半)
 #   5. 文件验证 + script/check-claude-doctor.sh 插件迁移检查
 # ============================================================
@@ -46,6 +46,14 @@ run_installer() {
     fi
     info "--- ${name} ---"
     bash "$script" "$REPO_ROOT" "$DRY_RUN"
+}
+
+symlink_points_to() {
+    local link="$1"
+    local target="$2"
+    [[ -L "$link" ]] || return 1
+    [[ -e "$target" ]] || return 1
+    [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]
 }
 
 render_settings_template() {
@@ -142,16 +150,144 @@ PYEOF
 # 幂等跳过: 检测命令成功则跳过 (除非 --force)
 skip_if_done() {
     local desc="$1"
-    local check_cmd="$2"
+    shift
     if [[ "$FORCE" == true ]]; then
         info "$desc: --force 强制重跑"
         return 1
     fi
-    if eval "$check_cmd" >/dev/null 2>&1; then
+    if "$@" >/dev/null 2>&1; then
         echo -e "${BLUE}[PASS]${NC} $desc: 已完成，跳过"
         return 0
     fi
     return 1
+}
+
+submodules_clean() {
+    cd "$REPO_ROOT" && [[ $(git submodule status | grep -c '^-') -eq 0 ]]
+}
+
+rtk_ready() {
+    command -v rtk >/dev/null 2>&1 && [[ -L "$HOME/.config/rtk/config.toml" ]]
+}
+
+ecc_installed() {
+    [[ -f "$CLAUDE_HOME/ecc/install-state.json" ]]
+}
+
+context_mode_ready() {
+    [[ -d "$REPO_ROOT/external/context-mode/node_modules" ]] && symlink_points_to "$CLAUDE_HOME/plugins/marketplaces/context-mode" "$REPO_ROOT/external/context-mode"
+}
+
+context_mode_current_ready() {
+    local ctx_cache="$CLAUDE_HOME/plugins/cache/context-mode/context-mode"
+    [[ -d "$ctx_cache" ]] || return 1
+    local ctx_latest
+    ctx_latest="$(ls -d "$ctx_cache"/*/ 2>/dev/null | sort -V | tail -1)" || true
+    [[ -n "$ctx_latest" ]] || return 1
+    ctx_latest="${ctx_latest%/}"
+    [[ -L "$ctx_cache/current" ]] && [[ $(readlink "$ctx_cache/current") = "$ctx_latest" ]]
+}
+
+openspec_binary_ready() {
+    command -v openspec >/dev/null 2>&1
+}
+
+openspec_version_ready() {
+    openspec --version >/dev/null 2>&1
+}
+
+known_marketplaces_paths_ready() {
+    local km="$CLAUDE_HOME/plugins/known_marketplaces.json"
+    [[ -f "$km" ]] || return 1
+
+    python3 - "$REPO_ROOT" "$km" <<'PY'
+import json
+import os
+import sys
+
+repo_root = sys.argv[1]
+km_path = sys.argv[2]
+expected = {
+    "claude-plugins-official": "external/claude-plugins-official",
+    "context-mode": "external/context-mode",
+    "ecc": "external/everything-claude-code",
+    "omc": "external/oh-my-claudecode",
+    "superpowers": "external/superpowers",
+}
+
+with open(km_path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+for name, rel_path in expected.items():
+    entry = data.get(name)
+    if not isinstance(entry, dict):
+        raise SystemExit(1)
+    if entry.get("installLocation") != os.path.join(repo_root, rel_path):
+        raise SystemExit(1)
+    source = entry.get("source")
+    if not isinstance(source, dict) or not source:
+        raise SystemExit(1)
+PY
+}
+
+rtk_binary_ready() {
+    command -v rtk >/dev/null 2>&1
+}
+
+rtk_version_ready() {
+    rtk --version >/dev/null 2>&1
+}
+
+rtk_config_ready() {
+    [[ -L "$HOME/.config/rtk/config.toml" ]]
+}
+
+superpowers_ready() {
+    symlink_points_to "$CLAUDE_HOME/plugins/marketplaces/superpowers" "$REPO_ROOT/external/superpowers"
+}
+
+marketplace_ready() {
+    local name="$1"
+    local expected
+    case "$name" in
+        omc) expected="$REPO_ROOT/external/oh-my-claudecode" ;;
+        context-mode) expected="$REPO_ROOT/external/context-mode" ;;
+        superpowers) expected="$REPO_ROOT/external/superpowers" ;;
+        claude-plugins-official) expected="$REPO_ROOT/external/claude-plugins-official" ;;
+        *) return 1 ;;
+    esac
+    symlink_points_to "$CLAUDE_HOME/plugins/marketplaces/$name" "$expected"
+}
+
+omc_injected() {
+    grep -q 'OMC:START' "$CLAUDE_HOME/CLAUDE.md" 2>/dev/null
+}
+
+custom_rules_ready() {
+    [[ -f "$CLAUDE_HOME/agents/rules.md" && ! -L "$CLAUDE_HOME/agents/rules.md" ]]
+}
+
+custom_git_ready() {
+    [[ -f "$CLAUDE_HOME/agents/git.md" && ! -L "$CLAUDE_HOME/agents/git.md" ]]
+}
+
+ecc_rules_ready() {
+    [[ -d "$CLAUDE_HOME/rules/ecc" ]]
+}
+
+ecc_commands_ready() {
+    [[ -d "$CLAUDE_HOME/commands" ]]
+}
+
+rtk_hooks_ready() {
+    grep -q 'rtk-rewrite' "$CLAUDE_HOME/settings.json" 2>/dev/null
+}
+
+known_marketplaces_ready() {
+    known_marketplaces_paths_ready
 }
 
 # ----- 参数解析 -----
@@ -191,11 +327,11 @@ main() {
     # === Phase 0: 环境检测 ===
     phase "Phase 0: 环境检测"
     local missing=()
-    for dep in git curl tar node; do
+    for dep in git curl tar node npm; do
         command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
     done
     [[ ${#missing[@]} -gt 0 ]] && { err "缺少依赖: ${missing[*]}"; exit 1; }
-    log "git, curl, tar, node 已就绪"
+    log "git, curl, tar, node, npm 已就绪"
     info "系统: $(uname -s) / $(uname -m)"
 
     # === Phase 1: Claude Code ===
@@ -226,7 +362,7 @@ main() {
 
     # === Phase 2: Submodules ===
     phase "Phase 2: Git Submodules"
-    if ! skip_if_done "Submodules" "cd '$REPO_ROOT' && [[ \$(git submodule status | grep -c '^-') -eq 0 ]]"; then
+    if ! skip_if_done "Submodules" submodules_clean; then
         info "初始化 git submodules (5 个)..."
         [[ "$DRY_RUN" == false ]] && { cd "$REPO_ROOT" && git submodule update --init --recursive; }
         log "Submodules 就绪"
@@ -238,7 +374,7 @@ main() {
     for f in CLAUDE.md RTK.md AGENTS.md; do
         local src="$REPO_ROOT/config/claude/$f" dst="$CLAUDE_HOME/$f"
         [[ -f "$src" ]] || continue
-        if skip_if_done "$f symlink" "[[ -L '$dst' ]] && [[ \$(readlink -f '$dst') = \$(readlink -f '$src') ]]"; then
+        if skip_if_done "$f symlink" symlink_points_to "$dst" "$src"; then
             continue
         fi
         [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $src -> $dst"; continue; }
@@ -247,7 +383,7 @@ main() {
     done
     # rules 目录
     local rules_dst="$CLAUDE_HOME/rules"
-    if ! skip_if_done "rules symlink" "[[ -L '$rules_dst' ]]"; then
+    if ! skip_if_done "rules symlink" symlink_points_to "$rules_dst" "$REPO_ROOT/config/claude/rules"; then
         [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $REPO_ROOT/config/claude/rules -> $rules_dst"; }
         [[ "$DRY_RUN" == false ]] && {
             [[ -L "$rules_dst" ]] || [[ -d "$rules_dst" ]] && rm -rf "$rules_dst"
@@ -257,7 +393,7 @@ main() {
     # claude-plugins-official marketplace
     local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
     local cpo_src="$REPO_ROOT/external/claude-plugins-official"
-    if [[ -d "$cpo_src" ]] && ! skip_if_done "cpo marketplace" "[[ -L '$cpo_dst' ]]"; then
+    if [[ -d "$cpo_src" ]] && ! skip_if_done "cpo marketplace" symlink_points_to "$cpo_dst" "$cpo_src"; then
         [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $cpo_src -> $cpo_dst"; }
         [[ "$DRY_RUN" == false ]] && {
             mkdir -p "$CLAUDE_HOME/plugins/marketplaces"
@@ -269,14 +405,17 @@ main() {
 
     # === Phase 3: 安装插件 ===
     phase "Phase 3: 安装插件"
-    if ! skip_if_done "RTK" "command -v rtk >/dev/null 2>&1 && [[ -L '$HOME/.config/rtk/config.toml' ]]"; then
+    if ! skip_if_done "RTK" rtk_ready; then
         run_installer rtk
     fi
-    if ! skip_if_done "ECC" "[[ -L '$CLAUDE_HOME/agents' ]]"; then
+    if ! skip_if_done "ECC" ecc_installed; then
         run_installer ecc
     fi
-    if ! skip_if_done "context-mode" "[[ -d '$REPO_ROOT/external/context-mode/node_modules' ]] && [[ -L '$CLAUDE_HOME/plugins/marketplaces/context-mode' ]]"; then
+    if ! skip_if_done "context-mode" context_mode_ready; then
         run_installer context-mode
+    fi
+    if ! skip_if_done "OpenSpec" openspec_version_ready; then
+        run_installer openspec
     fi
     # context-mode: 创建 current 符号链接指向最新版本，避免 hooks 硬编码版本号
     # 等待 Claude Code 后台初始化产生插件缓存目录
@@ -289,7 +428,7 @@ main() {
         local ctx_latest; ctx_latest="$(ls -d "$ctx_cache"/*/ 2>/dev/null | sort -V | tail -1)" || true
         if [[ -n "$ctx_latest" ]]; then
             ctx_latest="${ctx_latest%/}"
-            if ! skip_if_done "context-mode current" "[[ -L '$ctx_cache/current' ]] && [[ \$(readlink '$ctx_cache/current') = '$ctx_latest' ]]"; then
+            if ! skip_if_done "context-mode current" context_mode_current_ready; then
                 [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -sfn $ctx_latest $ctx_cache/current"; }
                 [[ "$DRY_RUN" == false ]] && { ln -sfn "$ctx_latest" "$ctx_cache/current"; log "context-mode current → $ctx_latest"; }
             fi
@@ -299,7 +438,7 @@ main() {
     else
         info "context-mode: 缓存目录未就绪，跳过 current 链接"
     fi
-    if ! skip_if_done "superpowers" "[[ -L '$CLAUDE_HOME/plugins/marketplaces/superpowers' ]]"; then
+    if ! skip_if_done "superpowers" superpowers_ready; then
         run_installer superpowers
     fi
 
@@ -337,7 +476,7 @@ main() {
 
     # RTK hooks 注入 (必须在 settings.json 生成 + OMC 合并之后)
     if command -v rtk >/dev/null 2>&1; then
-        if ! skip_if_done "RTK hooks" "grep -q 'rtk-rewrite' '$CLAUDE_HOME/settings.json' 2>/dev/null"; then
+        if ! skip_if_done "RTK hooks" rtk_hooks_ready; then
             info "RTK hook 注入 (rtk init)..."
             [[ "$DRY_RUN" == false ]] && { rtk init -g --auto-patch 2>&1 || true; }
             log "RTK hooks 已注入"
@@ -345,7 +484,7 @@ main() {
     fi
 
     # known_marketplaces.json 生成 (Claude Code 运行时产物, 提前生成供 CI 验证)
-    if ! skip_if_done "known_marketplaces" "[[ -f '$CLAUDE_HOME/plugins/known_marketplaces.json' ]]"; then
+    if ! skip_if_done "known_marketplaces" known_marketplaces_ready; then
         info "生成 known_marketplaces.json..."
         [[ "$DRY_RUN" == false ]] && {
             mkdir -p "$CLAUDE_HOME/plugins"
@@ -381,36 +520,42 @@ PYEOF
         phase "Phase 5: 功能验证"
         local fails=0
         check() {
-            if eval "$1" 2>/dev/null; then echo -e "  ${GREEN}✓${NC} $2"; else echo -e "  ${RED}✗${NC} $2"; fails=$((fails+1)); fi
+            local cmd="$1"
+            local label="$2"
+            shift 2
+            if "$cmd" "$@" 2>/dev/null; then echo -e "  ${GREEN}✓${NC} $label"; else echo -e "  ${RED}✗${NC} $label"; fails=$((fails+1)); fi
         }
 
         for f in CLAUDE.md RTK.md AGENTS.md; do
-            check "[[ -L '$CLAUDE_HOME/$f' ]]" "核心配置 $f 符号链接"
+            check symlink_points_to "核心配置 $f 符号链接" "$CLAUDE_HOME/$f" "$REPO_ROOT/config/claude/$f"
         done
-        check "[[ -L '$CLAUDE_HOME/rules' ]]" "rules 目录"
-        check "grep -q 'OMC:START' '$CLAUDE_HOME/CLAUDE.md'" "OMC 已注入 CLAUDE.md"
-        check "[[ -L '$CLAUDE_HOME/agents' ]]" "agents 目录 (ECC)"
-        check "[[ -f '$CLAUDE_HOME/agents/rules.md' && ! -L '$CLAUDE_HOME/agents/rules.md' ]]" "  自定义 rules.md"
-        check "[[ -f '$CLAUDE_HOME/agents/git.md' && ! -L '$CLAUDE_HOME/agents/git.md' ]]" "  自定义 git.md"
-        check "[[ -L '$CLAUDE_HOME/skills/tdd-workflow' ]]" "ECC skill: tdd-workflow"
-        check "[[ -L '$CLAUDE_HOME/commands' ]]" "commands 目录"
-        check "[[ -L '$CLAUDE_HOME/plugins/marketplaces/superpowers' ]]" "superpowers mkt"
-        check "[[ -L '$CLAUDE_HOME/plugins/marketplaces/context-mode' ]]" "context-mode mkt"
-        check "[[ -d '$REPO_ROOT/external/context-mode/node_modules' ]]" "ctx node_modules"
+        check symlink_points_to "rules 目录" "$CLAUDE_HOME/rules" "$REPO_ROOT/config/claude/rules"
+        check omc_injected "OMC 已注入 CLAUDE.md"
+        check ecc_installed "ECC install-state"
+        check custom_rules_ready "  自定义 rules.md"
+        check custom_git_ready "  自定义 git.md"
+        check ecc_rules_ready "ECC rules 目录"
+        check ecc_commands_ready "ECC commands 目录"
+        check symlink_points_to "superpowers mkt" "$CLAUDE_HOME/plugins/marketplaces/superpowers" "$REPO_ROOT/external/superpowers"
+        check symlink_points_to "context-mode mkt" "$CLAUDE_HOME/plugins/marketplaces/context-mode" "$REPO_ROOT/external/context-mode"
+        check test "ctx node_modules" -d "$REPO_ROOT/external/context-mode/node_modules"
 
         export PATH="$HOME/.local/bin:$PATH"
-        check "command -v rtk >/dev/null 2>&1" "RTK 二进制"
-        check "rtk --version >/dev/null 2>&1" "RTK --version"
-        check "[[ -L '$HOME/.config/rtk/config.toml' ]]" "RTK config"
+        check openspec_binary_ready "OpenSpec 二进制"
+        check openspec_version_ready "OpenSpec --version"
+        check rtk_binary_ready "RTK 二进制"
+        check rtk_version_ready "RTK --version"
+        check rtk_hooks_ready "RTK hook 注入"
+        check rtk_config_ready "RTK config"
 
         local mp="$CLAUDE_HOME/plugins/marketplaces"
-        for name in ecc omc context-mode superpowers claude-plugins-official; do
-            check "[[ -L '$mp/$name' ]]" "marketplace: $name"
+        for name in omc context-mode superpowers claude-plugins-official; do
+            check marketplace_ready "marketplace: $name" "$name"
         done
 
         local km="$CLAUDE_HOME/plugins/known_marketplaces.json"
-        check "[[ -f '$km' ]]" "known_marketplaces.json"
-        check "! grep -q 'REPO_ROOT' '$km'" "km.json 路径已替换"
+        check known_marketplaces_ready "known_marketplaces.json"
+        check known_marketplaces_paths_ready "km.json 路径已替换"
 
         [[ $fails -gt 0 ]] && warn "文件验证: $fails 项失败" || log "文件验证: 全部通过"
 

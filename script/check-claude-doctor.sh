@@ -41,6 +41,13 @@ if grep -q 'Skills colliding with plugin skill names' "$tmp"; then
 fi
 
 if [[ $rc -ne 0 ]]; then
+    if grep -q 'Potential conflicts detected' "$tmp" \
+        && ! grep -Eq '✗|FAIL|Skills colliding with plugin skill names|Path not found|Cannot find module|MODULE_NOT_FOUND|ENOENT' "$tmp"; then
+        echo "WARN: OMC doctor 仅报告潜在冲突，无具体阻断项"
+        echo "OK: OMC doctor 核心插件迁移诊断通过"
+        exit 0
+    fi
+
     if grep -q 'No unified MCP registry found' "$tmp" && ! grep -Eq 'Missing from Claude MCP config|Missing from Codex config.toml|Registry exists but has no MCP servers' "$tmp"; then
         echo "WARN: OMC doctor conflicts 返回 $rc；可选 MCP registry 未配置，不阻断基础迁移"
     else
