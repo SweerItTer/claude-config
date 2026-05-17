@@ -12,7 +12,15 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+if [[ "$(id -u)" -eq 0 ]] && [[ -n "${SUDO_USER:-}" ]]; then
+    REAL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$REAL_HOME/.claude}"
+    export CLAUDE_CONFIG_DIR="$CLAUDE_HOME"
+else
+    CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+fi
+
 SCRIPT_DIR="$REPO_ROOT/script"
 
 DRY_RUN=false
