@@ -120,13 +120,12 @@ jobs:
           set -euo pipefail
           sd="$HOME/.claude/skills"
 
-          # ECC skills (符号链接)
-          for name in tdd-workflow security-review plan-orchestrate; do
-            sp="$sd/$name"
-            [[ -d "$sp" ]] || { echo "FAIL: skill $name 目录不存在"; exit 1; }
-            [[ -L "$sp" ]] || { echo "FAIL: skill $name 不是符号链接 (应为 ECC symlink)"; exit 1; }
+          # ECC skills (官方安装器安装到 skills/ecc 命名空间)
+          for name in tdd-workflow security-review mle-workflow; do
+            sp="$sd/ecc/$name"
+            [[ -d "$sp" ]] || { echo "FAIL: ECC skill $name 目录不存在: $sp"; exit 1; }
           done
-          echo "OK: ECC skills 抽样通过 (符号链接)"
+          echo "OK: ECC skills 抽样通过 (skills/ecc 命名空间)"
 
           # OMC / superpowers skills (由 plugin marketplace 运行时发现，不在 skills/ 目录)
           # 验证旧版 symlink/cp -r 残留已清理，避免 shadow plugin skills
