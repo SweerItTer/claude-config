@@ -78,17 +78,15 @@ jobs:
           done
           echo "OK: rules 文件抽样通过"
 
-      - name: Verify symlinks — agents (ECC + custom)
+      - name: Verify agents — ECC + custom
         run: |
           set -euo pipefail
           target="$HOME/.claude/agents"
-          [[ -L "$target" ]] || { echo "FAIL: $target 不是符号链接"; exit 1; }
-          link=$(readlink "$target")
-          expected="$REPO_ROOT/external/everything-claude-code/agents"
-          [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
-          echo "OK: agents dir -> $link"
+          [[ -d "$target" ]] || { echo "FAIL: $target 目录不存在"; exit 1; }
+          [[ -L "$target" ]] && { echo "FAIL: $target 不应为符号链接"; exit 1; }
+          echo "OK: agents dir 已安装为普通目录"
 
-          # ECC agent 定义存在 (.kiro/agents，非 agents/)
+          # ECC agent 定义存在 (.kiro/agents，非 ~/.claude/agents)
           for f in architect.md code-reviewer.md planner.md tdd-guide.md; do
             fp="$REPO_ROOT/external/everything-claude-code/.kiro/agents/$f"
             [[ -f "$fp" ]] || { echo "FAIL: .kiro/agents/$f 不存在"; exit 1; }

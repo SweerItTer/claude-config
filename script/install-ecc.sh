@@ -41,6 +41,7 @@ install_ecc() {
             done
             shopt -u nullglob
         else
+            [[ -L "$agents_dst" ]] && rm -f "$agents_dst"
             mkdir -p "$agents_dst"
             shopt -s nullglob
             for f in "$custom_agents"/*.md; do
