@@ -87,14 +87,14 @@ link_current_cache() {
     if ! latest="$(latest_cache_version)"; then
         info "context-mode cache 尚未生成版本目录，创建 cache 目录"
 
-        tag="$(git -C $CTX_DIR describe --tags)" || {
-            info "无法获取 context-mode git tag"
-            return 1
-        }
+        tag="$(git -C "$CTX_DIR" describe --tags 2>/dev/null)" || true
+        if [[ -z "$tag" ]]; then
+            tag="dev-$(git -C "$CTX_DIR" rev-parse --short HEAD 2>/dev/null || date +%s)"
+        fi
 
         mkdir -p "$CACHE_ROOT" || return 1
 
-        cp -a $CTX_DIR "$CACHE_ROOT/$tag" || return 1
+        cp -a "$CTX_DIR" "$CACHE_ROOT/$tag" || return 1
 
         latest="$(latest_cache_version)" || {
             info "context-mode cache 创建后仍然无法找到版本目录"
