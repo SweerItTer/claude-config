@@ -25,7 +25,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Verify user default ECC scope
+      - name: Verify user ECC scope requires selection
         run: |
           set -euo pipefail
           tmp="$(mktemp -d)"
@@ -34,10 +34,13 @@ jobs:
           output=$(CLAUDE_CONFIG_DIR="$tmp" ./setup.sh --dry-run --no-claude --no-verify 2>&1)
           echo "$output"
 
-          printf '%s\n' "$output" | grep -q 'ECC 默认安装范围'
-          printf '%s\n' "$output" | grep -q -- '--modules rules-core,agents-core'
-          if printf '%s\n' "$output" | grep -q -- '--profile full'; then
-            echo "FAIL: 用户默认路径不应使用 ECC full profile"
+          printf '%s\n' "$output" | grep -q 'ECC 需要选择安装范围'
+          printf '%s\n' "$output" | grep -q '未选择 ECC 安装范围，跳过 ECC 官方安装器'
+          printf '%s\n' "$output" | grep -q -- './setup.sh --ecc-focused'
+          printf '%s\n' "$output" | grep -q -- './setup.sh --ecc-profile <name>'
+          printf '%s\n' "$output" | grep -q -- './setup.sh --ecc-modules <id,id,...>'
+          if printf '%s\n' "$output" | grep -q -- 'ECC 默认安装范围\|npm install ECC\|--modules rules-core,agents-core\|--profile full'; then
+            echo "FAIL: 用户默认路径不应自动安装或选择 ECC 安装范围"
             exit 1
           fi
 

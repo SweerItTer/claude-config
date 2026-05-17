@@ -22,6 +22,9 @@ NO_VERIFY=false
 FORCE=false
 SMOKE_TEST=false
 ECC_FULL=false
+ECC_FOCUSED=false
+ECC_PROFILE=""
+ECC_MODULES=""
 
 log()   { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -403,6 +406,15 @@ while [[ $# -gt 0 ]]; do
         --force) FORCE=true; shift ;;
         --smoke-test) SMOKE_TEST=true; shift ;;
         --ecc-full) ECC_FULL=true; shift ;;
+        --ecc-focused) ECC_FOCUSED=true; shift ;;
+        --ecc-profile)
+            ECC_PROFILE="${2:-}"
+            [[ -n "$ECC_PROFILE" ]] || { err "--ecc-profile 需要 profile 名称"; exit 1; }
+            shift 2 ;;
+        --ecc-modules)
+            ECC_MODULES="${2:-}"
+            [[ -n "$ECC_MODULES" ]] || { err "--ecc-modules 需要逗号分隔模块 ID"; exit 1; }
+            shift 2 ;;
         -h|--help)
             echo "用法: ./setup.sh [选项]"
             echo "  --ci            CI 模式 (跳过手动提示，ECC 使用全量安装以覆盖测试)"
@@ -411,7 +423,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
             echo "  --smoke-test    运行 script/check-claude-doctor.sh 插件迁移检查"
-            echo "  --ecc-full      用户模式也安装 ECC full profile；默认仅安装 C/C++、Java、JS/TS、Vue 常用能力"
+            echo "  --ecc-full      安装 ECC full profile"
+            echo "  --ecc-focused   安装本仓库推荐的 C/C++、Java、JS/TS、Vue 常用 ECC 模块"
+            echo "  --ecc-profile P 安装 ECC 官方 profile: minimal/core/developer/security/research/full"
+            echo "  --ecc-modules M 安装逗号分隔的 ECC 模块 ID"
             exit 0 ;;
         *) err "未知参数: $1"; exit 1 ;;
     esac
@@ -443,9 +458,15 @@ main() {
     ensure_core_config
 
     phase "Phase 3: 安装器编排"
-    local ecc_mode="focused"
+    local ecc_mode="interactive"
     if [[ "$CI_MODE" == true || "$ECC_FULL" == true ]]; then
         ecc_mode="full"
+    elif [[ "$ECC_FOCUSED" == true ]]; then
+        ecc_mode="focused"
+    elif [[ -n "$ECC_PROFILE" ]]; then
+        ecc_mode="profile:$ECC_PROFILE"
+    elif [[ -n "$ECC_MODULES" ]]; then
+        ecc_mode="modules:$ECC_MODULES"
     fi
     run_installer ecc "$ecc_mode"
     run_installer context-mode

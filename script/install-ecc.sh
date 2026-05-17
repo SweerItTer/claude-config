@@ -5,7 +5,31 @@ set -euo pipefail
 REPO_ROOT="${1:?需要 REPO_ROOT}"
 DRY_RUN="${2:-false}"
 FORCE="${3:-false}"
-INSTALL_MODE="${4:-focused}"
+INSTALL_MODE="${4:-interactive}"
+REQUEST_PROFILE=""
+REQUEST_MODULES=""
+if [[ "$INSTALL_MODE" == profile:* ]]; then
+    REQUEST_PROFILE="${INSTALL_MODE#profile:}"
+    INSTALL_MODE="profile"
+elif [[ "$INSTALL_MODE" == modules:* ]]; then
+    REQUEST_MODULES="${INSTALL_MODE#modules:}"
+    INSTALL_MODE="modules"
+fi
+
+validate_mode() {
+    case "$INSTALL_MODE" in
+        interactive|focused|full|profile|modules) ;;
+        *) err "未知 ECC 安装模式: $INSTALL_MODE"; exit 1 ;;
+    esac
+    if [[ "$INSTALL_MODE" == profile && -z "$REQUEST_PROFILE" ]]; then
+        err "ECC profile 不能为空"
+        exit 1
+    fi
+    if [[ "$INSTALL_MODE" == modules && -z "$REQUEST_MODULES" ]]; then
+        err "ECC modules 不能为空"
+        exit 1
+    fi
+}
 
 ECC_DIR="$REPO_ROOT/external/everything-claude-code"
 CUSTOM_AGENTS_DIR="$REPO_ROOT/config/claude/agents-custom"
@@ -33,9 +57,12 @@ FOCUSED_MODULES=(
     skill-vite-patterns
 )
 OPTIONAL_ECC_INSTALLS=(
-    "--ecc-full: 安装 ECC full profile"
-    "./external/everything-claude-code/install.sh --target claude --profile <name>: minimal/core/developer/security/research/full"
-    "./external/everything-claude-code/install.sh --target claude --modules <id,id,...>: 安装指定 ECC 模块"
+    "./setup.sh --ecc-focused: 安装本仓库推荐的 C/C++、Java、JS/TS、Vue 常用 ECC 模块"
+    "./setup.sh --ecc-full: 安装 ECC full profile"
+    "./setup.sh --ecc-profile <name>: 安装官方 profile (minimal/core/developer/security/research/full)"
+    "./setup.sh --ecc-modules <id,id,...>: 安装指定 ECC 模块"
+    "external/everything-claude-code/install.sh --target claude --profile <name>: 直接调用 ECC 官方 profile 安装"
+    "external/everything-claude-code/install.sh --target claude --modules <id,id,...>: 直接调用 ECC 官方模块安装"
 )
 
 pass() { echo "  [PASS] $*"; }
@@ -61,9 +88,20 @@ custom_agents_ready() {
     return 0
 }
 
+mode_install_args() {
+    case "$INSTALL_MODE" in
+        full) printf '%s\n' --profile full --target claude ;;
+        focused) printf '%s\n' --target claude --modules "$(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")" ;;
+        profile) printf '%s\n' --target claude --profile "$REQUEST_PROFILE" ;;
+        modules) printf '%s\n' --target claude --modules "$REQUEST_MODULES" ;;
+        *) return 1 ;;
+    esac
+}
+
 expected_request_ready() {
+    [[ "$INSTALL_MODE" != "interactive" ]] || return 1
     [[ -f "$INSTALL_STATE" ]] || return 1
-    INSTALL_MODE="$INSTALL_MODE" FOCUSED_MODULES_CSV="$(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")" python3 - "$INSTALL_STATE" <<'PYEOF'
+    INSTALL_MODE="$INSTALL_MODE" REQUEST_PROFILE="$REQUEST_PROFILE" REQUEST_MODULES="$REQUEST_MODULES" FOCUSED_MODULES_CSV="$(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")" python3 - "$INSTALL_STATE" <<'PYEOF'
 import json
 import os
 import sys
@@ -74,21 +112,41 @@ request = state.get('request', {}) if isinstance(state, dict) else {}
 mode = os.environ['INSTALL_MODE']
 if mode == 'full':
     sys.exit(0 if request.get('profile') == 'full' else 1)
+if mode == 'profile':
+    sys.exit(0 if request.get('profile') == os.environ.get('REQUEST_PROFILE') else 1)
 expected = [item for item in os.environ['FOCUSED_MODULES_CSV'].split(',') if item]
+if mode == 'modules':
+    expected = [item for item in os.environ.get('REQUEST_MODULES', '').split(',') if item]
 actual = request.get('modules') if isinstance(request.get('modules'), list) else []
 sys.exit(0 if sorted(actual) == sorted(expected) else 1)
 PYEOF
 }
 
 print_install_scope() {
-    if [[ "$INSTALL_MODE" == "full" ]]; then
-        info "ECC 安装范围: full profile (CI/显式 --ecc-full)"
-        return 0
-    fi
-
-    info "ECC 默认安装范围: C/C++、Java、JavaScript/TypeScript、Vue 常用能力"
-    info "ECC 默认模块: $(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")"
-    info "ECC 可选安装: ${OPTIONAL_ECC_INSTALLS[*]}"
+    case "$INSTALL_MODE" in
+        full)
+            info "ECC 安装范围: full profile (CI/显式 --ecc-full)"
+            ;;
+        focused)
+            info "ECC 安装范围: 本仓库推荐常用能力 (显式 --ecc-focused)"
+            info "ECC 模块: $(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")"
+            ;;
+        profile)
+            info "ECC 安装范围: 官方 profile '$REQUEST_PROFILE'"
+            ;;
+        modules)
+            info "ECC 安装范围: 指定模块 '$REQUEST_MODULES'"
+            ;;
+        interactive)
+            info "ECC 需要选择安装范围；普通用户路径不会自动预设。"
+            info "可选安装方式:"
+            local item
+            for item in "${OPTIONAL_ECC_INSTALLS[@]}"; do
+                info "  - $item"
+            done
+            info "查看完整模块: (cd $ECC_DIR && node scripts/install-plan.js --list-modules)"
+            ;;
+    esac
 }
 
 is_ready() {
@@ -145,6 +203,16 @@ overlay_custom_agents() {
 }
 
 install() {
+    if [[ "$INSTALL_MODE" == "interactive" ]]; then
+        print_install_scope
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] 未选择 ECC 安装范围，跳过 ECC 官方安装器"
+        else
+            info "未选择 ECC 安装范围，跳过 ECC 官方安装器；可用上方任一命令重新运行。"
+        fi
+        return 0
+    fi
+
     if [[ ! -d "$ECC_DIR/node_modules" ]]; then
         info "npm install ECC..."
         if [[ "$DRY_RUN" == true ]]; then
@@ -163,26 +231,23 @@ install() {
     if [[ "$DRY_RUN" == true ]]; then
         print_install_scope
         info "[DRY-RUN] 移除旧 agents/commands 符号链接"
-        if [[ "$INSTALL_MODE" == "full" ]]; then
-            info "[DRY-RUN] (cd $ECC_DIR && ./install.sh --profile full --target claude)"
-        else
-            info "[DRY-RUN] (cd $ECC_DIR && ./install.sh --target claude --modules $(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}"))"
-        fi
+        local args=()
+        mapfile -t args < <(mode_install_args)
+        info "[DRY-RUN] (cd $ECC_DIR && ./install.sh ${args[*]})"
         info "[DRY-RUN] ln -sfn $ECC_DIR -> $MARKETPLACE_DST"
         info "[DRY-RUN] cp $CUSTOM_AGENTS_DIR/*.md -> $AGENTS_DST/"
         return 0
     fi
 
-    remove_legacy_links
     print_install_scope
+
+    remove_legacy_links
     info "运行 ECC 官方安装器..."
     (
         cd "$ECC_DIR"
-        if [[ "$INSTALL_MODE" == "full" ]]; then
-            ./install.sh --profile full --target claude > /dev/null 2>&1
-        else
-            ./install.sh --target claude --modules "$(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")" > /dev/null 2>&1
-        fi
+        local args=()
+        mapfile -t args < <(mode_install_args)
+        ./install.sh "${args[@]}" > /dev/null 2>&1
     )
     ok "ECC 官方安装完成"
     link_marketplace
@@ -210,6 +275,13 @@ verify() {
 }
 
 main() {
+    validate_mode
+
+    if [[ "$INSTALL_MODE" == "interactive" ]]; then
+        install
+        return 0
+    fi
+
     if [[ "$FORCE" == false ]] && is_ready; then
         pass "ECC 已就绪，跳过"
         verify
