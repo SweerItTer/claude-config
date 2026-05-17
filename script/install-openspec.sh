@@ -1,25 +1,52 @@
 #!/usr/bin/env bash
 # install-openspec.sh — OpenSpec CLI 安装
-# 使用 OpenSpec README 官方方法: npm install -g @fission-ai/openspec@latest
 set -euo pipefail
 
-install_openspec() {
-    local repo_root="${1:?需要 REPO_ROOT}"
-    local dry_run="${2:-false}"
+REPO_ROOT="${1:?需要 REPO_ROOT}"
+DRY_RUN="${2:-false}"
+FORCE="${3:-false}"
 
-    if openspec --version >/dev/null 2>&1; then
-        echo "  [OK] OpenSpec 已安装: $(openspec --version 2>&1 | head -1)"
-        return 0
-    fi
+pass() { echo "  [PASS] $*"; }
+info() { echo "  [INFO] $*"; }
+ok()   { echo "  [OK] $*"; }
+err()  { echo "  [ERR] $*"; }
 
-    echo "  [INFO] 按官方方式安装 OpenSpec..."
-    if [[ "$dry_run" == true ]]; then
-        echo "  [DRY-RUN] npm install -g @fission-ai/openspec@latest"
+is_ready() {
+    command -v openspec >/dev/null 2>&1 || return 1
+    openspec --version >/dev/null 2>&1 || return 1
+}
+
+install() {
+    info "按官方方式安装 OpenSpec..."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] npm install -g @fission-ai/openspec@latest"
         return 0
     fi
 
     npm install -g @fission-ai/openspec@latest
-    echo "  [OK] OpenSpec 安装完成: $(openspec --version 2>&1 | head -1)"
+    ok "OpenSpec 安装完成: $(openspec --version 2>&1 | head -1)"
 }
 
-install_openspec "$@"
+verify() {
+    if [[ "$DRY_RUN" == true ]]; then
+        info "dry-run 模式跳过 verify"
+        return 0
+    fi
+
+    command -v openspec >/dev/null 2>&1 || { err "openspec 命令不存在"; return 1; }
+    openspec --version >/dev/null 2>&1 || { err "openspec --version 失败"; return 1; }
+    ok "OpenSpec verify 通过"
+}
+
+main() {
+    if [[ "$FORCE" == false ]] && is_ready; then
+        pass "OpenSpec 已就绪，跳过"
+        verify
+        return 0
+    fi
+
+    install
+    verify
+}
+
+main "$@"

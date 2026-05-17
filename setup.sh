@@ -2,14 +2,6 @@
 # ============================================================
 # Claude Code Config Migration — 一键初始化脚本 v3
 # 用法: git clone --recurse-submodules <repo-url> && ./setup.sh
-#
-# 5 阶段:
-#   0. 环境检测 (OS, deps, Claude Code)
-#   1. 安装 Claude Code (可选)
-#   2. Git Submodules
-#   3. 安装插件 (RTK → ECC → context-mode → OpenSpec → superpowers 前半)
-#   4. 生成 settings.json + OMC setup (后半)
-#   5. 文件验证 + script/check-claude-doctor.sh 插件迁移检查
 # ============================================================
 set -euo pipefail
 
@@ -29,24 +21,14 @@ NO_CLAUDE=false
 NO_VERIFY=false
 FORCE=false
 SMOKE_TEST=false
+ECC_FULL=false
 
-# ----- helpers -----
 log()   { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()   { echo -e "${RED}[ERR]${NC} $*"; }
 info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
 phase() { echo ""; echo -e "${BLUE}═══ $* ═══${NC}"; echo ""; }
-
-run_installer() {
-    local name="$1"
-    local script="$SCRIPT_DIR/install-${name}.sh"
-    if [[ ! -f "$script" ]]; then
-        err "安装脚本不存在: $script"
-        return 1
-    fi
-    info "--- ${name} ---"
-    bash "$script" "$REPO_ROOT" "$DRY_RUN"
-}
+pass()  { echo -e "${BLUE}[PASS]${NC} $*"; }
 
 symlink_points_to() {
     local link="$1"
@@ -56,15 +38,57 @@ symlink_points_to() {
     [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]
 }
 
+ensure_symlink() {
+    local src="$1"
+    local dst="$2"
+    local label="$3"
+
+    if symlink_points_to "$dst" "$src"; then
+        pass "$label 已就绪"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] ln -sfn $src -> $dst"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$dst")"
+    if [[ -L "$dst" || -f "$dst" ]]; then
+        rm -f "$dst"
+    elif [[ -d "$dst" ]]; then
+        rm -rf "$dst"
+    fi
+    ln -sfn "$src" "$dst"
+    log "$label 已更新"
+}
+
+run_installer() {
+    local name="$1"
+    local script="$SCRIPT_DIR/install-${name}.sh"
+    shift || true
+
+    if [[ ! -f "$script" ]]; then
+        err "安装脚本不存在: $script"
+        return 1
+    fi
+
+    info "--- ${name} ---"
+    bash "$script" "$REPO_ROOT" "$DRY_RUN" "$FORCE" "$@"
+}
+
 render_settings_template() {
     local tmpl="$1"
-    local content; content="$(cat "$tmpl")"
+    local content
+    content="$(cat "$tmpl")"
+
     local claude_base_url="${CLAUDE_BASE_URL:-${ANTHROPIC_BASE_URL:-}}"
     local claude_api_key="${CLAUDE_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}"
     local claude_model="${CLAUDE_MODEL:-${ANTHROPIC_MODEL:-}}"
     local claude_haiku_model="${CLAUDE_HAIKU_MODEL:-${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}}"
     local claude_sonnet_model="${CLAUDE_SONNET_MODEL:-${ANTHROPIC_DEFAULT_SONNET_MODEL:-}}"
     local claude_opus_model="${CLAUDE_OPUS_MODEL:-${ANTHROPIC_DEFAULT_OPUS_MODEL:-}}"
+
     content="${content//"{{CLAUDE_BASE_URL}}"/$claude_base_url}"
     content="${content//"{{CLAUDE_API_KEY}}"/$claude_api_key}"
     content="${content//"{{CLAUDE_MODEL}}"/$claude_model}"
@@ -78,10 +102,10 @@ render_settings_template() {
 merge_settings_json() {
     local target="$1"
     local rendered_template="$2"
+
     TARGET_SETTINGS_PATH="$target" RENDERED_TEMPLATE_JSON="$rendered_template" python3 - <<'PYEOF'
 import json
 import os
-import sys
 
 
 def merge_object(dst, src, skip_empty=False, prefer_existing=False):
@@ -147,357 +171,144 @@ with open(path, 'w', encoding='utf-8') as fh:
 PYEOF
 }
 
-# 幂等跳过: 检测命令成功则跳过 (除非 --force)
-skip_if_done() {
-    local desc="$1"
-    shift
-    if [[ "$FORCE" == true ]]; then
-        info "$desc: --force 强制重跑"
-        return 1
-    fi
-    if "$@" >/dev/null 2>&1; then
-        echo -e "${BLUE}[PASS]${NC} $desc: 已完成，跳过"
+submodules_clean() {
+    (
+        cd "$REPO_ROOT"
+        [[ $(git submodule status | grep -c '^-') -eq 0 ]]
+    )
+}
+
+ensure_claude_code() {
+    local claude_bootstrap=false
+
+    if [[ "$NO_CLAUDE" == true ]]; then
+        info "跳过 Claude Code 安装 (--no-claude)"
         return 0
     fi
-    return 1
+
+    if ! command -v claude >/dev/null 2>&1; then
+        info "安装 Claude Code..."
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] npm install -g @anthropic-ai/claude-code"
+            return 0
+        fi
+        npm install -g @anthropic-ai/claude-code
+        log "Claude Code 安装完成"
+        claude </dev/null >/dev/null 2>&1 &
+        info "Claude Code 已在后台启动 (PID $!)"
+        return 0
+    fi
+
+    log "Claude Code 已安装: $(claude --version 2>&1 | head -1)"
+    if [[ ! -d "$CLAUDE_HOME" ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] 后台启动 Claude Code 初始化 CLAUDE_HOME"
+            return 0
+        fi
+        claude </dev/null >/dev/null 2>&1 &
+        info "CLAUDE_HOME 未初始化，已后台启动 Claude Code (PID $!)"
+        claude_bootstrap=true
+    fi
+
+    [[ "$claude_bootstrap" == false ]] && pass "Claude Code 已就绪"
 }
 
-submodules_clean() {
-    cd "$REPO_ROOT" && [[ $(git submodule status | grep -c '^-') -eq 0 ]]
+ensure_submodules() {
+    if [[ "$FORCE" == false ]] && submodules_clean; then
+        pass "Submodules 已就绪"
+        return 0
+    fi
+
+    info "初始化 git submodules..."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] git submodule update --init --recursive"
+        return 0
+    fi
+
+    (
+        cd "$REPO_ROOT"
+        git submodule update --init --recursive
+    )
+    log "Submodules 就绪"
 }
 
-rtk_ready() {
-    command -v rtk >/dev/null 2>&1 && [[ -L "$HOME/.config/rtk/config.toml" ]]
+ensure_core_config() {
+    mkdir -p "$CLAUDE_HOME"
+
+    for file in CLAUDE.md RTK.md AGENTS.md; do
+        local src="$REPO_ROOT/config/claude/$file"
+        local dst="$CLAUDE_HOME/$file"
+        [[ -f "$src" ]] || continue
+        ensure_symlink "$src" "$dst" "$file symlink"
+    done
+
+    ensure_symlink "$REPO_ROOT/config/claude/rules" "$CLAUDE_HOME/rules" "rules symlink"
+
+    local cpo_src="$REPO_ROOT/external/claude-plugins-official"
+    local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
+    if [[ -d "$cpo_src" ]]; then
+        ensure_symlink "$cpo_src" "$cpo_dst" "claude-plugins-official marketplace"
+    fi
 }
 
-ecc_installed() {
-    [[ -f "$CLAUDE_HOME/ecc/install-state.json" ]]
+ensure_settings_json() {
+    local template="$REPO_ROOT/config/claude/settings.template.json"
+    local target="$CLAUDE_HOME/settings.json"
+
+    if [[ ! -f "$template" ]]; then
+        warn "settings.template.json 不存在，跳过"
+        return 0
+    fi
+
+    local rendered_settings
+    rendered_settings="$(render_settings_template "$template")"
+
+    if [[ -f "$target" ]] && [[ "$CI_MODE" != true ]]; then
+        info "合并现有 settings.json..."
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] merge settings.json with template-backed migration keys"
+            return 0
+        fi
+        mkdir -p "$CLAUDE_HOME"
+        merge_settings_json "$target" "$rendered_settings"
+        log "settings.json 已合并"
+        return 0
+    fi
+
+    info "生成 settings.json..."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] write rendered settings.json"
+        return 0
+    fi
+
+    mkdir -p "$CLAUDE_HOME"
+    printf '%s\n' "$rendered_settings" > "$target"
+    log "settings.json 已生成"
 }
 
-context_mode_ready() {
-    [[ -d "$REPO_ROOT/external/context-mode/node_modules" ]] && symlink_points_to "$CLAUDE_HOME/plugins/marketplaces/context-mode" "$REPO_ROOT/external/context-mode"
-}
+generate_known_marketplaces() {
+    local target="$CLAUDE_HOME/plugins/known_marketplaces.json"
 
-context_mode_current_ready() {
-    local ctx_cache="$CLAUDE_HOME/plugins/cache/context-mode/context-mode"
-    [[ -d "$ctx_cache" ]] || return 1
-    local ctx_latest
-    ctx_latest="$(ls -d "$ctx_cache"/*/ 2>/dev/null | sort -V | tail -1)" || true
-    [[ -n "$ctx_latest" ]] || return 1
-    ctx_latest="${ctx_latest%/}"
-    [[ -L "$ctx_cache/current" ]] && [[ $(readlink "$ctx_cache/current") = "$ctx_latest" ]]
-}
+    info "生成 known_marketplaces.json..."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] write $target"
+        return 0
+    fi
 
-openspec_binary_ready() {
-    command -v openspec >/dev/null 2>&1
-}
-
-openspec_version_ready() {
-    openspec --version >/dev/null 2>&1
-}
-
-known_marketplaces_paths_ready() {
-    local km="$CLAUDE_HOME/plugins/known_marketplaces.json"
-    [[ -f "$km" ]] || return 1
-
-    python3 - "$REPO_ROOT" "$km" <<'PY'
+    mkdir -p "$CLAUDE_HOME/plugins"
+    python3 - "$REPO_ROOT" <<'PYEOF' > "$target"
 import json
 import os
 import sys
 
-repo_root = sys.argv[1]
-km_path = sys.argv[2]
-expected = {
-    "claude-plugins-official": "external/claude-plugins-official",
-    "context-mode": "external/context-mode",
-    "ecc": "external/everything-claude-code",
-    "omc": "external/oh-my-claudecode",
-    "superpowers": "external/superpowers",
-}
-
-with open(km_path, "r", encoding="utf-8") as fh:
-    data = json.load(fh)
-
-if not isinstance(data, dict):
-    raise SystemExit(1)
-
-for name, rel_path in expected.items():
-    entry = data.get(name)
-    if not isinstance(entry, dict):
-        raise SystemExit(1)
-    if entry.get("installLocation") != os.path.join(repo_root, rel_path):
-        raise SystemExit(1)
-    source = entry.get("source")
-    if not isinstance(source, dict) or not source:
-        raise SystemExit(1)
-PY
-}
-
-rtk_binary_ready() {
-    command -v rtk >/dev/null 2>&1
-}
-
-rtk_version_ready() {
-    rtk --version >/dev/null 2>&1
-}
-
-rtk_config_ready() {
-    [[ -L "$HOME/.config/rtk/config.toml" ]]
-}
-
-superpowers_ready() {
-    symlink_points_to "$CLAUDE_HOME/plugins/marketplaces/superpowers" "$REPO_ROOT/external/superpowers"
-}
-
-marketplace_ready() {
-    local name="$1"
-    local expected
-    case "$name" in
-        omc) expected="$REPO_ROOT/external/oh-my-claudecode" ;;
-        context-mode) expected="$REPO_ROOT/external/context-mode" ;;
-        superpowers) expected="$REPO_ROOT/external/superpowers" ;;
-        claude-plugins-official) expected="$REPO_ROOT/external/claude-plugins-official" ;;
-        *) return 1 ;;
-    esac
-    symlink_points_to "$CLAUDE_HOME/plugins/marketplaces/$name" "$expected"
-}
-
-omc_injected() {
-    grep -q 'OMC:START' "$CLAUDE_HOME/CLAUDE.md" 2>/dev/null
-}
-
-custom_rules_ready() {
-    [[ -f "$CLAUDE_HOME/agents/rules.md" && ! -L "$CLAUDE_HOME/agents/rules.md" ]]
-}
-
-custom_git_ready() {
-    [[ -f "$CLAUDE_HOME/agents/git.md" && ! -L "$CLAUDE_HOME/agents/git.md" ]]
-}
-
-ecc_rules_ready() {
-    [[ -d "$CLAUDE_HOME/rules/ecc" ]]
-}
-
-ecc_commands_ready() {
-    [[ -d "$CLAUDE_HOME/commands" ]]
-}
-
-rtk_hooks_ready() {
-    grep -q 'rtk-rewrite' "$CLAUDE_HOME/settings.json" 2>/dev/null
-}
-
-known_marketplaces_ready() {
-    known_marketplaces_paths_ready
-}
-
-# ----- 参数解析 -----
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --dry-run) DRY_RUN=true; shift ;;
-        --ci) CI_MODE=true; shift ;;
-        --no-claude) NO_CLAUDE=true; shift ;;
-        --no-verify) NO_VERIFY=true; shift ;;
-        --force) FORCE=true; shift ;;
-        --smoke-test) SMOKE_TEST=true; shift ;;
-        -h|--help)
-            echo "用法: ./setup.sh [选项]"
-            echo "  --ci            CI 模式 (跳过手动提示)"
-            echo "  --dry-run       预览，不实际修改"
-            echo "  --no-claude     跳过 Claude Code 安装"
-            echo "  --no-verify     跳过验证"
-            echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
-            echo "  --smoke-test    运行 script/check-claude-doctor.sh 插件迁移检查"
-            exit 0 ;;
-        *) err "未知参数: $1"; exit 1 ;;
-    esac
-done
-
-# ============================================================
-# Main
-# ============================================================
-main() {
-    echo ""
-    echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║   Claude Code Config Migration v3    ║${NC}"
-    echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    echo ""
-    [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
-    [[ "$CI_MODE" == true ]] && info "CI 模式"
-
-    # === Phase 0: 环境检测 ===
-    phase "Phase 0: 环境检测"
-    local missing=()
-    for dep in git curl tar node npm; do
-        command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
-    done
-    [[ ${#missing[@]} -gt 0 ]] && { err "缺少依赖: ${missing[*]}"; exit 1; }
-    log "git, curl, tar, node, npm 已就绪"
-    info "系统: $(uname -s) / $(uname -m)"
-
-    # === Phase 1: Claude Code ===
-    phase "Phase 1: Claude Code"
-    local CLAUDE_BOOTSTRAP=false
-    if [[ "$NO_CLAUDE" == true ]]; then
-        info "跳过 Claude Code 安装 (--no-claude)"
-    elif ! command -v claude >/dev/null 2>&1; then
-        # 未安装 → 安装 + 后台启动
-        [[ "$DRY_RUN" == true ]] && { info "[DRY-RUN] npm install -g @anthropic-ai/claude-code"; }
-        [[ "$DRY_RUN" == false ]] && {
-            npm install -g @anthropic-ai/claude-code;
-            log "Claude Code 安装完成";
-            claude </dev/null >/dev/null 2>&1 &
-            info "Claude Code 已在后台启动 (PID $!)，等待初始化...";
-            CLAUDE_BOOTSTRAP=true
-        }
-    elif [[ ! -d "$CLAUDE_HOME" ]]; then
-        # 已安装但 CLAUDE_HOME 未初始化 → 后台启动
-        log "Claude Code 已安装: $(claude --version 2>&1 | head -1)"
-        claude </dev/null >/dev/null 2>&1 &
-        info "CLAUDE_HOME 未初始化，后台启动 Claude Code (PID $!)...";
-        CLAUDE_BOOTSTRAP=true
-    else
-        # 已安装且 CLAUDE_HOME 已就绪 → PASS
-        skip_if_done "Claude Code" "true"
-    fi
-
-    # === Phase 2: Submodules ===
-    phase "Phase 2: Git Submodules"
-    if ! skip_if_done "Submodules" submodules_clean; then
-        info "初始化 git submodules (5 个)..."
-        [[ "$DRY_RUN" == false ]] && { cd "$REPO_ROOT" && git submodule update --init --recursive; }
-        log "Submodules 就绪"
-    fi
-
-    # 核心配置符号链接 (必须在插件安装之前, 因为 rtk init / omc setup 会修改这些文件)
-    info "创建核心配置符号链接..."
-    mkdir -p "$CLAUDE_HOME"
-    for f in CLAUDE.md RTK.md AGENTS.md; do
-        local src="$REPO_ROOT/config/claude/$f" dst="$CLAUDE_HOME/$f"
-        [[ -f "$src" ]] || continue
-        if skip_if_done "$f symlink" symlink_points_to "$dst" "$src"; then
-            continue
-        fi
-        [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $src -> $dst"; continue; }
-        [[ -L "$dst" ]] || [[ -f "$dst" ]] && rm -f "$dst"
-        ln -s "$src" "$dst"
-    done
-    # rules 目录
-    local rules_dst="$CLAUDE_HOME/rules"
-    if ! skip_if_done "rules symlink" symlink_points_to "$rules_dst" "$REPO_ROOT/config/claude/rules"; then
-        [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $REPO_ROOT/config/claude/rules -> $rules_dst"; }
-        [[ "$DRY_RUN" == false ]] && {
-            [[ -L "$rules_dst" ]] || [[ -d "$rules_dst" ]] && rm -rf "$rules_dst"
-            ln -s "$REPO_ROOT/config/claude/rules" "$rules_dst"
-        }
-    fi
-    # claude-plugins-official marketplace
-    local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
-    local cpo_src="$REPO_ROOT/external/claude-plugins-official"
-    if [[ -d "$cpo_src" ]] && ! skip_if_done "cpo marketplace" symlink_points_to "$cpo_dst" "$cpo_src"; then
-        [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -s $cpo_src -> $cpo_dst"; }
-        [[ "$DRY_RUN" == false ]] && {
-            mkdir -p "$CLAUDE_HOME/plugins/marketplaces"
-            [[ -L "$cpo_dst" ]] || [[ -d "$cpo_dst" ]] && rm -rf "$cpo_dst"
-            ln -s "$cpo_src" "$cpo_dst"
-        }
-    fi
-    log "核心配置符号链接已检查"
-
-    # === Phase 3: 安装插件 ===
-    phase "Phase 3: 安装插件"
-    if ! skip_if_done "RTK" rtk_ready; then
-        run_installer rtk
-    fi
-    if ! skip_if_done "ECC" ecc_installed; then
-        run_installer ecc
-    fi
-    if ! skip_if_done "context-mode" context_mode_ready; then
-        run_installer context-mode
-    fi
-    if ! skip_if_done "OpenSpec" openspec_version_ready; then
-        run_installer openspec
-    fi
-    # context-mode: 创建 current 符号链接指向最新版本，避免 hooks 硬编码版本号
-    # 等待 Claude Code 后台初始化产生插件缓存目录
-    local ctx_cache="$CLAUDE_HOME/plugins/cache/context-mode/context-mode"
-    if [[ ! -d "$ctx_cache" ]]; then
-        info "context-mode: 等待缓存目录 (3s)..."
-        sleep 3
-    fi
-    if [[ -d "$ctx_cache" ]]; then
-        local ctx_latest; ctx_latest="$(ls -d "$ctx_cache"/*/ 2>/dev/null | sort -V | tail -1)" || true
-        if [[ -n "$ctx_latest" ]]; then
-            ctx_latest="${ctx_latest%/}"
-            if ! skip_if_done "context-mode current" context_mode_current_ready; then
-                [[ "$DRY_RUN" == true ]] && { echo "  [DRY-RUN] ln -sfn $ctx_latest $ctx_cache/current"; }
-                [[ "$DRY_RUN" == false ]] && { ln -sfn "$ctx_latest" "$ctx_cache/current"; log "context-mode current → $ctx_latest"; }
-            fi
-        else
-            info "context-mode: 缓存目录存在但无版本，跳过 current 链接"
-        fi
-    else
-        info "context-mode: 缓存目录未就绪，跳过 current 链接"
-    fi
-    if ! skip_if_done "superpowers" superpowers_ready; then
-        run_installer superpowers
-    fi
-
-    # === Phase 4: settings.json + OMC ===
-    phase "Phase 4: 生成 settings.json + OMC setup"
-    local tmpl="$REPO_ROOT/config/claude/settings.template.json"
-    local target="$CLAUDE_HOME/settings.json"
-
-    if [[ ! -f "$tmpl" ]]; then
-        warn "settings.template.json 不存在，跳过"
-    else
-        local rendered_settings
-        rendered_settings="$(render_settings_template "$tmpl")"
-        if [[ -f "$target" ]] && [[ "$CI_MODE" != true ]]; then
-            info "已有 ~/.claude/settings.json，合并迁移所需关键项..."
-            [[ "$DRY_RUN" == false ]] && {
-                mkdir -p "$CLAUDE_HOME"
-                merge_settings_json "$target" "$rendered_settings"
-            }
-            [[ "$DRY_RUN" == true ]] && echo "  [DRY-RUN] merge settings.json with template-backed migration keys"
-            log "settings.json 已合并关键迁移配置"
-        else
-            info "从模板生成 settings.json..."
-            [[ "$DRY_RUN" == false ]] && {
-                mkdir -p "$CLAUDE_HOME"
-                printf '%s\n' "$rendered_settings" > "$target"
-            }
-            [[ "$DRY_RUN" == true ]] && echo "  [DRY-RUN] write rendered settings.json"
-            log "settings.json 已生成"
-        fi
-    fi
-
-    # OMC setup 依赖 settings.json 存在 (合并 hooks)
-    run_installer omc
-
-    # RTK hooks 注入 (必须在 settings.json 生成 + OMC 合并之后)
-    if command -v rtk >/dev/null 2>&1; then
-        if ! skip_if_done "RTK hooks" rtk_hooks_ready; then
-            info "RTK hook 注入 (rtk init)..."
-            [[ "$DRY_RUN" == false ]] && { rtk init -g --auto-patch 2>&1 || true; }
-            log "RTK hooks 已注入"
-        fi
-    fi
-
-    # known_marketplaces.json 生成 (Claude Code 运行时产物, 提前生成供 CI 验证)
-    if ! skip_if_done "known_marketplaces" known_marketplaces_ready; then
-        info "生成 known_marketplaces.json..."
-        [[ "$DRY_RUN" == false ]] && {
-            mkdir -p "$CLAUDE_HOME/plugins"
-        python3 - "$REPO_ROOT" "$CLAUDE_HOME" << 'PYEOF' > "$CLAUDE_HOME/plugins/known_marketplaces.json"
-import json, sys, os
 repo = sys.argv[1]
 ts = "2026-01-01T00:00:00.000Z"
 markets = {
     "claude-plugins-official": {"source": {"source": "github", "repo": "anthropics/claude-plugins-official"}, "dir": "external/claude-plugins-official"},
-    "context-mode":            {"source": {"source": "github", "repo": "mksglu/context-mode"}, "dir": "external/context-mode"},
-    "ecc":                     {"source": {"source": "github", "repo": "affaan-m/everything-claude-code"}, "dir": "external/everything-claude-code"},
-    "omc":                     {"source": {"source": "git", "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"}, "dir": "external/oh-my-claudecode"},
-    "superpowers":             {"source": {"source": "git", "url": "https://github.com/obra/superpowers.git"}, "dir": "external/superpowers"},
+    "context-mode": {"source": {"source": "github", "repo": "mksglu/context-mode"}, "dir": "external/context-mode"},
+    "ecc": {"source": {"source": "github", "repo": "affaan-m/everything-claude-code"}, "dir": "external/everything-claude-code"},
+    "omc": {"source": {"source": "git", "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"}, "dir": "external/oh-my-claudecode"},
+    "superpowers": {"source": {"source": "git", "url": "https://github.com/obra/superpowers.git"}, "dir": "external/superpowers"},
 }
 out = {}
 for name, info in markets.items():
@@ -509,77 +320,148 @@ for name, info in markets.items():
 json.dump(out, sys.stdout, indent=4)
 print()
 PYEOF
-    }
     log "known_marketplaces.json 已生成"
+}
+
+verify_core_config() {
+    if [[ "$NO_VERIFY" == true || "$DRY_RUN" == true ]]; then
+        info "跳过 setup 级验证"
+        return 0
     fi
 
-    # === Phase 5: 验证 ===
-    if [[ "$NO_VERIFY" == true ]]; then
-        info "Phase 5: 跳过验证 (--no-verify)"
+    local failed=0
+    for file in CLAUDE.md RTK.md AGENTS.md; do
+        if symlink_points_to "$CLAUDE_HOME/$file" "$REPO_ROOT/config/claude/$file"; then
+            pass "$file symlink"
+        else
+            err "$file symlink 缺失"
+            failed=1
+        fi
+    done
+
+    if symlink_points_to "$CLAUDE_HOME/rules" "$REPO_ROOT/config/claude/rules"; then
+        pass "rules symlink"
     else
-        phase "Phase 5: 功能验证"
-        local fails=0
-        check() {
-            local cmd="$1"
-            local label="$2"
-            shift 2
-            if "$cmd" "$@" 2>/dev/null; then echo -e "  ${GREEN}✓${NC} $label"; else echo -e "  ${RED}✗${NC} $label"; fails=$((fails+1)); fi
-        }
-
-        for f in CLAUDE.md RTK.md AGENTS.md; do
-            check symlink_points_to "核心配置 $f 符号链接" "$CLAUDE_HOME/$f" "$REPO_ROOT/config/claude/$f"
-        done
-        check symlink_points_to "rules 目录" "$CLAUDE_HOME/rules" "$REPO_ROOT/config/claude/rules"
-        check omc_injected "OMC 已注入 CLAUDE.md"
-        check ecc_installed "ECC install-state"
-        check custom_rules_ready "  自定义 rules.md"
-        check custom_git_ready "  自定义 git.md"
-        check ecc_rules_ready "ECC rules 目录"
-        check ecc_commands_ready "ECC commands 目录"
-        check symlink_points_to "superpowers mkt" "$CLAUDE_HOME/plugins/marketplaces/superpowers" "$REPO_ROOT/external/superpowers"
-        check symlink_points_to "context-mode mkt" "$CLAUDE_HOME/plugins/marketplaces/context-mode" "$REPO_ROOT/external/context-mode"
-        check test "ctx node_modules" -d "$REPO_ROOT/external/context-mode/node_modules"
-
-        export PATH="$HOME/.local/bin:$PATH"
-        check openspec_binary_ready "OpenSpec 二进制"
-        check openspec_version_ready "OpenSpec --version"
-        check rtk_binary_ready "RTK 二进制"
-        check rtk_version_ready "RTK --version"
-        check rtk_hooks_ready "RTK hook 注入"
-        check rtk_config_ready "RTK config"
-
-        local mp="$CLAUDE_HOME/plugins/marketplaces"
-        for name in omc context-mode superpowers claude-plugins-official; do
-            check marketplace_ready "marketplace: $name" "$name"
-        done
-
-        local km="$CLAUDE_HOME/plugins/known_marketplaces.json"
-        check known_marketplaces_ready "known_marketplaces.json"
-        check known_marketplaces_paths_ready "km.json 路径已替换"
-
-        [[ $fails -gt 0 ]] && warn "文件验证: $fails 项失败" || log "文件验证: 全部通过"
-
-        # 插件迁移检查 (仅 --smoke-test 时执行)
-        if [[ "$SMOKE_TEST" == true ]]; then
-            echo ""
-            info "插件迁移检查 (script/check-claude-doctor.sh)..."
-            if timeout 120 script/check-claude-doctor.sh; then
-                echo -e "  Claude doctor ... ${GREEN}OK${NC}"
-            else
-                rc=$?
-                [[ $rc -eq 124 ]] && echo -e "  Claude doctor ... ${RED}TIMEOUT${NC}" || echo -e "  Claude doctor ... ${RED}FAIL ($rc)${NC}"
-                fails=$((fails+1))
-            fi
-            echo ""
-        fi
-        if [[ $fails -gt 0 ]]; then
-            err "验证失败: $fails 项未通过"
-            exit 1
-        fi
-        log "验证完成"
+        err "rules symlink 缺失"
+        failed=1
     fi
 
-    # --------------- 完成 ---------------
+    if [[ -f "$CLAUDE_HOME/settings.json" ]]; then
+        pass "settings.json 已存在"
+    else
+        err "settings.json 不存在"
+        failed=1
+    fi
+
+    if [[ -f "$CLAUDE_HOME/plugins/known_marketplaces.json" ]]; then
+        pass "known_marketplaces.json 已存在"
+    else
+        err "known_marketplaces.json 不存在"
+        failed=1
+    fi
+
+    [[ $failed -eq 0 ]]
+}
+
+run_final_doctor() {
+    if [[ "$NO_VERIFY" == true ]]; then
+        info "跳过最终 doctor (--no-verify)"
+        return 0
+    fi
+
+    if [[ "$SMOKE_TEST" != true ]]; then
+        info "跳过最终 doctor (--smoke-test 未启用)"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] script/check-claude-doctor.sh"
+        return 0
+    fi
+
+    info "运行最终 Claude doctor..."
+    if timeout 120 "$REPO_ROOT/script/check-claude-doctor.sh"; then
+        log "Claude doctor 通过"
+        return 0
+    fi
+
+    local rc=$?
+    if [[ $rc -eq 124 ]]; then
+        err "Claude doctor 超时"
+    else
+        err "Claude doctor 失败 ($rc)"
+    fi
+    return 1
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) DRY_RUN=true; shift ;;
+        --ci) CI_MODE=true; shift ;;
+        --no-claude) NO_CLAUDE=true; shift ;;
+        --no-verify) NO_VERIFY=true; shift ;;
+        --force) FORCE=true; shift ;;
+        --smoke-test) SMOKE_TEST=true; shift ;;
+        --ecc-full) ECC_FULL=true; shift ;;
+        -h|--help)
+            echo "用法: ./setup.sh [选项]"
+            echo "  --ci            CI 模式 (跳过手动提示，ECC 使用全量安装以覆盖测试)"
+            echo "  --dry-run       预览，不实际修改"
+            echo "  --no-claude     跳过 Claude Code 安装"
+            echo "  --no-verify     跳过验证"
+            echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
+            echo "  --smoke-test    运行 script/check-claude-doctor.sh 插件迁移检查"
+            echo "  --ecc-full      用户模式也安装 ECC full profile；默认仅安装 C/C++、Java、JS/TS、Vue 常用能力"
+            exit 0 ;;
+        *) err "未知参数: $1"; exit 1 ;;
+    esac
+done
+
+main() {
+    echo ""
+    echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║   Claude Code Config Migration v3    ║${NC}"
+    echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
+    echo ""
+    [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
+    [[ "$CI_MODE" == true ]] && info "CI 模式"
+
+    phase "Phase 0: 环境检测"
+    local missing=()
+    for dep in git curl tar node npm python3; do
+        command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+    done
+    [[ ${#missing[@]} -gt 0 ]] && { err "缺少依赖: ${missing[*]}"; exit 1; }
+    log "git, curl, tar, node, npm, python3 已就绪"
+    info "系统: $(uname -s) / $(uname -m)"
+
+    phase "Phase 1: Claude Code"
+    ensure_claude_code
+
+    phase "Phase 2: Git Submodules + 核心配置"
+    ensure_submodules
+    ensure_core_config
+
+    phase "Phase 3: 安装器编排"
+    local ecc_mode="focused"
+    if [[ "$CI_MODE" == true || "$ECC_FULL" == true ]]; then
+        ecc_mode="full"
+    fi
+    run_installer ecc "$ecc_mode"
+    run_installer context-mode
+    run_installer openspec
+
+    phase "Phase 4: settings.json + 后置安装器"
+    ensure_settings_json
+    run_installer omc
+    run_installer rtk
+    run_installer superpowers
+    generate_known_marketplaces
+
+    phase "Phase 5: 最终验证"
+    verify_core_config
+    run_final_doctor
+
     echo ""
     echo -e "${GREEN}============================================${NC}"
     echo -e "${GREEN}  Claude Code 配置迁移完成!${NC}"

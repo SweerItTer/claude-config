@@ -1,95 +1,214 @@
 #!/usr/bin/env bash
 # install-omc.sh — OMC (oh-my-claudecode) 插件安装
-# npm install + OMC setup (hooks, HUD, CLAUDE.md merge, MCP registry)
 set -euo pipefail
 
-install_omc() {
-    local repo_root="${1:?需要 REPO_ROOT}"
-    local dry_run="${2:-false}"
+REPO_ROOT="${1:?需要 REPO_ROOT}"
+DRY_RUN="${2:-false}"
+FORCE="${3:-false}"
 
-    local omc_dir="$repo_root/external/oh-my-claudecode"
-    local claude_home="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-    local mp_dir="$claude_home/plugins/marketplaces"
+OMC_DIR="$REPO_ROOT/external/oh-my-claudecode"
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+MARKETPLACE_DST="$CLAUDE_HOME/plugins/marketplaces/omc"
+CACHE_ROOT="$CLAUDE_HOME/plugins/cache/omc/oh-my-claudecode"
+WIKI_SRC="$REPO_ROOT/config/omc/wiki"
+WIKI_DST="$HOME/.omc/wiki"
+LEGACY_SKILLS=(
+    omc-reference omc-setup omc-doctor ai-slop-cleaner autodoc autopilot autoresearch
+    cancel ccg configure-notifications context-mode ctx-doctor ctx-insight ctx-purge
+    ctx-stats ctx-upgrade debug deep-dive deep-interview external-context hud learner
+    mcp-setup omc-teams omc-reference omc-setup plan project-session-manager ralph ralplan
+    release remember sciomc self-improve setup skill skillify team trace ultraqa ultrawork verify
+    visual-verdict wiki writer-memory
+)
 
-    # 1. npm install
-    if [[ ! -d "$omc_dir/node_modules" ]]; then
-        echo "  [INFO] npm install OMC..."
-        [[ "$dry_run" == false ]] && {
-            (cd "$omc_dir" && npm install --no-audit --no-fund --loglevel=error)
-        }
-        echo "  [OK] OMC node_modules 已安装"
-    else
-        echo "  [OK] OMC node_modules 已存在"
-    fi
+pass() { echo "  [PASS] $*"; }
+info() { echo "  [INFO] $*"; }
+ok()   { echo "  [OK] $*"; }
+err()  { echo "  [ERR] $*"; }
 
-    # 2. marketplace 符号链接
-    local dst="$mp_dir/omc"
-    [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $omc_dir -> $dst"; }
-    [[ "$dry_run" == false ]] && {
-        mkdir -p "$mp_dir"
-        [[ -L "$dst" ]] || [[ -d "$dst" ]] && rm -rf "$dst"
-        ln -sfn "$omc_dir" "$dst"
-    }
-    echo "  [OK] OMC marketplace 已注册"
-
-    # 3. 清理旧版 OMC skills 链接，skills 由 plugin marketplace 运行时发现
-    local skills_src="$omc_dir/skills"
-    local skills_dst="$claude_home/skills"
-    local removed_count=0
-    if [[ -d "$skills_src" && -d "$skills_dst" ]]; then
-        for skill_dir in "$skills_src"/*/; do
-            [[ -d "$skill_dir" ]] || continue
-            local name; name="$(basename "$skill_dir")"
-            local dst="$skills_dst/$name"
-            [[ -L "$dst" ]] || continue
-            local target; target="$(readlink -f "$dst")"
-            [[ "$target" == "$(readlink -f "${skill_dir%/}")" ]] || continue
-            [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] rm $dst"; continue; }
-            rm -f "$dst"
-            removed_count=$((removed_count + 1))
-        done
-    fi
-    echo "  [OK] OMC legacy skills cleaned ($removed_count)"
-
-    # 4. 运行 OMC setup (处理 hooks, HUD, CLAUDE.md 合并)
-    # --plugin-dir-mode: 跳过 agent/skill 复制，skills 通过 plugin marketplace 提供
-    echo "  [INFO] 运行 omc setup..."
-    [[ "$dry_run" == false ]] && {
-        cd "$omc_dir"
-        node bridge/cli.cjs setup --plugin-dir-mode --quiet 2>&1 || {
-            echo "  [WARN] omc setup 有非致命警告，继续..."
-        }
-    }
-    [[ "$dry_run" == true ]] && echo "  [DRY-RUN] node bridge/cli.cjs setup --plugin-dir-mode --quiet"
-    echo "  [OK] OMC setup 完成 (hooks, HUD, CLAUDE.md)"
-
-    # 5. 修复插件缓存布局：Claude doctor 期望顶层 commands 目录
-    local cache_root="$claude_home/plugins/cache/omc/oh-my-claudecode"
-    if [[ -d "$cache_root" ]]; then
-        local cache_version
-        for cache_version in "$cache_root"/*; do
-            [[ -d "$cache_version" ]] || continue
-            if [[ ! -e "$cache_version/commands" && -d "$cache_version/dist/commands" ]]; then
-                [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn dist/commands -> $cache_version/commands"; continue; }
-                ln -sfn dist/commands "$cache_version/commands"
-                echo "  [OK] OMC cache commands -> dist/commands ($(basename "$cache_version"))"
-            fi
-        done
-    fi
-
-    # 6. 链接 OMC wiki (自定义内容)
-    mkdir -p "$HOME/.omc"
-
-    local wiki_src="$repo_root/config/omc/wiki"
-    local wiki_dst="$HOME/.omc/wiki"
-    if [[ -d "$wiki_src" ]]; then
-        [[ "$dry_run" == true ]] && { echo "  [DRY-RUN] ln -sfn $wiki_src -> $wiki_dst"; }
-        [[ "$dry_run" == false ]] && {
-            [[ -L "$wiki_dst" ]] || [[ -d "$wiki_dst" ]] && rm -rf "$wiki_dst"
-            ln -sfn "$wiki_src" "$wiki_dst"
-        }
-        echo "  [OK] OMC wiki symlinked"
-    fi
+symlink_points_to() {
+    local link="$1"
+    local target="$2"
+    [[ -L "$link" ]] || return 1
+    [[ -e "$target" ]] || return 1
+    [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]
 }
 
-install_omc "$@"
+omc_injected() {
+    grep -q 'OMC:START' "$CLAUDE_HOME/CLAUDE.md" 2>/dev/null
+}
+
+legacy_skills_cleared() {
+    local skills_dir="$CLAUDE_HOME/skills"
+    local name
+    for name in "${LEGACY_SKILLS[@]}"; do
+        [[ -e "$skills_dir/$name" ]] && return 1
+    done
+    return 0
+}
+
+cache_commands_ready() {
+    [[ -d "$CACHE_ROOT" ]] || return 0
+    local cache_version
+    for cache_version in "$CACHE_ROOT"/*; do
+        [[ -d "$cache_version" ]] || continue
+        [[ ! -d "$cache_version/dist/commands" ]] && continue
+        [[ -e "$cache_version/commands" ]] || return 1
+        [[ "$(readlink -f "$cache_version/commands")" == "$(readlink -f "$cache_version/dist/commands")" ]] || return 1
+    done
+    return 0
+}
+
+wiki_ready() {
+    [[ ! -d "$WIKI_SRC" ]] && return 0
+    symlink_points_to "$WIKI_DST" "$WIKI_SRC"
+}
+
+is_ready() {
+    [[ -d "$OMC_DIR/node_modules" ]] || return 1
+    symlink_points_to "$MARKETPLACE_DST" "$OMC_DIR" || return 1
+    omc_injected || return 1
+    legacy_skills_cleared || return 1
+    cache_commands_ready || return 1
+    wiki_ready || return 1
+}
+
+link_marketplace() {
+    if symlink_points_to "$MARKETPLACE_DST" "$OMC_DIR"; then
+        ok "OMC marketplace 已注册"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$MARKETPLACE_DST")"
+    if [[ -L "$MARKETPLACE_DST" || -f "$MARKETPLACE_DST" ]]; then
+        rm -f "$MARKETPLACE_DST"
+    elif [[ -d "$MARKETPLACE_DST" ]]; then
+        rm -rf "$MARKETPLACE_DST"
+    fi
+    ln -sfn "$OMC_DIR" "$MARKETPLACE_DST"
+    ok "OMC marketplace 已注册"
+}
+
+cleanup_legacy_skills() {
+    local skills_dir="$CLAUDE_HOME/skills"
+    local name path
+    [[ -d "$skills_dir" ]] || { ok "OMC legacy skills 无残留"; return 0; }
+
+    for name in "${LEGACY_SKILLS[@]}"; do
+        path="$skills_dir/$name"
+        [[ -e "$path" ]] || continue
+        rm -rf "$path"
+        info "清理旧 OMC skill: $name"
+    done
+    ok "OMC legacy skills 已清理"
+}
+
+run_bridge_setup() {
+    info "运行 omc setup..."
+    (
+        cd "$OMC_DIR"
+        node bridge/cli.cjs setup --plugin-dir-mode --quiet 2>&1 || info "omc setup 返回非零，继续用 verify 判定结果"
+    )
+    ok "OMC setup 已执行"
+}
+
+fix_cache_commands() {
+    [[ -d "$CACHE_ROOT" ]] || {
+        info "OMC cache 尚未生成，跳过 commands 链接修复"
+        return 0
+    }
+
+    local cache_version
+    for cache_version in "$CACHE_ROOT"/*; do
+        [[ -d "$cache_version" ]] || continue
+        [[ -d "$cache_version/dist/commands" ]] || continue
+        if [[ -e "$cache_version/commands" ]] && [[ "$(readlink -f "$cache_version/commands")" == "$(readlink -f "$cache_version/dist/commands")" ]]; then
+            continue
+        fi
+        rm -rf "$cache_version/commands"
+        ln -sfn dist/commands "$cache_version/commands"
+        ok "OMC cache commands 已修复: $(basename "$cache_version")"
+    done
+}
+
+link_wiki() {
+    [[ -d "$WIKI_SRC" ]] || {
+        info "OMC wiki 源目录不存在，跳过"
+        return 0
+    }
+
+    if symlink_points_to "$WIKI_DST" "$WIKI_SRC"; then
+        ok "OMC wiki 已就绪"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$WIKI_DST")"
+    if [[ -L "$WIKI_DST" || -f "$WIKI_DST" ]]; then
+        rm -f "$WIKI_DST"
+    elif [[ -d "$WIKI_DST" ]]; then
+        rm -rf "$WIKI_DST"
+    fi
+    ln -sfn "$WIKI_SRC" "$WIKI_DST"
+    ok "OMC wiki 已链接"
+}
+
+install() {
+    if [[ ! -d "$OMC_DIR/node_modules" ]]; then
+        info "npm install OMC..."
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] (cd $OMC_DIR && npm install --no-audit --no-fund --loglevel=error)"
+        else
+            (
+                cd "$OMC_DIR"
+                npm install --no-audit --no-fund --loglevel=error
+            )
+            ok "OMC node_modules 已安装"
+        fi
+    else
+        ok "OMC node_modules 已存在"
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] ln -sfn $OMC_DIR -> $MARKETPLACE_DST"
+        info "[DRY-RUN] node bridge/cli.cjs setup --plugin-dir-mode --quiet"
+        info "[DRY-RUN] 清理旧 OMC skills 残留"
+        info "[DRY-RUN] 修复 cache commands 链接"
+        info "[DRY-RUN] ln -sfn $WIKI_SRC -> $WIKI_DST"
+        return 0
+    fi
+
+    link_marketplace
+    cleanup_legacy_skills
+    run_bridge_setup
+    fix_cache_commands
+    link_wiki
+}
+
+verify() {
+    if [[ "$DRY_RUN" == true ]]; then
+        info "dry-run 模式跳过 verify"
+        return 0
+    fi
+
+    [[ -d "$OMC_DIR/node_modules" ]] || { err "OMC node_modules 不存在"; return 1; }
+    symlink_points_to "$MARKETPLACE_DST" "$OMC_DIR" || { err "OMC marketplace 未指向源码目录"; return 1; }
+    omc_injected || { err "CLAUDE.md 未注入 OMC 内容"; return 1; }
+    legacy_skills_cleared || { err "旧 OMC skills 残留未清理"; return 1; }
+    cache_commands_ready || { err "OMC cache commands 链接不正确"; return 1; }
+    wiki_ready || { err "OMC wiki symlink 不正确"; return 1; }
+
+    ok "OMC verify 通过"
+}
+
+main() {
+    if [[ "$FORCE" == false ]] && is_ready; then
+        pass "OMC 已就绪，跳过"
+        verify
+        return 0
+    fi
+
+    install
+    verify
+}
+
+main "$@"

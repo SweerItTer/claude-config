@@ -13,7 +13,7 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-setup.sh 是幂等的，可安全重复运行；它会自动串起 submodules、RTK、ECC、context-mode、OMC、superpowers、settings.json 和验证。支持 `--ci`、`--dry-run`、`--no-claude`、`--no-verify`、`--smoke-test`。
+setup.sh 是幂等的，可安全重复运行；它会自动串起 submodules、RTK、ECC、context-mode、OMC、superpowers、settings.json 和验证。支持 `--ci`、`--dry-run`、`--no-claude`、`--no-verify`、`--smoke-test`、`--ecc-full`。
 
 ## 包含内容
 
@@ -38,18 +38,36 @@ setup.sh 是幂等的，可安全重复运行；它会自动串起 submodules、
 | 脚本 | 职责 |
 |------|------|
 | install-rtk.sh | 下载 RTK 预编译二进制 → `~/.local/bin/rtk`，symlink config |
-| install-ecc.sh | 官方 `install.sh --profile full --target claude` + 自定义 agents 覆盖 |
+| install-ecc.sh | 默认安装 ECC 常用能力（C/C++、Java、JS/TS、Vue）；CI 或 `--ecc-full` 使用 full profile；并叠加自定义 agents 覆盖 |
 | install-context-mode.sh | npm install (含 native better-sqlite3) + marketplace symlink |
 | install-superpowers.sh | marketplace symlink + 清理旧版 cp -r 残留 |
 | install-openspec.sh | 官方 `npm install -g @fission-ai/openspec@latest` |
 | install-omc.sh | npm install + `omc setup --plugin-dir-mode` (hooks, HUD, CLAUDE.md, MCP) + wiki symlink |
 
+### ECC 安装范围
+
+普通用户运行 `./setup.sh` 时，ECC 默认只安装常用开发能力，降低上下文负担：
+
+- 基础：`rules-core`, `agents-core`, `commands-core`, `hooks-runtime`, `platform-configs`, `workflow-quality`, `framework-language`
+- C/C++：`skill-cpp-coding-standards`, `skill-cpp-testing`
+- Java：`skill-java-coding-standards`
+- JavaScript/TypeScript：`skill-bun-runtime`, `skill-nodejs-keccak256`, `skill-vite-patterns`
+- Vue：`skill-ui-to-vue`
+
+可选安装方式：
+
+- `./setup.sh --ecc-full`：用户模式也安装 ECC full profile
+- `external/everything-claude-code/install.sh --target claude --profile <minimal|core|developer|security|research|full>`：安装官方 profile
+- `external/everything-claude-code/install.sh --target claude --modules <id,id,...>`：安装指定 ECC 模块
+
+CI 使用 `./setup.sh --ci --smoke-test`，仍走 ECC full profile，用于覆盖完整安装链路。
+
 ### 符号链接关系 (由 setup.sh 建立)
 
 ```
-~/.claude/agents    → external/everything-claude-code/agents (+ 自定义覆盖)
-~/.claude/commands  → external/everything-claude-code/commands
-~/.claude/skills/   → ECC skills；OMC/superpowers skills 由 plugin marketplace 发现
+~/.claude/agents/   ← ECC agents 普通目录 + 自定义覆盖
+~/.claude/commands/ ← ECC commands 普通目录
+~/.claude/skills/   ← ECC focused/full skills；OMC/superpowers skills 由 plugin marketplace 发现
 ~/.claude/rules     → config/claude/rules
 ~/.claude/CLAUDE.md → config/claude/CLAUDE.md
 ~/.claude/RTK.md    → config/claude/RTK.md

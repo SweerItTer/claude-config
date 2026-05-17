@@ -20,12 +20,28 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup Node.js (for ECC npm install)
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Run setup.sh
+      - name: Verify user default ECC scope
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -r "$tmp"' EXIT
+
+          output=$(CLAUDE_CONFIG_DIR="$tmp" ./setup.sh --dry-run --no-claude --no-verify 2>&1)
+          echo "$output"
+
+          printf '%s\n' "$output" | grep -q 'ECC 默认安装范围'
+          printf '%s\n' "$output" | grep -q -- '--modules rules-core,agents-core'
+          if printf '%s\n' "$output" | grep -q -- '--profile full'; then
+            echo "FAIL: 用户默认路径不应使用 ECC full profile"
+            exit 1
+          fi
+
+      - name: Run setup.sh smoke test
         run: |
           chmod +x ./setup.sh
           ./setup.sh --ci --smoke-test
@@ -35,200 +51,21 @@ jobs:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
           CLAUDE_MODEL: deepseek-v4-flash
 
-      - name: Verify idempotency — second run should skip
+      - name: Verify idempotency with second run
         run: |
-          echo "=== 第二次运行 (应全部跳过) ==="
+          set -euo pipefail
+          echo "=== 第二次运行 (应主要走已就绪路径) ==="
           output=$(./setup.sh --ci 2>&1)
           echo "$output"
-          pass_count=$(echo "$output" | grep -c '\[PASS\]' || true)
-          echo "检测到 $pass_count 个 [PASS] 跳过标记"
-          if [[ "$pass_count" -lt 3 ]]; then
-            echo "FAIL: 幂等性检测不足 (期望 >= 3 个 PASS, 实际 $pass_count)"
+
+          pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
+          echo "检测到 $pass_count 个 [PASS] 标记"
+          if [[ "$pass_count" -lt 4 ]]; then
+            echo "FAIL: 第二次运行没有体现足够的幂等性"
             exit 1
           fi
-          echo "OK: 幂等性验证通过"
         env:
           REPO_ROOT: ${{ github.workspace }}
-
-      - name: Verify symlinks — core config
-        run: |
-          set -euo pipefail
-          echo "=== 核心配置符号链接 ==="
-          for f in CLAUDE.md RTK.md AGENTS.md; do
-            target="$HOME/.claude/$f"
-            [[ -L "$target" ]] || { echo "FAIL: $target 不是符号链接"; exit 1; }
-            link=$(readlink "$target")
-            [[ "$link" == "$REPO_ROOT/config/claude/$f" ]] || { echo "FAIL: $target -> $link (期望 -> $REPO_ROOT/config/claude/$f)"; exit 1; }
-            echo "  OK: $f -> $link"
-          done
-
-      - name: Verify symlinks — rules
-        run: |
-          set -euo pipefail
-          target="$HOME/.claude/rules"
-          [[ -L "$target" ]] || { echo "FAIL: $target 不是符号链接"; exit 1; }
-          link=$(readlink "$target")
-          expected="$REPO_ROOT/config/claude/rules"
-          [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
-          echo "OK: rules -> $link"
-
-          # 抽样检查几个 rule 文件
-          for f in common/coding-style.md common/security.md common/git-workflow.md; do
-            [[ -f "$HOME/.claude/rules/$f" ]] || { echo "FAIL: rules/$f 不存在"; exit 1; }
-          done
-          echo "OK: rules 文件抽样通过"
-
-      - name: Verify agents — ECC + custom
-        run: |
-          set -euo pipefail
-          target="$HOME/.claude/agents"
-          [[ -d "$target" ]] || { echo "FAIL: $target 目录不存在"; exit 1; }
-          [[ -L "$target" ]] && { echo "FAIL: $target 不应为符号链接"; exit 1; }
-          echo "OK: agents dir 已安装为普通目录"
-
-          # ECC agent 定义存在 (.kiro/agents，非 ~/.claude/agents)
-          for f in architect.md code-reviewer.md planner.md tdd-guide.md; do
-            fp="$REPO_ROOT/external/everything-claude-code/.kiro/agents/$f"
-            [[ -f "$fp" ]] || { echo "FAIL: .kiro/agents/$f 不存在"; exit 1; }
-          done
-          echo "OK: ECC agent 定义抽样通过"
-
-          # 自定义 agent 文件已复制 (非符号链接)
-          for f in git.md progress.md rules.md validation.md; do
-            fp="$target/$f"
-            [[ -f "$fp" ]] || { echo "FAIL: custom agent $f 不存在"; exit 1; }
-            [[ -L "$fp" ]] && { echo "FAIL: custom agent $f 是符号链接 (应为普通文件)"; exit 1; }
-          done
-          echo "OK: 自定义 agents (git, progress, rules, validation) 均为普通文件"
-
-      - name: Verify commands — ECC
-        run: |
-          set -euo pipefail
-          target="$HOME/.claude/commands"
-          [[ -d "$target" ]] || { echo "FAIL: $target 目录不存在"; exit 1; }
-          [[ -L "$target" ]] && { echo "FAIL: $target 不应为符号链接"; exit 1; }
-          echo "OK: commands dir 已安装为普通目录"
-
-          for f in code-review.md feature-dev.md checkpoint.md ecc-guide.md; do
-            fp="$target/$f"
-            [[ -f "$fp" ]] || { echo "FAIL: command $f 不存在"; exit 1; }
-          done
-          echo "OK: ECC commands 文件抽样通过"
-
-      - name: Verify skills — ECC + OMC + superpowers
-        run: |
-          set -euo pipefail
-          sd="$HOME/.claude/skills"
-
-          # ECC skills (官方安装器安装到 skills/ecc 命名空间)
-          for name in tdd-workflow security-review mle-workflow; do
-            sp="$sd/ecc/$name"
-            [[ -d "$sp" ]] || { echo "FAIL: ECC skill $name 目录不存在: $sp"; exit 1; }
-          done
-          echo "OK: ECC skills 抽样通过 (skills/ecc 命名空间)"
-
-          # OMC / superpowers skills (由 plugin marketplace 运行时发现，不在 skills/ 目录)
-          # 验证旧版 symlink/cp -r 残留已清理，避免 shadow plugin skills
-          for name in omc-reference omc-setup omc-doctor ai-slop-cleaner using-superpowers verification-before-completion test-driven-development; do
-            sp="$sd/$name"
-            [[ -d "$sp" ]] && { echo "FAIL: 旧 plugin skill $name 仍存在 (应为 plugin 发现)"; exit 1; }
-          done
-          echo "OK: OMC/superpowers skills 已迁移至 plugin marketplace (无残留)"
-
-      - name: Verify marketplace registrations
-        run: |
-          set -euo pipefail
-          mp="$HOME/.claude/plugins/marketplaces"
-
-          declare -A markets=(
-            [omc]="oh-my-claudecode"
-            [context-mode]="context-mode"
-            [ecc]="everything-claude-code"
-            [superpowers]="superpowers"
-            [claude-plugins-official]="claude-plugins-official"
-          )
-
-          for name in "${!markets[@]}"; do
-            submod="${markets[$name]}"
-            target="$mp/$name"
-            [[ -L "$target" ]] || { echo "FAIL: marketplace $name 不是符号链接"; exit 1; }
-            link=$(readlink "$target")
-            expected="$REPO_ROOT/external/$submod"
-            [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
-            echo "OK: marketplace $name -> $link"
-          done
-
-          # known_marketplaces.json — REPO_ROOT 已被替换
-          km="$HOME/.claude/plugins/known_marketplaces.json"
-          [[ -f "$km" ]] || { echo "FAIL: known_marketplaces.json 不存在"; exit 1; }
-          # 确保不包含未替换的 REPO_ROOT 占位符
-          if grep -q "REPO_ROOT" "$km"; then
-            echo "FAIL: known_marketplaces.json 仍包含 REPO_ROOT 占位符"
-            exit 1
-          fi
-          echo "OK: known_marketplaces.json 路径已替换"
-
-      - name: Verify RTK binary
-        run: |
-          set -euo pipefail
-          export PATH="$HOME/.local/bin:$PATH"
-          rtk --version || { echo "FAIL: rtk --version 失败"; exit 1; }
-          echo "OK: RTK $(rtk --version)"
-
-      - name: Verify RTK config
-        run: |
-          set -euo pipefail
-          for f in config.toml filters.toml; do
-            target="$HOME/.config/rtk/$f"
-            [[ -L "$target" ]] || { echo "FAIL: rtk/$f 不是符号链接"; exit 1; }
-            link=$(readlink "$target")
-            expected="$REPO_ROOT/config/rtk/$f"
-            [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
-            echo "OK: rtk/$f -> $link"
-          done
-
-      - name: Verify OMC hooks in settings.json
-        run: |
-          set -euo pipefail
-          sf="$HOME/.claude/settings.json"
-          [[ -f "$sf" ]] || { echo "FAIL: settings.json 不存在"; exit 1; }
-          python3 - "$sf" << 'PYEOF'
-          import json, sys
-          with open(sys.argv[1]) as f:
-              d = json.load(f)
-          hooks = d.get("hooks", {})
-          expected = ["PostToolUse", "PreToolUse"]
-          missing = [k for k in expected if k not in hooks]
-          if missing:
-              print(f"FAIL: settings.json 缺少 hook 条目: {missing}")
-              print(f"  实际 hooks: {list(hooks.keys())}")
-              sys.exit(1)
-          print(f"OK: settings.json 包含 {len(hooks)} 个 hook 条目: {list(hooks.keys())}")
-          PYEOF
-
-      - name: Verify ECC + context-mode node_modules
-        run: |
-          set -euo pipefail
-          for dir in everything-claude-code context-mode; do
-            nm="$REPO_ROOT/external/$dir/node_modules"
-            [[ -d "$nm" ]] || { echo "FAIL: $dir node_modules 不存在"; exit 1; }
-            echo "OK: $dir node_modules 已安装"
-          done
-
-      - name: Verify OMC config
-        run: |
-          set -euo pipefail
-          # wiki
-          wt="$HOME/.omc/wiki"
-          [[ -L "$wt" ]] || { echo "FAIL: OMC wiki 不是符号链接"; exit 1; }
-          echo "OK: OMC wiki -> $(readlink "$wt")"
-
-          # rules-injector: 仅当源目录存在时才检查 (OMC 版本间可能不存在)
-          ri="$HOME/.omc/rules-injector"
-          if [[ -d "$REPO_ROOT/external/oh-my-claudecode/rules-injector" ]]; then
-            [[ -L "$ri" ]] || { echo "FAIL: OMC rules-injector 不是符号链接"; exit 1; }
-            echo "OK: OMC rules-injector -> $(readlink "$ri")"
-          else
-            echo "SKIP: rules-injector (OMC 子模块中不存在此目录)"
-          fi
-
+          CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
+          CLAUDE_MODEL: deepseek-v4-flash
