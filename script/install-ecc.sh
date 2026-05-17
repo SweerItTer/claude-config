@@ -22,6 +22,12 @@ install_ecc() {
         echo "  [OK] ECC node_modules 已存在"
     fi
 
+    if [[ "$dry_run" == false ]]; then
+        for legacy_link in "$claude_home/agents" "$claude_home/commands"; do
+            [[ -L "$legacy_link" ]] && rm -f "$legacy_link"
+        done
+    fi
+
     if [[ "$dry_run" == true ]]; then
         echo "  [DRY-RUN] cd $ecc_dir && ./install.sh --profile full --target claude"
     else

@@ -101,15 +101,19 @@ jobs:
           done
           echo "OK: 自定义 agents (git, progress, rules, validation) 均为普通文件"
 
-      - name: Verify symlinks — commands (ECC)
+      - name: Verify commands — ECC
         run: |
           set -euo pipefail
           target="$HOME/.claude/commands"
-          [[ -L "$target" ]] || { echo "FAIL: $target 不是符号链接"; exit 1; }
-          link=$(readlink "$target")
-          expected="$REPO_ROOT/external/everything-claude-code/commands"
-          [[ "$link" == "$expected" ]] || { echo "FAIL: $target -> $link (期望 -> $expected)"; exit 1; }
-          echo "OK: commands -> $link"
+          [[ -d "$target" ]] || { echo "FAIL: $target 目录不存在"; exit 1; }
+          [[ -L "$target" ]] && { echo "FAIL: $target 不应为符号链接"; exit 1; }
+          echo "OK: commands dir 已安装为普通目录"
+
+          for f in code-review.md feature-dev.md checkpoint.md ecc-guide.md; do
+            fp="$target/$f"
+            [[ -f "$fp" ]] || { echo "FAIL: command $f 不存在"; exit 1; }
+          done
+          echo "OK: ECC commands 文件抽样通过"
 
       - name: Verify skills — ECC + OMC + superpowers
         run: |
