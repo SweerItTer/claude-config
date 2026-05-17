@@ -36,7 +36,7 @@ latest_cache_version() {
             -type d \
             ! -name current \
             -printf '%f\n' |
-        grep -E '^v?[0-9]+(\.[0-9]+)*(-[0-9]+-g[0-9a-f]+)?$' |
+	grep -E '^(dev-.+|v?[0-9]+(\.[0-9]+)*(-[0-9]+-g[0-9a-f]+)?)$' |
         sort -V |
         tail -n 1
     )"
