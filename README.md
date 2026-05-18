@@ -21,14 +21,13 @@ chmod +x ./claude-config/setup.sh
 
 ### ECC 安装范围
 
-ECC 使用官方 `install.sh --target claude --modules` 安装（**不注册 marketplace symlink**，避免 228 个 skill 全量注入上下文）。`--ecc-focused` 仅安装 5 个基础模块：
+ECC 使用官方 `install.sh --target claude --modules` 安装（**不注册 marketplace symlink**，避免 228 个 skill 全量注入上下文）。`--ecc-focused` 仅安装 4 个基础模块（不安装 `platform-configs`，避免触发插件缓存全仓库）：
 
 | 模块 | 内容 |
 |------|------|
 | agents-core | 55 个 sub-agent 定义 |
 | commands-core | 72 个 slash command |
 | hooks-runtime | 运行时 hook 脚本 |
-| platform-configs | 平台适配配置 |
 | workflow-quality | 21 个质量保障 skill |
 
 语言专属模块（C++/Java/TS 等）按需手动安装，见下方「探索更多模块」。

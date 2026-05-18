@@ -536,7 +536,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
             echo "  --smoke-test    运行 script/check-claude-doctor.sh 插件迁移检查"
             echo "  --ecc-full      安装 ECC full profile"
-            echo "  --ecc-focused   安装本仓库推荐的 C/C++、Java、JS/TS、Vue 常用 ECC 模块"
+            echo "  --ecc-focused   安装 4 个基础 ECC 模块（agents/commands/hooks/workflow）"
             echo "  --ecc-profile P 安装 ECC 官方 profile: minimal/core/developer/security/research/full"
             echo "  --ecc-modules M 安装逗号分隔的 ECC 模块 ID"
             echo "  --uninstall [M] 卸载配置 (core=核心配置, ecc=含ECC, all=全部)"

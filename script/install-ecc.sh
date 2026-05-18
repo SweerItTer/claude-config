@@ -51,7 +51,7 @@ FOCUSED_MODULES=(
     workflow-quality
 )
 OPTIONAL_ECC_INSTALLS=(
-    "./setup.sh --ecc-focused: 安装 5 个基础 ECC 模块（agents/commands/hooks/platform/workflow）"
+    "./setup.sh --ecc-focused: 安装 4 个基础 ECC 模块（agents/commands/hooks/workflow）"
     "./setup.sh --ecc-full: 安装 ECC full profile"
     "./setup.sh --ecc-profile <name>: 安装官方 profile (minimal/core/developer/security/research/full)"
     "./setup.sh --ecc-modules <id,id,...>: 安装指定 ECC 模块"
