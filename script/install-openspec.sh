@@ -24,6 +24,7 @@ install() {
     fi
 
     npm install -g @fission-ai/openspec@latest
+    cd ~ && openspec init --tools claude && cd -
     ok "OpenSpec 安装完成: $(openspec --version 2>&1 | head -1)"
 }
 

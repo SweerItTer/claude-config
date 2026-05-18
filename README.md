@@ -6,9 +6,8 @@
 
 ```bash
 git clone --recurse-submodules git@github.com:SweerItTer/claude-config.git
-cd claude-config
-chmod +x setup.sh
-./setup.sh
+chmod +x ./claude-config/setup.sh
+./claude-config/setup.sh --ecc-focused --force
 ```
 
 `setup.sh` 自动检测环境、安装依赖（Claude Code、RTK 等），并串起所有 submodule 插件。幂等，可安全重复运行。
@@ -51,8 +50,7 @@ chmod +x setup.sh
 ## 更新
 
 ```bash
-cd ~/claude-config
-git pull --recurse-submodules
+git -C ~/claude-config pull --recurse-submodules
 ./setup.sh    # 幂等，重新收敛所有 symlink、插件和配置
 ```
 

@@ -8,3 +8,5 @@ config/claude/settings.json
 .DS_Store
 Thumbs.db
 *:Zone.Identifier
+.claude/
+openspec/
