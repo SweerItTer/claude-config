@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # install-ecc.sh — Everything Claude Code 插件安装
+# 使用 ECC 官方 install.sh --target claude --modules 安装，
+# 不注册 marketplace symlink（避免 228 skill 全量注入上下文）。
+# MCP 通过 disabledMcpServers 默认禁用，用户通过 /mcp 按需开启。
 set -euo pipefail
 
 REPO_ROOT="${1:?需要 REPO_ROOT}"
@@ -35,29 +38,20 @@ ECC_DIR="$REPO_ROOT/external/everything-claude-code"
 CUSTOM_AGENTS_DIR="$REPO_ROOT/config/claude/agents-custom"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 INSTALL_STATE="$CLAUDE_HOME/ecc/install-state.json"
-MARKETPLACE_DST="$CLAUDE_HOME/plugins/marketplaces/ecc"
 AGENTS_DST="$CLAUDE_HOME/agents"
 COMMANDS_DST="$CLAUDE_HOME/commands"
 RULES_DST="$CLAUDE_HOME/rules/ecc"
 REQUIRED_CUSTOM_AGENTS=(git.md progress.md rules.md validation.md)
+# rules-core 已移除 — ~/claude-config/config/claude/rules/ 已包含精心策划的规则，
+# 安装 ECC 的 rules-core 会灌入 19 种语言的 110 个文件（~228KB），造成上下文膨胀。
 FOCUSED_MODULES=(
-    rules-core
     agents-core
     commands-core
     hooks-runtime
-    platform-configs
     workflow-quality
-    framework-language
-    skill-bun-runtime
-    skill-cpp-coding-standards
-    skill-cpp-testing
-    skill-java-coding-standards
-    skill-nodejs-keccak256
-    skill-ui-to-vue
-    skill-vite-patterns
 )
 OPTIONAL_ECC_INSTALLS=(
-    "./setup.sh --ecc-focused: 安装本仓库推荐的 C/C++、Java、JS/TS、Vue 常用 ECC 模块"
+    "./setup.sh --ecc-focused: 安装 5 个基础 ECC 模块（agents/commands/hooks/platform/workflow）"
     "./setup.sh --ecc-full: 安装 ECC full profile"
     "./setup.sh --ecc-profile <name>: 安装官方 profile (minimal/core/developer/security/research/full)"
     "./setup.sh --ecc-modules <id,id,...>: 安装指定 ECC 模块"
@@ -65,18 +59,26 @@ OPTIONAL_ECC_INSTALLS=(
     "external/everything-claude-code/install.sh --target claude --modules <id,id,...>: 直接调用 ECC 官方模块安装"
 )
 
+# ECC rules-core 模块有 "defaultInstall": true，无论传什么 --modules 都会被强制安装。
+# 它会在 $CLAUDE_HOME/rules/ecc/ 下灌入 19 种语言的 110 个 .md 文件，造成上下文膨胀。
+# 我们已在 rules/common/ (基线) 和 rules-available/ (按需) 中有精心策划的规则。
+# 不删除 ECC 规则——移至 rules-available/ecc/ 保留后续更新，但不会被 Claude Code 自动加载。
+cleanup_ecc_rules() {
+    if [[ ! -d "$RULES_DST" ]]; then
+        return 0
+    fi
+    local count
+    count="$(find "$RULES_DST" -name '*.md' | wc -l)"
+    local dst="$CLAUDE_HOME/rules-available/ecc"
+    rm -rf "$dst"
+    mv "$RULES_DST" "$dst"
+    ok "ECC rules-core ($count .md) 已移至 rules-available/ecc/ (按需加载，保留更新)"
+}
+
 pass() { echo "  [PASS] $*"; }
 info() { echo "  [INFO] $*"; }
 ok()   { echo "  [OK] $*"; }
 err()  { echo "  [ERR] $*"; }
-
-symlink_points_to() {
-    local link="$1"
-    local target="$2"
-    [[ -L "$link" ]] || return 1
-    [[ -e "$target" ]] || return 1
-    [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]
-}
 
 custom_agents_ready() {
     local name
@@ -153,10 +155,8 @@ is_ready() {
     [[ -d "$ECC_DIR/node_modules" ]] || return 1
     [[ -f "$INSTALL_STATE" ]] || return 1
     expected_request_ready || return 1
-    symlink_points_to "$MARKETPLACE_DST" "$ECC_DIR" || return 1
     [[ -d "$AGENTS_DST" ]] || return 1
     [[ -d "$COMMANDS_DST" ]] || return 1
-    [[ -d "$RULES_DST" ]] || return 1
     custom_agents_ready || return 1
 }
 
@@ -169,21 +169,6 @@ remove_legacy_links() {
     done
 }
 
-link_marketplace() {
-    if symlink_points_to "$MARKETPLACE_DST" "$ECC_DIR"; then
-        ok "ECC marketplace 已注册"
-        return 0
-    fi
-
-    mkdir -p "$(dirname "$MARKETPLACE_DST")"
-    if [[ -L "$MARKETPLACE_DST" || -f "$MARKETPLACE_DST" ]]; then
-        rm -f "$MARKETPLACE_DST"
-    elif [[ -d "$MARKETPLACE_DST" ]]; then
-        rm -rf "$MARKETPLACE_DST"
-    fi
-    ln -sfn "$ECC_DIR" "$MARKETPLACE_DST"
-    ok "ECC marketplace 已注册"
-}
 
 overlay_custom_agents() {
     [[ -d "$CUSTOM_AGENTS_DIR" ]] || {
@@ -234,8 +219,8 @@ install() {
         local args=()
         mapfile -t args < <(mode_install_args)
         info "[DRY-RUN] (cd $ECC_DIR && ./install.sh ${args[*]})"
-        info "[DRY-RUN] ln -sfn $ECC_DIR -> $MARKETPLACE_DST"
         info "[DRY-RUN] cp $CUSTOM_AGENTS_DIR/*.md -> $AGENTS_DST/"
+        info "[DRY-RUN] cleanup_ecc_rules (移动 $RULES_DST/ → \$CLAUDE_HOME/rules-available/ecc/)"
         return 0
     fi
 
@@ -250,8 +235,8 @@ install() {
         ./install.sh "${args[@]}" > /dev/null 2>&1
     )
     ok "ECC 官方安装完成"
-    link_marketplace
     overlay_custom_agents
+    cleanup_ecc_rules
 }
 
 verify() {
@@ -263,12 +248,10 @@ verify() {
     [[ -d "$ECC_DIR/node_modules" ]] || { err "ECC node_modules 不存在"; return 1; }
     [[ -f "$INSTALL_STATE" ]] || { err "ECC install-state 不存在"; return 1; }
     expected_request_ready || { err "ECC install-state 与期望安装范围不一致"; return 1; }
-    symlink_points_to "$MARKETPLACE_DST" "$ECC_DIR" || { err "ECC marketplace 未指向源码目录"; return 1; }
     [[ -d "$AGENTS_DST" ]] || { err "ECC agents 目录不存在"; return 1; }
     [[ ! -L "$AGENTS_DST" ]] || { err "ECC agents 不应为符号链接"; return 1; }
     [[ -d "$COMMANDS_DST" ]] || { err "ECC commands 目录不存在"; return 1; }
     [[ ! -L "$COMMANDS_DST" ]] || { err "ECC commands 不应为符号链接"; return 1; }
-    [[ -d "$RULES_DST" ]] || { err "ECC rules 目录不存在"; return 1; }
     custom_agents_ready || { err "自定义 agents 覆盖不完整"; return 1; }
 
     ok "ECC verify 通过"

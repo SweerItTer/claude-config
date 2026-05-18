@@ -64,78 +64,21 @@ Say "setup omc" or run `/oh-my-claudecode:omc-setup`.
 <!-- OMC:END -->
 
 <!-- User customizations -->
-# Agent preferences
+# 自定义指令
 
-RFC priority: MUST = required · SHOULD = strongly recommended · MAY = optional
+## 核心工具链
+- **RTK**: 所有 shell 命令自动经 `rtk` 代理压缩输出。`rtk gain` 查看节省量。
+- **context-mode**: Read/WebFetch/Bash 自动经 hook 索引优化，节省 30-40% 上下文。
 
-## Startup sequence
-
-**MUST** — At the start of every session or new task:
-1. Read `~/.claude/agents/progress.md` — resume from last known state if present
-2. Read `~/.claude/agents/git.md` — branch and commit conventions
-3. Read `~/.claude/AGENTS.md` — Load other agents files only when that domain becomes active
-
----
-
-## Main agent responsibilities
-
-**MUST** — Main agent handles ONLY: requirements decomposition · branch orchestration · subtask dispatch · checkpoint review · blocking decisions.
-
-**MUST** — Treat AI agents as automation tools: plan first, then delegate implementation, testing, and PR preparation to subagents whenever possible.
-
-**MUST NOT** — Directly implement code, run tests, or edit files when delegation is possible.
-
-**MUST** — After each Task completes, summarise result in ≤3 lines, then discard detailed subtask context from working memory.
-
----
-
-## Tool stack priority (strict order)
-
-1. **Task tool** — decompose before implementing; read `~/.claude/agents/rules.md` for model selection and prompt template
-2. **Hook-backed ctx tools** — Read / Grep / WebFetch via registered PreToolUse hooks
-3. **`rtk` prefix** — every shell command (`rtk cmd1 && rtk cmd2` in chains)
-4. **Direct tools** — trivial atomic operations only; note reason inline
-
----
-
-## Hook / MCP priority
-
-**MUST** — Hook-backed invocations over direct calls for Read / Grep / WebFetch.
-
-**MUST** — MCP tools over Bash workarounds when capability overlaps.
-
-**MUST** — If skipped, note reason inline.
-
-Hooks: `ctx_index_on_read` (Read) · `ctx_fetch_and_index` (WebFetch) · `ctx_compress_output` (Bash post)
-
----
-
-## Checkpoint discipline
-
-**MUST** — At every subtask boundary, write to `{workspace}/progress.md`:
-
-- Completed work (≤2 lines) · current requirement · blockers · `rtk gain` output
-
-**MUST** — Every 15 tool calls, re-check whether the current approach still fits the problem. If the same file or the same issue is being revised repeatedly, pause and re-evaluate the method and architecture before continuing.
-
-**MUST** — After a user-approved task is completed, capture a short retrospective with the pitfalls to avoid next time, the implementation path that worked, and reusable agents or skills for similar work.
-
-**MUST** — For code changes, do not mark a task complete until available automated verification passes end to end. If no CI or automated verification exists for the task type, document the verification actually performed and any remaining gap.
-
-**MUST** — No blind execution. Surface blockers requiring scope or architecture change to user immediately.
-
-**MUST** — When code review, testing, or integration reveals rework is needed, continue the rework loop silently by default. Do not interrupt the user; only stop at a meaningful checkpoint when a fully deliverable version is ready, a real blocker requires user input, or a scope or architecture decision is needed.
-
----
-
-## Quick reference
-
-| Need | Action |
-|---|---|
-| Start task | Read progress.md → git.md → plan |
-| Dispatch subtask | Read rules.md for model + prompt template |
-| Feature complete | Read validation.md for loop |
-| Git operation | Read git.md for conventions |
-| Checkpoint | Write progress.md + `rtk gain` |
+## 委托与检查
+- 复杂任务 → sub-agent（`model=opus`），多 agent 协作用 `/team`。
+- 启动时读 `progress.md` + `git.md`。每 15 次工具调用重检方案是否偏离。
+- 详见 `rules/common/agents.md`。
 
 @RTK.md
+
+# 规则系统
+
+`rules/common/` 为基线始终自动加载。按需规则位于 `rules-available/`（不自动加载）。
+
+编辑代码前，读取 `rules-available/README.md`（规则索引）确定需要加载的规则集，再按需读取。

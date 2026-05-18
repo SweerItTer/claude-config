@@ -19,7 +19,6 @@
     "enabledPlugins": {
         "obra/superpowers@superpowers": true,
         "Yeachan-Heo/oh-my-claudecode@omc": true,
-        "affaan-m/everything-claude-code@ecc": true,
         "mksglu/context-mode@context-mode": true,
         "code-review@claude-plugins-official": true,
         "feature-dev@claude-plugins-official": true,
@@ -40,12 +39,6 @@
                 "repo": "mksglu/context-mode"
             }
         },
-        "ecc": {
-            "source": {
-                "source": "github",
-                "repo": "affaan-m/everything-claude-code"
-            }
-        },
         "omc": {
             "source": {
                 "source": "git",
@@ -59,6 +52,28 @@
             }
         }
     },
+    "disabledMcpServers": [
+        "browser-use",
+        "browserbase",
+        "clickhouse",
+        "cloudflare-docs",
+        "cloudflare-observability",
+        "cloudflare-workers-bindings",
+        "cloudflare-workers-builds",
+        "confluence",
+        "devfleet",
+        "evalview",
+        "fal-ai",
+        "jira",
+        "laraplugins",
+        "longhand",
+        "magic",
+        "omega-memory",
+        "railway",
+        "supabase",
+        "token-optimizer",
+        "vercel"
+    ],
     "attribution": {
         "commit": "",
         "pr": ""
@@ -100,6 +115,15 @@
                     {
                         "type": "command",
                         "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rtk-rewrite.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rules-loader.sh"
                     }
                 ]
             }

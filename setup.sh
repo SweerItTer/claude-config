@@ -172,6 +172,9 @@ current['hooks'] = hooks
 if 'permissions' in template:
     current['permissions'] = merge_permissions(current.get('permissions'), template.get('permissions'))
 
+if 'disabledMcpServers' in template:
+    current['disabledMcpServers'] = merge_list(current.get('disabledMcpServers'), template.get('disabledMcpServers'))
+
 for key in ['think', 'skipDangerousModePermissionPrompt', 'attribution', 'statusLine', 'language', 'effortLevel']:
     if key in template and key not in current:
         current[key] = template[key]
@@ -254,6 +257,8 @@ ensure_core_config() {
     done
 
     ensure_symlink "$REPO_ROOT/config/claude/rules" "$CLAUDE_HOME/rules" "rules symlink"
+    ensure_symlink "$REPO_ROOT/config/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink"
+    ensure_symlink "$REPO_ROOT/config/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook"
 
     local cpo_src="$REPO_ROOT/external/claude-plugins-official"
     local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
@@ -317,7 +322,6 @@ ts = "2026-01-01T00:00:00.000Z"
 markets = {
     "claude-plugins-official": {"source": {"source": "github", "repo": "anthropics/claude-plugins-official"}, "dir": "external/claude-plugins-official"},
     "context-mode": {"source": {"source": "github", "repo": "mksglu/context-mode"}, "dir": "external/context-mode"},
-    "ecc": {"source": {"source": "github", "repo": "affaan-m/everything-claude-code"}, "dir": "external/everything-claude-code"},
     "omc": {"source": {"source": "git", "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"}, "dir": "external/oh-my-claudecode"},
     "superpowers": {"source": {"source": "git", "url": "https://github.com/obra/superpowers.git"}, "dir": "external/superpowers"},
 }
@@ -354,6 +358,13 @@ verify_core_config() {
         pass "rules symlink"
     else
         err "rules symlink 缺失"
+        failed=1
+    fi
+
+    if symlink_points_to "$CLAUDE_HOME/rules-available" "$REPO_ROOT/config/claude/rules-available"; then
+        pass "rules-available symlink"
+    else
+        err "rules-available symlink 缺失"
         failed=1
     fi
 
@@ -405,6 +416,91 @@ run_final_doctor() {
     return 1
 }
 
+UNINSTALL=""
+
+remove_symlink_if_ours() {
+    local path="$1"
+    local label="$2"
+    local expected_src="$3"
+
+    if [[ ! -L "$path" ]]; then
+        if [[ -e "$path" ]]; then
+            info "跳过非符号链接: $label ($path)"
+        fi
+        return 0
+    fi
+
+    local current_target
+    current_target="$(readlink -f "$path" 2>/dev/null || true)"
+    if [[ "$current_target" != "$expected_src" ]]; then
+        warn "符号链接目标不匹配，跳过: $label ($path -> $current_target, 期望 $expected_src)"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] rm $path"
+        return 0
+    fi
+
+    rm -f "$path"
+    log "已移除: $label"
+}
+
+uninstall_core() {
+    phase "Uninstall: 核心配置"
+    local repo="$REPO_ROOT/config/claude"
+    remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md" "$repo/CLAUDE.md"
+    remove_symlink_if_ours "$CLAUDE_HOME/RTK.md" "RTK.md" "$repo/RTK.md"
+    remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md" "$repo/AGENTS.md"
+    remove_symlink_if_ours "$CLAUDE_HOME/rules" "rules/" "$repo/rules"
+    remove_symlink_if_ours "$CLAUDE_HOME/rules-available" "rules-available/" "$repo/rules-available"
+    remove_symlink_if_ours "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook" "$repo/hooks/rules-loader.sh"
+    # 如果 hooks 目录为空则清理
+    if [[ -d "$CLAUDE_HOME/hooks" ]]; then
+        rmdir "$CLAUDE_HOME/hooks" 2>/dev/null && info "已清理空 hooks 目录" || true
+    fi
+}
+
+clean_installed_plugins_json() {
+    local target="$CLAUDE_HOME/plugins/installed_plugins.json"
+    [[ -f "$target" ]] || return 0
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] 从 installed_plugins.json 移除 ecc@ecc"
+        return 0
+    fi
+    python3 - "$target" <<'PYEOF'
+import json, sys
+with open(sys.argv[1], 'r+') as f:
+    data = json.load(f)
+    data.get('plugins', {}).pop('ecc@ecc', None)
+    data.get('enabledPlugins', {}).pop('ecc@ecc', None)
+    f.seek(0)
+    json.dump(data, f, indent=2)
+    f.write('\n')
+    f.truncate()
+PYEOF
+}
+
+uninstall_ecc() {
+    phase "Uninstall: ECC"
+    local ecc_dir="$REPO_ROOT/external/everything-claude-code"
+    remove_symlink_if_ours "$CLAUDE_HOME/plugins/marketplaces/ecc" "ECC marketplace" "$ecc_dir"
+    rm -rf "$CLAUDE_HOME/ecc"
+    rm -rf "$CLAUDE_HOME/plugins/cache/ecc"
+    clean_installed_plugins_json
+    log "已移除 ECC install-state + plugin cache + installed_plugins 注册"
+}
+
+uninstall_all() {
+    uninstall_core
+    uninstall_ecc
+    remove_symlink_if_ours "$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official" "CPO marketplace" "$REPO_ROOT/external/claude-plugins-official"
+    rm -f "$CLAUDE_HOME/plugins/known_marketplaces.json"
+    log "已移除 known_marketplaces.json"
+    phase "Uninstall: 完成"
+    info "settings.json 未被移除 (可能包含自定义配置)。如需重置: rm ~/.claude/settings.json"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=true; shift ;;
@@ -423,6 +519,14 @@ while [[ $# -gt 0 ]]; do
             ECC_MODULES="${2:-}"
             [[ -n "$ECC_MODULES" ]] || { err "--ecc-modules 需要逗号分隔模块 ID"; exit 1; }
             shift 2 ;;
+        --uninstall)
+            UNINSTALL="${2:-core}"
+            [[ "$UNINSTALL" =~ ^(core|ecc|all)$ ]] || { err "--uninstall 参数无效: $UNINSTALL (有效值: core, ecc, all)"; exit 1; }
+            shift 2 ;;
+        --uninstall=*)
+            UNINSTALL="${1#*=}"
+            [[ "$UNINSTALL" =~ ^(core|ecc|all)$ ]] || { err "--uninstall 参数无效: $UNINSTALL (有效值: core, ecc, all)"; exit 1; }
+            shift ;;
         -h|--help)
             echo "用法: ./setup.sh [选项]"
             echo "  --ci            CI 模式 (跳过手动提示，ECC 使用全量安装以覆盖测试)"
@@ -435,6 +539,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --ecc-focused   安装本仓库推荐的 C/C++、Java、JS/TS、Vue 常用 ECC 模块"
             echo "  --ecc-profile P 安装 ECC 官方 profile: minimal/core/developer/security/research/full"
             echo "  --ecc-modules M 安装逗号分隔的 ECC 模块 ID"
+            echo "  --uninstall [M] 卸载配置 (core=核心配置, ecc=含ECC, all=全部)"
             exit 0 ;;
         *) err "未知参数: $1"; exit 1 ;;
     esac
@@ -446,6 +551,19 @@ main() {
     echo -e "${BLUE}║   Claude Code Config Migration v3    ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
     echo ""
+
+    if [[ -n "$UNINSTALL" ]]; then
+        case "$UNINSTALL" in
+            core) uninstall_core ;;
+            ecc) uninstall_core && uninstall_ecc ;;
+            all) uninstall_all ;;
+        esac
+        echo ""
+        log "卸载完成 ($UNINSTALL)"
+        [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 未实际修改文件"
+        return 0
+    fi
+
     [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
     [[ "$CI_MODE" == true ]] && info "CI 模式"
 
@@ -486,6 +604,7 @@ main() {
     run_installer rtk
     run_installer superpowers
     generate_known_marketplaces
+    clean_installed_plugins_json
 
     phase "Phase 5: 最终验证"
     verify_core_config
