@@ -12,6 +12,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+ORIGINAL_ARGS=("$@")
+SETUP_UPDATE_REEXECED="${SETUP_UPDATE_REEXECED:-false}"
 
 if [[ "$(id -u)" -eq 0 ]] && [[ -n "${SUDO_USER:-}" ]]; then
     REAL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
@@ -29,6 +31,7 @@ NO_CLAUDE=false
 NO_VERIFY=false
 FORCE=false
 SMOKE_TEST=false
+UPDATE=false
 ECC_FULL=false
 ECC_FOCUSED=false
 ECC_PROFILE=""
@@ -312,6 +315,34 @@ ensure_submodules() {
         git submodule update --init --recursive
     )
     log "Submodules 就绪"
+}
+
+update_repository() {
+    if [[ "$SETUP_UPDATE_REEXECED" == true ]]; then
+        pass "仓库更新阶段已完成"
+        return 0
+    fi
+
+    info "更新当前仓库与第三方 submodules..."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] git pull --ff-only"
+        info "[DRY-RUN] git submodule sync --recursive"
+        info "[DRY-RUN] git submodule update --init --recursive --remote"
+        info "[DRY-RUN] SETUP_UPDATE_REEXECED=true ./setup.sh ${ORIGINAL_ARGS[*]}"
+        return 0
+    fi
+
+    (
+        cd "$REPO_ROOT"
+        git pull --ff-only
+        git submodule sync --recursive
+        git submodule update --init --recursive --remote
+    )
+
+    export SETUP_UPDATE_REEXECED=true
+    log "仓库与第三方 submodules 已更新"
+    info "重新执行 setup 以加载更新后的脚本..."
+    exec "$REPO_ROOT/setup.sh" "${ORIGINAL_ARGS[@]}"
 }
 
 ensure_core_config() {
@@ -673,6 +704,7 @@ while [[ $# -gt 0 ]]; do
         --no-claude) NO_CLAUDE=true; shift ;;
         --no-verify) NO_VERIFY=true; shift ;;
         --force) FORCE=true; shift ;;
+        --update) UPDATE=true; shift ;;
         --smoke-test) SMOKE_TEST=true; shift ;;
         --ecc-full) ECC_FULL=true; shift ;;
         --ecc-focused) ECC_FOCUSED=true; shift ;;
@@ -699,6 +731,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
+            echo "  --update        更新当前仓库与第三方 submodules；搭配 --force 可强制重跑安装器"
             echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 冒烟检查"
             echo "  --ecc-full      安装 ECC full profile"
             echo "  --ecc-focused   安装 4 个基础 ECC 模块（agents/commands/hooks/workflow）"
@@ -731,6 +764,13 @@ main() {
 
     [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
     [[ "$CI_MODE" == true ]] && info "CI 模式"
+    [[ "$UPDATE" == true && "$FORCE" == true ]] && info "Update 模式 — 将更新仓库/submodules 并强制重跑安装器"
+    [[ "$UPDATE" == true && "$FORCE" == false ]] && info "Update 模式 — 将更新仓库/submodules；不会重跑第三方安装器"
+
+    if [[ "$UPDATE" == true ]]; then
+        phase "Phase 0: 仓库更新"
+        update_repository
+    fi
 
     phase "Phase 0: 环境检测"
     local missing=()
@@ -747,6 +787,20 @@ main() {
     phase "Phase 2: Git Submodules + 核心配置"
     ensure_submodules
     ensure_core_config
+
+    if [[ "$UPDATE" == true && "$FORCE" == false ]]; then
+        ensure_settings_json
+        generate_known_marketplaces
+        phase "Phase 5: 最终验证"
+        verify_core_config
+        run_final_doctor
+        echo ""
+        echo -e "${GREEN}============================================${NC}"
+        echo -e "${GREEN}  Claude Code 配置更新完成!${NC}"
+        echo -e "${GREEN}============================================${NC}"
+        echo ""
+        return 0
+    fi
 
     phase "Phase 3: 安装器编排"
     local ecc_mode="interactive"
