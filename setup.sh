@@ -49,6 +49,74 @@ symlink_points_to() {
     [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]
 }
 
+ensure_managed_block() {
+    local src="$1"
+    local dst="$2"
+    local block_name="$3"
+    local label="$4"
+    local start_marker="<!-- ${block_name}:START -->"
+    local end_marker="<!-- ${block_name}:END -->"
+
+    [[ -f "$src" ]] || return 0
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] merge $src into $dst as $block_name block"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$dst")"
+
+    if symlink_points_to "$dst" "$src"; then
+        rm -f "$dst"
+    fi
+
+    MANAGED_BLOCK_SRC="$src" \
+    MANAGED_BLOCK_DST="$dst" \
+    MANAGED_BLOCK_NAME="$block_name" \
+    MANAGED_BLOCK_START="$start_marker" \
+    MANAGED_BLOCK_END="$end_marker" \
+    python3 - <<'PYEOF'
+import hashlib
+import os
+import re
+import sys
+from pathlib import Path
+
+src = Path(os.environ['MANAGED_BLOCK_SRC'])
+dst = Path(os.environ['MANAGED_BLOCK_DST'])
+name = os.environ['MANAGED_BLOCK_NAME']
+start = os.environ['MANAGED_BLOCK_START']
+end = os.environ['MANAGED_BLOCK_END']
+start_re = rf'<!--\s*{re.escape(name)}:START\s*-->'
+end_re = rf'<!--\s*{re.escape(name)}:END\s*-->'
+
+raw_source = src.read_text(encoding='utf-8').strip()
+inner_pattern = re.compile(rf'(?ms)^\s*{start_re}\s*\n(.*?)\n{end_re}\s*$')
+match = inner_pattern.match(raw_source)
+inner = match.group(1).strip() if match else raw_source
+inner = re.sub(r'^<!-- hash:[0-9a-f]+ -->\s*\n', '', inner, count=1).strip()
+digest = hashlib.sha256(inner.encode('utf-8')).hexdigest()[:16]
+source = f'{start}\n<!-- hash:{digest} -->\n{inner}\n{end}'
+
+existing = dst.read_text(encoding='utf-8') if dst.exists() else ''
+block_pattern = re.compile(rf'(?ms)^\s*{start_re}\s*\n(.*?)\n{end_re}\s*')
+block_match = block_pattern.search(existing)
+if block_match:
+    current_hash = re.search(r'<!-- hash:([0-9a-f]+) -->', block_match.group(1))
+    if current_hash and current_hash.group(1) == digest:
+        sys.exit(0)
+    merged = block_pattern.sub(source, existing, count=1).strip() + '\n'
+elif existing.strip():
+    merged = existing.rstrip() + '\n\n' + source + '\n'
+else:
+    merged = source + '\n'
+
+dst.write_text(merged, encoding='utf-8')
+PYEOF
+
+    log "$label 已合并"
+}
+
 ensure_symlink() {
     local src="$1"
     local dst="$2"
@@ -249,7 +317,9 @@ ensure_submodules() {
 ensure_core_config() {
     mkdir -p "$CLAUDE_HOME"
 
-    for file in CLAUDE.md RTK.md AGENTS.md; do
+    ensure_managed_block "$REPO_ROOT/config/claude/CLAUDE.md" "$CLAUDE_HOME/CLAUDE.md" "Claude-Config" "CLAUDE.md 配置块"
+
+    for file in RTK.md AGENTS.md; do
         local src="$REPO_ROOT/config/claude/$file"
         local dst="$CLAUDE_HOME/$file"
         [[ -f "$src" ]] || continue
@@ -345,7 +415,15 @@ verify_core_config() {
     fi
 
     local failed=0
-    for file in CLAUDE.md RTK.md AGENTS.md; do
+    if grep -Eq '<!--[[:space:]]*Claude-Config:START[[:space:]]*-->' "$CLAUDE_HOME/CLAUDE.md" 2>/dev/null \
+        && grep -Eq '<!--[[:space:]]*Claude-Config:END[[:space:]]*-->' "$CLAUDE_HOME/CLAUDE.md" 2>/dev/null; then
+        pass "CLAUDE.md 配置块"
+    else
+        err "CLAUDE.md 配置块缺失"
+        failed=1
+    fi
+
+    for file in RTK.md AGENTS.md; do
         if symlink_points_to "$CLAUDE_HOME/$file" "$REPO_ROOT/config/claude/$file"; then
             pass "$file symlink"
         else
@@ -385,6 +463,43 @@ verify_core_config() {
     [[ $failed -eq 0 ]]
 }
 
+run_context_smoke_test() {
+    if ! command -v claude >/dev/null 2>&1; then
+        err "Claude -p /context 检查失败: claude 命令不存在"
+        return 1
+    fi
+
+    local timeout_seconds="${CLAUDE_CONTEXT_TIMEOUT:-180}"
+    local tmp
+    tmp="$(mktemp)"
+    set +e
+    timeout "$timeout_seconds" claude -p /context >"$tmp" 2>&1
+    local rc=$?
+    set -e
+
+    if [[ $rc -eq 124 ]]; then
+        err "Claude -p /context 检查超时 (${timeout_seconds}s)"
+        rm -f "$tmp"
+        return 1
+    fi
+
+    if [[ $rc -ne 0 ]]; then
+        err "Claude -p /context 检查失败 ($rc)"
+        sed -n '1,40p' "$tmp" >&2
+        rm -f "$tmp"
+        return "$rc"
+    fi
+
+    if [[ ! -s "$tmp" ]]; then
+        err "Claude -p /context 未输出上下文信息"
+        rm -f "$tmp"
+        return 1
+    fi
+
+    log "Claude -p /context 上下文注入检查通过"
+    rm -f "$tmp"
+}
+
 run_final_doctor() {
     if [[ "$NO_VERIFY" == true ]]; then
         info "跳过最终 doctor (--no-verify)"
@@ -398,22 +513,27 @@ run_final_doctor() {
 
     if [[ "$DRY_RUN" == true ]]; then
         info "[DRY-RUN] script/check-claude-doctor.sh"
+        info "[DRY-RUN] claude -p /context"
         return 0
     fi
 
     info "运行最终 Claude doctor..."
     if timeout 120 "$REPO_ROOT/script/check-claude-doctor.sh"; then
         log "Claude doctor 通过"
-        return 0
+    else
+        local rc=$?
+        if [[ $rc -eq 124 ]]; then
+            err "Claude doctor 超时"
+        else
+            err "Claude doctor 失败 ($rc)"
+        fi
+        return 1
     fi
 
-    local rc=$?
-    if [[ $rc -eq 124 ]]; then
-        err "Claude doctor 超时"
-    else
-        err "Claude doctor 失败 ($rc)"
-    fi
-    return 1
+    info "运行 Claude -p /context 上下文注入检查..."
+    run_context_smoke_test
+    log "安装后冒烟测试通过: Claude doctor + Claude -p /context"
+    return 0
 }
 
 UNINSTALL=""
@@ -446,10 +566,55 @@ remove_symlink_if_ours() {
     log "已移除: $label"
 }
 
+remove_managed_block() {
+    local path="$1"
+    local block_name="$2"
+    local label="$3"
+    local start_marker="<!-- ${block_name}:START -->"
+    local end_marker="<!-- ${block_name}:END -->"
+
+    local start_pattern="<!--[[:space:]]*${block_name}:START[[:space:]]*-->"
+
+    [[ -f "$path" ]] || return 0
+    if ! grep -Eq "$start_pattern" "$path" 2>/dev/null; then
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] remove $block_name block from $path"
+        return 0
+    fi
+
+    MANAGED_BLOCK_PATH="$path" \
+    MANAGED_BLOCK_NAME="$block_name" \
+    MANAGED_BLOCK_START="$start_marker" \
+    MANAGED_BLOCK_END="$end_marker" \
+    python3 - <<'PYEOF'
+import os
+import re
+from pathlib import Path
+
+path = Path(os.environ['MANAGED_BLOCK_PATH'])
+name = os.environ['MANAGED_BLOCK_NAME']
+content = path.read_text(encoding='utf-8')
+start_re = rf'<!--\s*{re.escape(name)}:START\s*-->'
+end_re = rf'<!--\s*{re.escape(name)}:END\s*-->'
+pattern = re.compile(rf'(?ms)^\s*{start_re}\s*\n.*?\n{end_re}\s*')
+updated = pattern.sub('', content, count=1).strip() + '\n'
+if updated.strip():
+    path.write_text(updated, encoding='utf-8')
+else:
+    path.unlink()
+PYEOF
+
+    log "已移除: $label"
+}
+
 uninstall_core() {
     phase "Uninstall: 核心配置"
     local repo="$REPO_ROOT/config/claude"
-    remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md" "$repo/CLAUDE.md"
+    remove_managed_block "$CLAUDE_HOME/CLAUDE.md" "Claude-Config" "CLAUDE.md 配置块"
+    remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink" "$repo/CLAUDE.md"
     remove_symlink_if_ours "$CLAUDE_HOME/RTK.md" "RTK.md" "$repo/RTK.md"
     remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md" "$repo/AGENTS.md"
     remove_symlink_if_ours "$CLAUDE_HOME/rules" "rules/" "$repo/rules"
@@ -534,7 +699,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
-            echo "  --smoke-test    运行 script/check-claude-doctor.sh 插件迁移检查"
+            echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 冒烟检查"
             echo "  --ecc-full      安装 ECC full profile"
             echo "  --ecc-focused   安装 4 个基础 ECC 模块（agents/commands/hooks/workflow）"
             echo "  --ecc-profile P 安装 ECC 官方 profile: minimal/core/developer/security/research/full"

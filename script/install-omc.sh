@@ -11,6 +11,11 @@ CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 MARKETPLACE_DST="$CLAUDE_HOME/plugins/marketplaces/omc"
 WIKI_SRC="$REPO_ROOT/config/omc/wiki"
 WIKI_DST="$HOME/.omc/wiki"
+OMC_CLAUDE_MD_MODE="${OMC_CLAUDE_MD_MODE:-global}"
+OMC_CLAUDE_MD_STYLE="${OMC_CLAUDE_MD_STYLE:-overwrite}"
+GLOBAL_CLAUDE_MD="$CLAUDE_HOME/CLAUDE.md"
+GLOBAL_OMC_COMPANION="$CLAUDE_HOME/CLAUDE-omc.md"
+LOCAL_CLAUDE_MD="$REPO_ROOT/.claude/CLAUDE.md"
 
 LEGACY_SKILLS=(
     omc-reference omc-setup omc-doctor ai-slop-cleaner autodoc autopilot autoresearch
@@ -35,8 +40,62 @@ symlink_points_to() {
     [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]
 }
 
-omc_injected() {
-    grep -q 'OMC:START' "$CLAUDE_HOME/CLAUDE.md" 2>/dev/null
+has_omc_markers() {
+    local file="$1"
+
+    [[ -f "$file" ]] || return 1
+    grep -q '<!-- OMC:START -->' "$file" 2>/dev/null || return 1
+    grep -q '<!-- OMC:END -->' "$file" 2>/dev/null || return 1
+}
+
+validate_claude_md_config() {
+    case "$OMC_CLAUDE_MD_MODE" in
+        global|local) ;;
+        *)
+            err "OMC_CLAUDE_MD_MODE 无效: $OMC_CLAUDE_MD_MODE (有效值: global, local)"
+            return 1
+            ;;
+    esac
+
+    case "$OMC_CLAUDE_MD_STYLE" in
+        overwrite|preserve) ;;
+        *)
+            err "OMC_CLAUDE_MD_STYLE 无效: $OMC_CLAUDE_MD_STYLE (有效值: overwrite, preserve)"
+            return 1
+            ;;
+    esac
+
+    if [[ local == "$OMC_CLAUDE_MD_MODE" && overwrite != "$OMC_CLAUDE_MD_STYLE" ]]; then
+        info "local 模式忽略 OMC_CLAUDE_MD_STYLE=$OMC_CLAUDE_MD_STYLE"
+    fi
+}
+
+claude_md_ready() {
+    if [[ local == "$OMC_CLAUDE_MD_MODE" ]]; then
+        has_omc_markers "$LOCAL_CLAUDE_MD"
+        return
+    fi
+
+    if [[ preserve == "$OMC_CLAUDE_MD_STYLE" ]]; then
+        has_omc_markers "$GLOBAL_OMC_COMPANION" || return 1
+        [[ -f "$GLOBAL_CLAUDE_MD" ]] || return 1
+        grep -q '^<!-- OMC:IMPORT:START -->$' "$GLOBAL_CLAUDE_MD" 2>/dev/null || return 1
+        grep -q '^@CLAUDE-omc.md$' "$GLOBAL_CLAUDE_MD" 2>/dev/null || return 1
+        grep -q '^<!-- OMC:IMPORT:END -->$' "$GLOBAL_CLAUDE_MD" 2>/dev/null
+        return
+    fi
+
+    has_omc_markers "$GLOBAL_CLAUDE_MD"
+}
+
+claude_md_error() {
+    if [[ local == "$OMC_CLAUDE_MD_MODE" ]]; then
+        err "本地 .claude/CLAUDE.md 未注入 OMC 内容: $LOCAL_CLAUDE_MD"
+    elif [[ preserve == "$OMC_CLAUDE_MD_STYLE" ]]; then
+        err "global preserve 模式未就绪: 需要 $GLOBAL_OMC_COMPANION 含 OMC markers，且 $GLOBAL_CLAUDE_MD 包含官方 OMC import block"
+    else
+        err "全局 CLAUDE.md 未注入 OMC 内容: $GLOBAL_CLAUDE_MD"
+    fi
 }
 
 legacy_skills_cleared() {
@@ -59,7 +118,7 @@ is_ready() {
     [[ -d "$OMC_DIR" ]] || return 1
     [[ -d "$OMC_DIR/node_modules" ]] || return 1
     symlink_points_to "$MARKETPLACE_DST" "$OMC_DIR" || return 1
-    omc_injected || return 1
+    claude_md_ready || return 1
     legacy_skills_cleared || return 1
     wiki_ready || return 1
     return 0
@@ -101,6 +160,28 @@ cleanup_legacy_skills() {
     done
 
     ok "OMC legacy skills 已清理"
+}
+
+setup_claude_md() {
+    local setup_script="$OMC_DIR/scripts/setup-claude-md.sh"
+
+    [[ -f "$setup_script" ]] || {
+        err "OMC 官方 CLAUDE.md 安装脚本不存在: $setup_script"
+        return 1
+    }
+
+    info "安装 OMC CLAUDE.md 配置 ($OMC_CLAUDE_MD_MODE${OMC_CLAUDE_MD_MODE:+/$OMC_CLAUDE_MD_STYLE})..."
+
+    if [[ local == "$OMC_CLAUDE_MD_MODE" ]]; then
+        (
+            cd "$REPO_ROOT"
+            CLAUDE_PLUGIN_ROOT="$OMC_DIR" bash "$setup_script" local
+        )
+    else
+        CLAUDE_PLUGIN_ROOT="$OMC_DIR" bash "$setup_script" global "$OMC_CLAUDE_MD_STYLE"
+    fi
+
+    ok "OMC CLAUDE.md 配置已安装"
 }
 
 run_bridge_setup() {
@@ -159,6 +240,11 @@ install() {
     if [[ true == "$DRY_RUN" ]]; then
         info "[DRY-RUN] ln -sfn $OMC_DIR -> $MARKETPLACE_DST"
         info "[DRY-RUN] 清理旧 OMC skills 残留"
+        if [[ local == "$OMC_CLAUDE_MD_MODE" ]]; then
+            info "[DRY-RUN] (cd $REPO_ROOT && CLAUDE_PLUGIN_ROOT=$OMC_DIR bash $OMC_DIR/scripts/setup-claude-md.sh local)"
+        else
+            info "[DRY-RUN] CLAUDE_PLUGIN_ROOT=$OMC_DIR bash $OMC_DIR/scripts/setup-claude-md.sh global $OMC_CLAUDE_MD_STYLE"
+        fi
         info "[DRY-RUN] node bridge/cli.cjs setup --plugin-dir-mode --quiet"
         info "[DRY-RUN] ln -sfn $WIKI_SRC -> $WIKI_DST"
         return 0
@@ -166,6 +252,7 @@ install() {
 
     link_marketplace
     cleanup_legacy_skills
+    setup_claude_md
     run_bridge_setup
     link_wiki
 }
@@ -191,8 +278,8 @@ verify() {
         return 1
     }
 
-    omc_injected || {
-        err "CLAUDE.md 未注入 OMC 内容"
+    claude_md_ready || {
+        claude_md_error
         return 1
     }
 
@@ -210,6 +297,8 @@ verify() {
 }
 
 main() {
+    validate_claude_md_config
+
     if [[ false == "$FORCE" ]] && is_ready; then
         pass "OMC 已就绪，跳过"
         verify
