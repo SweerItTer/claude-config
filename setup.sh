@@ -32,6 +32,7 @@ NO_VERIFY=false
 FORCE=false
 SMOKE_TEST=false
 UPDATE=false
+NO_PATCH=false
 ECC_FULL=false
 ECC_FOCUSED=false
 ECC_PROFILE=""
@@ -705,6 +706,7 @@ while [[ $# -gt 0 ]]; do
         --no-verify) NO_VERIFY=true; shift ;;
         --force) FORCE=true; shift ;;
         --update) UPDATE=true; shift ;;
+        --no-patch) NO_PATCH=true; shift ;;
         --smoke-test) SMOKE_TEST=true; shift ;;
         --ecc-full) ECC_FULL=true; shift ;;
         --ecc-focused) ECC_FOCUSED=true; shift ;;
@@ -732,6 +734,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
             echo "  --update        更新当前仓库与第三方 submodules；搭配 --force 可强制重跑安装器"
+            echo "  --no-patch      跳过 context-mode routing.mjs strict-bash 补丁"
             echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 冒烟检查"
             echo "  --ecc-full      安装 ECC full profile"
             echo "  --ecc-focused   安装 4 个基础 ECC 模块（agents/commands/hooks/workflow）"
@@ -814,7 +817,7 @@ main() {
         ecc_mode="modules:$ECC_MODULES"
     fi
     run_installer ecc "$ecc_mode"
-    run_installer context-mode
+    run_installer context-mode "$NO_PATCH"
     run_installer openspec
 
     phase "Phase 4: settings.json + 后置安装器"

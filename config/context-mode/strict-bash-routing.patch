@@ -1,0 +1,233 @@
+diff --git a/hooks/core/routing.mjs b/hooks/core/routing.mjs
+index d93ea5a..bd46e3e 100644
+--- a/hooks/core/routing.mjs
++++ b/hooks/core/routing.mjs
+@@ -226,20 +226,13 @@ function stripQuotedContent(cmd) {
+  * Unknown commands are treated as unbounded (false) — fail-safe default.
+  */
+ const SAFE_COMMAND_PATTERNS = [
+-  // System probes (no stdout, or one short line)
+-  // Defense-in-depth (#470): trailing wildcards use `[^\r\n]+` instead of
+-  // `.+`. The primary gate is SHELL_CONTROL_OPERATORS, which already rejects
+-  // `\n` / `\r`, but in JS regex `\s` matches LF/CR too — so a pattern like
+-  // `\s+.+$` would silently span a newline if the operator gate ever
+-  // regressed. Anchoring `.+` to a single line removes that latent footgun.
++  // ── System probes: 1-2 lines output, zero risk ──
+   /^pwd$/,
++  /^true$/,
++  /^false$/,
+   /^whoami$/,
+   /^hostname(?:\s+-[a-zA-Z]+)?$/,
+-  // uname (#517): short-flag probes only (`-a`, `-srm`). No path operands —
+-  // uname doesn't take any, and refusing them keeps the pattern strict.
+   /^uname(?:\s+-[a-zA-Z]+)?$/,
+-  // id (#517): bare `id`, single short flag (`-u`, `-g`), or single user
+-  // operand (`id mksglu`). Output is one line — bounded by definition.
+   /^id(?:\s+\S+)?$/,
+   /^date(?:\s+[^\r\n]+)?$/,
+   /^echo\s/,
+@@ -250,31 +243,18 @@ const SAFE_COMMAND_PATTERNS = [
+   /^readlink(?:\s+[^\r\n]+)?$/,
+   /^basename(?:\s+[^\r\n]+)?$/,
+   /^dirname(?:\s+[^\r\n]+)?$/,
+-  // realpath (#517): canonical path resolution prints one line per operand.
+-  // Same shape as readlink — single-line `[^\r\n]+` to mirror the operator-gate
+-  // defense-in-depth from #470.
+   /^realpath(?:\s+[^\r\n]+)?$/,
+-  // Filesystem ops (silent on success, errors on stderr only).
+-  // For cp / mv / rm we explicitly refuse `-v` / `--verbose`: verbose
+-  // mode prints one line per file and can flood on big trees
+-  // (recursive copy of /etc, mass rename, etc.). The "silent on
+-  // success" invariant only holds without -v.
++  // ── Filesystem mutations: silent on success ──
+   /^cd(?:\s+[^\r\n]+)?$/,
+   /^mkdir(?:\s+[^\r\n]+)?$/,
+   /^touch\s+[^\r\n]+$/,
+-  // #517 follow-up: the original `(?!\s+-[a-zA-Z]*v\b)` required `v` to be
+-  // the LAST alpha char in the flag bundle, so `-vs`, `-vfr`, `-rvf`,
+-  // `-sfvr`, etc. silently slipped past the carve-out and flooded.
+-  // `(?!\s+-[a-zA-Z]*v[a-zA-Z]*)` catches `v` anywhere in the bundle.
+   /^mv(?!\s+-[a-zA-Z]*v[a-zA-Z]*)(?!\s+--verbose\b)\s+[^\r\n]+$/,
+   /^cp(?!\s+-[a-zA-Z]*v[a-zA-Z]*)(?!\s+--verbose\b)\s+[^\r\n]+$/,
+   /^rm(?!\s+-[a-zA-Z]*v[a-zA-Z]*)(?!\s+--verbose\b)\s+[^\r\n]+$/,
+-  // ln (#517): silent on success — same `-v` / `--verbose` carve-out as
+-  // cp/mv/rm. Bulk symlink operations with -v flood one line per link.
+   /^ln(?!\s+-[a-zA-Z]*v[a-zA-Z]*)(?!\s+--verbose\b)\s+[^\r\n]+$/,
+-  // ls — refuse recursive (-R / --recursive) to keep output bounded.
++  // ── ls: refuse -R ──
+   /^ls(?!\s+-[a-zA-Z]*R)(?!\s+--recursive)(?:\s+[^\r\n]+)?$/,
+-  // git read-only / status subcommands
++  // ── git: bounded queries only ──
+   /^git\s+status(?:\s+[^\r\n]+)?$/,
+   /^git\s+rev-parse(?:\s+[^\r\n]+)?$/,
+   /^git\s+remote(?:\s+-v|\s+show\s+\S+)?$/,
+@@ -284,27 +264,108 @@ const SAFE_COMMAND_PATTERNS = [
+   /^git\s+diff\s+--name-only(?:\s+[^\r\n]+)?$/,
+   /^git\s+stash\s+list$/,
+   /^git\s+tag(?:\s+-l(?:\s+[^\r\n]+)?)?$/,
+-  // git log only when explicitly bounded by -<N> with N up to two digits
+   /^git\s+log\s+-\d{1,2}(?:\s+[^\r\n]+)?$/,
+-  // Version probes (--version anywhere, or `cmd -V`)
++  /^git\s+log\s+--oneline\s+-\d{1,2}(?:\s+[^\r\n]+)?$/,
++  /^git\s+add(?:\s+[^\r\n]+)?$/,
++  /^git\s+restore(?:\s+[^\r\n]+)?$/,
++  /^git\s+commit(?:\s+[^\r\n]+)?$/,
++  // ── Version probes ──
+   /(?:^|\s)--version(?:\s|$)/,
+   /^\S+\s+-V(?:\s|$)/,
+ ];
+ 
+-// Bash shell control operators that can compose a safe command with an
+-// unbounded sink. Any match disqualifies the command from the allowlist.
+-//
+-// Note `&` (single — background + sequence): listed BEFORE `&&` in the
+-// alternation so the regex engine doesn't accidentally short-match `&&`
+-// when `&` is itself a separator (`date & cat huge.log`). Without this,
+-// `^date(?:\s+.+)?$` would match the whole string and bypass the gate.
+-//
+-// `\n` / `\r` (newline injection — #470): bash treats LF as a statement
+-// separator equivalent to `;`. CRLF (Windows clipboard paste) and bare CR
+-// fall in the same defect class. Without these, `git status\nfind /`
+-// would short-match the single-line `^git\s+status` pattern and bypass
+-// the gate entirely.
+-const SHELL_CONTROL_OPERATORS = /[|`\n\r]|\$\(|>>|>|<(?!<)|&(?!&)|&&|\|\||;/;
++// Bash shell constructs that remain unbounded or unsafe even after we handle
++// simple redirection / bounded pipelines below.
++const UNSAFE_SHELL_CONSTRUCTS = /[`\n\r]|\$\(|;(?!;)|(?<!&)&(?!&)/;
++
++const LOGICAL_OPERATORS = /&&|\|\|/;
++const PIPE_OPERATOR = /\|/;
++const SIMPLE_REDIRECTS = /\s+(?:\d?>&\d+|&>\s*\S+|\d?>>\s*\S+|\d?>\s*\S+|\d?<\s*\S+)/g;
++
++const BOUNDED_PIPE_CONSUMERS = [
++  /^head(?:\s+(?:-\d{1,4}|-n\s*\d{1,4}|--lines(?:=|\s+)\d{1,4}))?$/,
++  /^tail(?:\s+(?:-\d{1,4}|-n\s*\d{1,4}|--lines(?:=|\s+)\d{1,4}))?$/,
++  /^wc(?:\s+-[clmwL]+)?$/,
++];
++
++function normalizeSimpleCommand(command) {
++  return command
++    .trim()
++    .replace(/^git\s+-C\s+\S+\s*/, "git ")
++    .replace(SIMPLE_REDIRECTS, "")
++    .trim();
++}
++
++function splitShellTopLevel(command, separator) {
++  const parts = [];
++  let current = "";
++  let quote = null;
++  let escaped = false;
++
++  for (let i = 0; i < command.length; i++) {
++    const ch = command[i];
++    const next = command[i + 1];
++
++    if (escaped) {
++      current += ch;
++      escaped = false;
++      continue;
++    }
++
++    if (ch === "\\") {
++      current += ch;
++      escaped = true;
++      continue;
++    }
++
++    if (quote) {
++      current += ch;
++      if (ch === quote) quote = null;
++      continue;
++    }
++
++    if (ch === "'" || ch === '"') {
++      current += ch;
++      quote = ch;
++      continue;
++    }
++
++    if (separator === "logical" && ((ch === "&" && next === "&") || (ch === "|" && next === "|"))) {
++      parts.push(current.trim());
++      current = "";
++      i++;
++      continue;
++    }
++
++    if (separator === "pipe" && ch === "|") {
++      parts.push(current.trim());
++      current = "";
++      continue;
++    }
++
++    current += ch;
++  }
++
++  parts.push(current.trim());
++  return parts;
++}
++
++function isSafeCommandPattern(command) {
++  const normalized = normalizeSimpleCommand(command);
++  return normalized !== "" && SAFE_COMMAND_PATTERNS.some(rx => rx.test(normalized));
++}
++
++function isBoundedPipeConsumer(command) {
++  const normalized = normalizeSimpleCommand(command);
++  return BOUNDED_PIPE_CONSUMERS.some(rx => rx.test(normalized));
++}
++
++function isPipelineBounded(command) {
++  const parts = splitShellTopLevel(command, "pipe");
++  if (parts.length === 1) return isSafeCommandPattern(parts[0]);
++  if (parts.some(part => part === "")) return false;
++  return parts.slice(1).every(isBoundedPipeConsumer);
++}
+ 
+ /**
+  * @param {string} command Raw Bash command string from the hook payload.
+@@ -315,8 +376,15 @@ const SHELL_CONTROL_OPERATORS = /[|`\n\r]|\$\(|>>|>|<(?!<)|&(?!&)|&&|\|\||;/;
+ export function isStructurallyBounded(command) {
+   if (!command) return false;
+   const trimmed = command.trim();
+-  if (SHELL_CONTROL_OPERATORS.test(trimmed)) return false;
+-  return SAFE_COMMAND_PATTERNS.some(rx => rx.test(trimmed));
++  const withoutRedirects = trimmed.replace(SIMPLE_REDIRECTS, "");
++  if (!trimmed || UNSAFE_SHELL_CONSTRUCTS.test(withoutRedirects)) return false;
++
++  return splitShellTopLevel(trimmed, "logical").every(part => {
++    if (!part) return false;
++    return PIPE_OPERATOR.test(part)
++      ? isPipelineBounded(part)
++      : isSafeCommandPattern(part);
++  });
+ }
+ 
+ // Try to import security module — may not exist
+@@ -761,7 +829,25 @@ export function routePreToolUse(toolName, toolInput, projectDir, platform, sessi
+       return null;
+     }
+ 
+-    // allow all other Bash commands, but inject routing nudge (once per session)
++    // Non-structurally-bounded commands:
++    // Default: one-shot guidance nudge (existing behavior).
++    // CTX_STRICT_BASH=1: redirect to ctx_execute sandbox — output indexed to
++    // FTS5, model queries on demand. Full output preserved, nothing discarded.
++    if (process.env.CTX_STRICT_BASH === "1") {
++      const safeCmd = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
++      return {
++        action: "modify",
++        updatedInput: {
++          command: `echo "context-mode: Bash output redirected to sandbox. Use ${t("ctx_execute")}(language: \\"shell\\", code: \\"${safeCmd}\\") to run and index. Then ${t("ctx_search")}(queries: [...]) to query results. Full output preserved. Do NOT retry with plain Bash."`,
++        },
++        redirectMeta: {
++          tool: "Bash",
++          type: "bash-redirected",
++          bytesAvoided: 4096,
++          commandSummary: command.slice(0, 200),
++        },
++      };
++    }
+     return guidanceOnce("bash", bashGuidance, sessionId);
+   }
+ 
