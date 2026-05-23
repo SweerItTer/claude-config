@@ -32,11 +32,22 @@ NO_VERIFY=false
 FORCE=false
 SMOKE_TEST=false
 UPDATE=false
+UPDATE_THIRD_PARTY_REMOTE=false
 NO_PATCH=false
 ECC_FULL=false
 ECC_FOCUSED=false
 ECC_PROFILE=""
 ECC_MODULES=""
+ECC_SKILLS=""
+
+# Keep external/* submodules as the third-party source strategy for this change.
+THIRD_PARTY_SOURCES=(
+    "omc|external/oh-my-claudecode|git|https://github.com/Yeachan-Heo/oh-my-claudecode.git|omc"
+    "context-mode|external/context-mode|github|mksglu/context-mode|context-mode"
+    "ecc|external/everything-claude-code|github|affaan-m/everything-claude-code|"
+    "claude-plugins-official|external/claude-plugins-official|github|anthropics/claude-plugins-official|claude-plugins-official"
+    "superpowers|external/superpowers|git|https://github.com/obra/superpowers.git|superpowers"
+)
 
 log()   { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -44,6 +55,46 @@ err()   { echo -e "${RED}[ERR]${NC} $*"; }
 info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
 phase() { echo ""; echo -e "${BLUE}═══ $* ═══${NC}"; echo ""; }
 pass()  { echo -e "${BLUE}[PASS]${NC} $*"; }
+
+third_party_refresh_guidance() {
+    local path="$1"
+    local remote_flag="${2:-false}"
+    local update_cmd="git submodule update --init --recursive"
+    if [[ "$remote_flag" == true ]]; then
+        update_cmd+=" --remote"
+    fi
+    update_cmd+=" -- $path"
+    printf '请先运行 "git submodule sync --recursive -- %s"，再运行 "%s"；若仍失败，请检查网络或上游仓库可达性。' "$path" "$update_cmd"
+}
+
+refresh_third_party_submodules() {
+    local remote_flag="${1:-false}"
+    local spec name path source_kind source_ref marketplace_name
+
+    (
+        cd "$REPO_ROOT"
+        for spec in "${THIRD_PARTY_SOURCES[@]}"; do
+            IFS='|' read -r name path source_kind source_ref marketplace_name <<< "$spec"
+            info "同步第三方 source: $name"
+            if ! git submodule sync --recursive -- "$path"; then
+                err "第三方 source 刷新失败: $name ($path)。$(third_party_refresh_guidance "$path" "$remote_flag")"
+                return 1
+            fi
+
+            if [[ "$remote_flag" == true ]]; then
+                if ! git submodule update --init --recursive --remote -- "$path"; then
+                    err "第三方 source 刷新失败: $name ($path)。$(third_party_refresh_guidance "$path" "$remote_flag")"
+                    return 1
+                fi
+            else
+                if ! git submodule update --init --recursive -- "$path"; then
+                    err "第三方 source 刷新失败: $name ($path)。$(third_party_refresh_guidance "$path" "$remote_flag")"
+                    return 1
+                fi
+            fi
+        done
+    )
+}
 
 symlink_points_to() {
     local link="$1"
@@ -132,7 +183,13 @@ ensure_symlink() {
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] ln -sfn $src -> $dst"
+        if [[ -d "$dst" && ! -L "$dst" && "$FORCE" != true ]]; then
+            info "[DRY-RUN] would fail: $label 目标是已有目录，需 --force 才能替换 ($dst)"
+        elif [[ -e "$dst" || -L "$dst" ]]; then
+            info "[DRY-RUN] replace $dst with symlink to $src"
+        else
+            info "[DRY-RUN] ln -s $src -> $dst"
+        fi
         return 0
     fi
 
@@ -140,9 +197,16 @@ ensure_symlink() {
     if [[ -L "$dst" || -f "$dst" ]]; then
         rm -f "$dst"
     elif [[ -d "$dst" ]]; then
+        if [[ "$FORCE" != true ]]; then
+            err "$label 目标已存在且是目录: $dst。为避免删除用户维护内容，请先手动处理或使用 --force。"
+            return 1
+        fi
         rm -rf "$dst"
+    elif [[ -e "$dst" ]]; then
+        err "$label 目标已存在且类型不受支持: $dst"
+        return 1
     fi
-    ln -sfn "$src" "$dst"
+    ln -s "$src" "$dst"
     log "$label 已更新"
 }
 
@@ -300,22 +364,30 @@ ensure_claude_code() {
 }
 
 ensure_submodules() {
+    local remote_flag="${1:-false}"
+
     if [[ "$FORCE" == false ]] && submodules_clean; then
         pass "Submodules 已就绪"
         return 0
     fi
 
-    info "初始化 git submodules..."
+    info "初始化第三方 submodules..."
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] git submodule update --init --recursive"
+        local spec name path source_kind source_ref marketplace_name
+        for spec in "${THIRD_PARTY_SOURCES[@]}"; do
+            IFS='|' read -r name path source_kind source_ref marketplace_name <<< "$spec"
+            info "[DRY-RUN] git submodule sync --recursive -- $path"
+            if [[ "$remote_flag" == true ]]; then
+                info "[DRY-RUN] git submodule update --init --recursive --remote -- $path"
+            else
+                info "[DRY-RUN] git submodule update --init --recursive -- $path"
+            fi
+        done
         return 0
     fi
 
-    (
-        cd "$REPO_ROOT"
-        git submodule update --init --recursive
-    )
-    log "Submodules 就绪"
+    refresh_third_party_submodules "$remote_flag"
+    log "第三方 submodules 就绪"
 }
 
 update_repository() {
@@ -325,10 +397,23 @@ update_repository() {
     fi
 
     info "更新当前仓库与第三方 submodules..."
+    if [[ "$UPDATE_THIRD_PARTY_REMOTE" == true ]]; then
+        info "第三方 submodules 将显式刷新到上游最新；这可能产生 gitlink 变更"
+    else
+        info "第三方 submodules 使用当前仓库记录的 pinned 版本，避免日常 gitlink 噪音"
+    fi
     if [[ "$DRY_RUN" == true ]]; then
         info "[DRY-RUN] git pull --ff-only"
-        info "[DRY-RUN] git submodule sync --recursive"
-        info "[DRY-RUN] git submodule update --init --recursive --remote"
+        local spec name path source_kind source_ref marketplace_name
+        for spec in "${THIRD_PARTY_SOURCES[@]}"; do
+            IFS='|' read -r name path source_kind source_ref marketplace_name <<< "$spec"
+            info "[DRY-RUN] git submodule sync --recursive -- $path"
+            if [[ "$UPDATE_THIRD_PARTY_REMOTE" == true ]]; then
+                info "[DRY-RUN] git submodule update --init --recursive --remote -- $path"
+            else
+                info "[DRY-RUN] git submodule update --init --recursive -- $path"
+            fi
+        done
         info "[DRY-RUN] SETUP_UPDATE_REEXECED=true ./setup.sh ${ORIGINAL_ARGS[*]}"
         return 0
     fi
@@ -336,9 +421,8 @@ update_repository() {
     (
         cd "$REPO_ROOT"
         git pull --ff-only
-        git submodule sync --recursive
-        git submodule update --init --recursive --remote
     )
+    refresh_third_party_submodules "$UPDATE_THIRD_PARTY_REMOTE"
 
     export SETUP_UPDATE_REEXECED=true
     log "仓库与第三方 submodules 已更新"
@@ -350,8 +434,9 @@ ensure_core_config() {
     mkdir -p "$CLAUDE_HOME"
 
     ensure_managed_block "$REPO_ROOT/config/claude/CLAUDE.md" "$CLAUDE_HOME/CLAUDE.md" "Claude-Config" "CLAUDE.md 配置块"
+    remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md 旧 symlink" "$REPO_ROOT/config/claude/AGENTS.md"
 
-    for file in RTK.md AGENTS.md; do
+    for file in RTK.md; do
         local src="$REPO_ROOT/config/claude/$file"
         local dst="$CLAUDE_HOME/$file"
         [[ -f "$src" ]] || continue
@@ -414,6 +499,7 @@ generate_known_marketplaces() {
     fi
 
     mkdir -p "$CLAUDE_HOME/plugins"
+    THIRD_PARTY_SOURCES_JSON="$(printf '%s\n' "${THIRD_PARTY_SOURCES[@]}")" \
     python3 - "$REPO_ROOT" <<'PYEOF' > "$target"
 import json
 import os
@@ -421,23 +507,76 @@ import sys
 
 repo = sys.argv[1]
 ts = "2026-01-01T00:00:00.000Z"
-markets = {
-    "claude-plugins-official": {"source": {"source": "github", "repo": "anthropics/claude-plugins-official"}, "dir": "external/claude-plugins-official"},
-    "context-mode": {"source": {"source": "github", "repo": "mksglu/context-mode"}, "dir": "external/context-mode"},
-    "omc": {"source": {"source": "git", "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"}, "dir": "external/oh-my-claudecode"},
-    "superpowers": {"source": {"source": "git", "url": "https://github.com/obra/superpowers.git"}, "dir": "external/superpowers"},
-}
 out = {}
-for name, info in markets.items():
-    out[name] = {
-        "source": info["source"],
-        "installLocation": os.path.join(repo, info["dir"]),
+for raw in os.environ.get("THIRD_PARTY_SOURCES_JSON", "").splitlines():
+    if not raw:
+        continue
+    name, path, source_kind, source_ref, marketplace_name = raw.split("|", 4)
+    if not marketplace_name:
+        continue
+    if source_kind == "github":
+        source = {"source": "github", "repo": source_ref}
+    else:
+        source = {"source": "git", "url": source_ref}
+    out[marketplace_name] = {
+        "source": source,
+        "installLocation": os.path.join(repo, path),
         "lastUpdated": ts,
     }
 json.dump(out, sys.stdout, indent=4)
 print()
 PYEOF
     log "known_marketplaces.json 已生成"
+}
+
+verify_repository_cleanliness() {
+    if [[ "$NO_VERIFY" == true || "$DRY_RUN" == true ]]; then
+        info "跳过仓库洁净验证"
+        return 0
+    fi
+
+    local failed=0
+    local ignored_paths=(
+        "package.json"
+        "package-lock.json"
+        "config/omc/wiki/log.md"
+        "config/claude/AGENTS.md"
+    )
+
+    local path
+    for path in "${ignored_paths[@]}"; do
+        if git -C "$REPO_ROOT" ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+            err "路径仍被 git 跟踪，不能只依赖 .gitignore: $path"
+            failed=1
+        elif git -C "$REPO_ROOT" check-ignore -q -- "$path"; then
+            pass "已忽略且未跟踪: $path"
+        else
+            err "缺少忽略规则: $path"
+            failed=1
+        fi
+
+        if ! git -C "$REPO_ROOT" diff --quiet -- "$path"; then
+            err "路径仍产生 tracked diff: $path"
+            failed=1
+        fi
+    done
+
+    local session_log_probe="config/omc/wiki/session-log-setup-smoke.md"
+    if git -C "$REPO_ROOT" check-ignore -q -- "$session_log_probe"; then
+        pass "已忽略 OMC session-log 模式"
+    else
+        err "缺少 OMC session-log 忽略规则"
+        failed=1
+    fi
+
+    if git -C "$REPO_ROOT" ls-files 'config/omc/wiki/session-log-*.md' | grep -q .; then
+        err "仍有 OMC session-log 文件被 git 跟踪"
+        failed=1
+    else
+        pass "未跟踪 OMC session-log 文件"
+    fi
+
+    [[ $failed -eq 0 ]]
 }
 
 verify_core_config() {
@@ -455,14 +594,30 @@ verify_core_config() {
         failed=1
     fi
 
-    for file in RTK.md AGENTS.md; do
-        if symlink_points_to "$CLAUDE_HOME/$file" "$REPO_ROOT/config/claude/$file"; then
-            pass "$file symlink"
-        else
-            err "$file symlink 缺失"
+    if symlink_points_to "$CLAUDE_HOME/RTK.md" "$REPO_ROOT/config/claude/RTK.md"; then
+        pass "RTK.md symlink"
+    else
+        err "RTK.md symlink 缺失"
+        failed=1
+    fi
+
+    local agents_path="$CLAUDE_HOME/AGENTS.md"
+    if [[ ! -e "$agents_path" && ! -L "$agents_path" ]]; then
+        pass "AGENTS.md 未由核心配置接管"
+    elif [[ -L "$agents_path" ]]; then
+        local agents_target
+        agents_target="$(readlink -f "$agents_path" 2>/dev/null || true)"
+        if [[ "$agents_target" == "$REPO_ROOT/config/claude/AGENTS.md" ]]; then
+            err "AGENTS.md 不应再链接到仓库内第三方内容"
             failed=1
+        else
+            warn "AGENTS.md 是外部符号链接，核心 setup 不接管: $agents_path -> $agents_target"
         fi
-    done
+    elif [[ -f "$agents_path" ]]; then
+        info "AGENTS.md 是用户管理文件，核心 setup 不接管: $agents_path"
+    else
+        warn "AGENTS.md 存在但类型不常见，核心 setup 不接管: $agents_path"
+    fi
 
     if symlink_points_to "$CLAUDE_HOME/rules" "$REPO_ROOT/config/claude/rules"; then
         pass "rules symlink"
@@ -475,6 +630,22 @@ verify_core_config() {
         pass "rules-available symlink"
     else
         err "rules-available symlink 缺失"
+        failed=1
+    fi
+
+    if symlink_points_to "$CLAUDE_HOME/hooks/rules-loader.sh" "$REPO_ROOT/config/claude/hooks/rules-loader.sh"; then
+        pass "rules-loader hook"
+    else
+        err "rules-loader hook 缺失"
+        failed=1
+    fi
+
+    local cpo_src="$REPO_ROOT/external/claude-plugins-official"
+    local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
+    if [[ ! -d "$cpo_src" ]] || symlink_points_to "$cpo_dst" "$cpo_src"; then
+        pass "claude-plugins-official marketplace"
+    else
+        err "claude-plugins-official marketplace 缺失"
         failed=1
     fi
 
@@ -491,6 +662,8 @@ verify_core_config() {
         err "known_marketplaces.json 不存在"
         failed=1
     fi
+
+    verify_repository_cleanliness || failed=1
 
     [[ $failed -eq 0 ]]
 }
@@ -706,6 +879,7 @@ while [[ $# -gt 0 ]]; do
         --no-verify) NO_VERIFY=true; shift ;;
         --force) FORCE=true; shift ;;
         --update) UPDATE=true; shift ;;
+        --update-third-party) UPDATE_THIRD_PARTY_REMOTE=true; shift ;;
         --no-patch) NO_PATCH=true; shift ;;
         --smoke-test) SMOKE_TEST=true; shift ;;
         --ecc-full) ECC_FULL=true; shift ;;
@@ -717,6 +891,10 @@ while [[ $# -gt 0 ]]; do
         --ecc-modules)
             ECC_MODULES="${2:-}"
             [[ -n "$ECC_MODULES" ]] || { err "--ecc-modules 需要逗号分隔模块 ID"; exit 1; }
+            shift 2 ;;
+        --ecc-skills)
+            ECC_SKILLS="${2:-}"
+            [[ -n "$ECC_SKILLS" ]] || { err "--ecc-skills 需要逗号分隔 skill ID"; exit 1; }
             shift 2 ;;
         --uninstall)
             UNINSTALL="${2:-core}"
@@ -733,18 +911,25 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
-            echo "  --update        更新当前仓库与第三方 submodules；搭配 --force 可强制重跑安装器"
+            echo "  --update        更新当前仓库与 pinned submodules；搭配 --force 可强制重跑安装器"
+            echo "  --update-third-party  与 --update 搭配，显式刷新第三方 submodules 到上游最新（可能产生 gitlink 变更）"
             echo "  --no-patch      跳过 context-mode routing.mjs strict-bash 补丁"
             echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 冒烟检查"
             echo "  --ecc-full      安装 ECC full profile"
             echo "  --ecc-focused   安装 4 个基础 ECC 模块（agents/commands/hooks/workflow）"
             echo "  --ecc-profile P 安装 ECC 官方 profile: minimal/core/developer/security/research/full"
             echo "  --ecc-modules M 安装逗号分隔的 ECC 模块 ID"
+            echo "  --ecc-skills S 安装逗号分隔的 ECC skill ID allowlist"
             echo "  --uninstall [M] 卸载配置 (core=核心配置, ecc=含ECC, all=全部)"
             exit 0 ;;
         *) err "未知参数: $1"; exit 1 ;;
     esac
 done
+
+if [[ "$UPDATE_THIRD_PARTY_REMOTE" == true && "$UPDATE" != true ]]; then
+    err "--update-third-party 需要与 --update 搭配使用"
+    exit 1
+fi
 
 main() {
     echo ""
@@ -788,10 +973,12 @@ main() {
     ensure_claude_code
 
     phase "Phase 2: Git Submodules + 核心配置"
-    ensure_submodules
+    ensure_submodules "$UPDATE_THIRD_PARTY_REMOTE"
     ensure_core_config
 
     if [[ "$UPDATE" == true && "$FORCE" == false ]]; then
+        phase "Phase 3: CodeGraph"
+        run_installer codegraph true
         ensure_settings_json
         generate_known_marketplaces
         phase "Phase 5: 最终验证"
@@ -815,7 +1002,10 @@ main() {
         ecc_mode="profile:$ECC_PROFILE"
     elif [[ -n "$ECC_MODULES" ]]; then
         ecc_mode="modules:$ECC_MODULES"
+    elif [[ -n "$ECC_SKILLS" ]]; then
+        ecc_mode="skills:$ECC_SKILLS"
     fi
+    run_installer codegraph "$UPDATE"
     run_installer ecc "$ecc_mode"
     run_installer context-mode "$NO_PATCH"
     run_installer openspec

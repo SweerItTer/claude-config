@@ -4,6 +4,13 @@ config/claude/settings.json
 # Auto-generated OMC state at repo root
 .omc/
 
+# Generated/runtime artifacts excluded from portable config ownership
+/package.json
+/package-lock.json
+/config/omc/wiki/log.md
+/config/omc/wiki/session-log-*.md
+/config/claude/AGENTS.md
+
 # OS files
 .DS_Store
 Thumbs.db

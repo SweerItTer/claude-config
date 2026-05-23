@@ -27,8 +27,16 @@ ls ~/.claude/agents/ ~/.claude/commands/    # ECC agents + commands
 
 ```bash
 git -C ~/claude-config pull --recurse-submodules
-~/claude-config/setup.sh                    # 无 --force，仅收敛差异
+~/claude-config/setup.sh                    # 无 --force，仅收敛差异；第三方 submodules 使用仓库 pinned 版本
 ```
+
+默认更新不会推进第三方 submodule gitlink，避免每次追上游最新都产生主仓库索引变更。需要显式刷新第三方到上游最新时再运行：
+
+```bash
+~/claude-config/setup.sh --update --update-third-party
+```
+
+`--update-third-party` 可能产生 `external/*` gitlink 变更；确认后应作为一次有意的第三方版本更新提交。若未来需要“第三方永远最新且主仓库零 gitlink 变更”，应迁移到 setup 管理的 ignored vendor cache，而不是 tracked submodules。
 
 ## 按需扩展
 
@@ -56,6 +64,17 @@ cd ~/claude-config
 ./setup.sh --ecc-modules skill-java-coding-standards,skill-cpp-coding-standards
 ```
 
+只安装指定 ECC skill ID：`./setup.sh --ecc-skills <id,id,...>`。
+
+```bash
+# 查看可用 skill ID
+cd ~/claude-config/external/everything-claude-code && node scripts/install-plan.js --list-components --family skill
+
+# 预览只安装指定 skill
+cd ~/claude-config
+./setup.sh --dry-run --ecc-skills skill-stocktake
+```
+
 ECC 安装范围选项：
 
 | 命令 | 范围 |
@@ -64,6 +83,16 @@ ECC 安装范围选项：
 | `--ecc-full` | full profile |
 | `--ecc-profile <name>` | minimal / core / developer / security / research |
 | `--ecc-modules <ids>` | 逗号分隔的模块 ID |
+| `--ecc-skills <ids>` | 逗号分隔的 ECC skill ID allowlist |
+
+同时传多个范围参数时，setup 按 `--ecc-full` → `--ecc-focused` → `--ecc-profile` → `--ecc-modules` → `--ecc-skills` 选择安装范围。
+
+### CodeGraph
+
+- `setup.sh` 会安装并验证 CodeGraph。
+- Linux/macOS 优先使用上游 shell installer；失败时回退到全局 `npm i -g @colbymchenry/codegraph@latest`。
+- 若现有 `codegraph --version` 已可用，常规运行会跳过重装；`--update` 或 `--force` 可刷新安装。
+- setup 默认不会运行 `codegraph init`，不会在任意仓库创建 `.codegraph/`；仅做轻量可用性校验。
 
 ## 故障回退
 

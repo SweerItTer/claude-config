@@ -11,17 +11,21 @@ FORCE="${3:-false}"
 INSTALL_MODE="${4:-interactive}"
 REQUEST_PROFILE=""
 REQUEST_MODULES=""
+REQUEST_SKILLS=""
 if [[ "$INSTALL_MODE" == profile:* ]]; then
     REQUEST_PROFILE="${INSTALL_MODE#profile:}"
     INSTALL_MODE="profile"
 elif [[ "$INSTALL_MODE" == modules:* ]]; then
     REQUEST_MODULES="${INSTALL_MODE#modules:}"
     INSTALL_MODE="modules"
+elif [[ "$INSTALL_MODE" == skills:* ]]; then
+    REQUEST_SKILLS="${INSTALL_MODE#skills:}"
+    INSTALL_MODE="skills"
 fi
 
 validate_mode() {
     case "$INSTALL_MODE" in
-        interactive|focused|full|profile|modules) ;;
+        interactive|focused|full|profile|modules|skills) ;;
         *) err "未知 ECC 安装模式: $INSTALL_MODE"; exit 1 ;;
     esac
     if [[ "$INSTALL_MODE" == profile && -z "$REQUEST_PROFILE" ]]; then
@@ -30,6 +34,10 @@ validate_mode() {
     fi
     if [[ "$INSTALL_MODE" == modules && -z "$REQUEST_MODULES" ]]; then
         err "ECC modules 不能为空"
+        exit 1
+    fi
+    if [[ "$INSTALL_MODE" == skills && -z "$REQUEST_SKILLS" ]]; then
+        err "ECC skills 不能为空"
         exit 1
     fi
 }
@@ -41,6 +49,7 @@ INSTALL_STATE="$CLAUDE_HOME/ecc/install-state.json"
 AGENTS_DST="$CLAUDE_HOME/agents"
 COMMANDS_DST="$CLAUDE_HOME/commands"
 RULES_DST="$CLAUDE_HOME/rules/ecc"
+SKILLS_DST="$CLAUDE_HOME/skills/ecc"
 REQUIRED_CUSTOM_AGENTS=(git.md progress.md rules.md validation.md)
 # rules-core 已移除 — ~/claude-config/config/claude/rules/ 已包含精心策划的规则，
 # 安装 ECC 的 rules-core 会灌入 19 种语言的 110 个文件（~228KB），造成上下文膨胀。
@@ -55,8 +64,10 @@ OPTIONAL_ECC_INSTALLS=(
     "./setup.sh --ecc-full: 安装 ECC full profile"
     "./setup.sh --ecc-profile <name>: 安装官方 profile (minimal/core/developer/security/research/full)"
     "./setup.sh --ecc-modules <id,id,...>: 安装指定 ECC 模块"
+    "./setup.sh --ecc-skills <id,id,...>: 只安装指定 ECC skill ID"
     "external/everything-claude-code/install.sh --target claude --profile <name>: 直接调用 ECC 官方 profile 安装"
     "external/everything-claude-code/install.sh --target claude --modules <id,id,...>: 直接调用 ECC 官方模块安装"
+    "external/everything-claude-code/install.sh --target claude --skills <id,id,...>: 直接调用 ECC 官方 skill 安装"
 )
 
 # ECC rules-core 模块有 "defaultInstall": true，无论传什么 --modules 都会被强制安装。
@@ -90,20 +101,42 @@ custom_agents_ready() {
     return 0
 }
 
+skills_ready() {
+    local skill
+    IFS=',' read -ra skills <<< "$REQUEST_SKILLS"
+    for skill in "${skills[@]}"; do
+        [[ -d "$SKILLS_DST/$skill" ]] || return 1
+    done
+    return 0
+}
+
 mode_install_args() {
     case "$INSTALL_MODE" in
         full) printf '%s\n' --profile full --target claude ;;
         focused) printf '%s\n' --target claude --modules "$(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")" ;;
         profile) printf '%s\n' --target claude --profile "$REQUEST_PROFILE" ;;
         modules) printf '%s\n' --target claude --modules "$REQUEST_MODULES" ;;
+        skills) printf '%s\n' --target claude --skills "$REQUEST_SKILLS" ;;
         *) return 1 ;;
     esac
+}
+
+validate_skills_allowlist() {
+    [[ "$INSTALL_MODE" == "skills" ]] || return 0
+    [[ "$DRY_RUN" == true ]] && info "[DRY-RUN] validate ECC skills allowlist: $REQUEST_SKILLS"
+    (
+        cd "$ECC_DIR"
+        node scripts/install-plan.js --skills "$REQUEST_SKILLS" --target claude --json >/dev/null
+    ) || {
+        err "ECC skills allowlist 无效: $REQUEST_SKILLS"
+        return 1
+    }
 }
 
 expected_request_ready() {
     [[ "$INSTALL_MODE" != "interactive" ]] || return 1
     [[ -f "$INSTALL_STATE" ]] || return 1
-    INSTALL_MODE="$INSTALL_MODE" REQUEST_PROFILE="$REQUEST_PROFILE" REQUEST_MODULES="$REQUEST_MODULES" FOCUSED_MODULES_CSV="$(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")" python3 - "$INSTALL_STATE" <<'PYEOF'
+    INSTALL_MODE="$INSTALL_MODE" REQUEST_PROFILE="$REQUEST_PROFILE" REQUEST_MODULES="$REQUEST_MODULES" REQUEST_SKILLS="$REQUEST_SKILLS" FOCUSED_MODULES_CSV="$(IFS=,; printf '%s' "${FOCUSED_MODULES[*]}")" python3 - "$INSTALL_STATE" <<'PYEOF'
 import json
 import os
 import sys
@@ -119,6 +152,8 @@ if mode == 'profile':
 expected = [item for item in os.environ['FOCUSED_MODULES_CSV'].split(',') if item]
 if mode == 'modules':
     expected = [item for item in os.environ.get('REQUEST_MODULES', '').split(',') if item]
+if mode == 'skills':
+    expected = [f"skill-{item}" for item in os.environ.get('REQUEST_SKILLS', '').split(',') if item]
 actual = request.get('modules') if isinstance(request.get('modules'), list) else []
 sys.exit(0 if sorted(actual) == sorted(expected) else 1)
 PYEOF
@@ -139,6 +174,9 @@ print_install_scope() {
         modules)
             info "ECC 安装范围: 指定模块 '$REQUEST_MODULES'"
             ;;
+        skills)
+            info "ECC 安装范围: 指定 skills '$REQUEST_SKILLS'"
+            ;;
         interactive)
             info "ECC 需要选择安装范围；普通用户路径不会自动预设。"
             info "可选安装方式:"
@@ -147,6 +185,7 @@ print_install_scope() {
                 info "  - $item"
             done
             info "查看完整模块: (cd $ECC_DIR && node scripts/install-plan.js --list-modules)"
+            info "查看完整 skills: (cd $ECC_DIR && node scripts/install-plan.js --list-components --family skills --target claude)"
             ;;
     esac
 }
@@ -155,6 +194,10 @@ is_ready() {
     [[ -d "$ECC_DIR/node_modules" ]] || return 1
     [[ -f "$INSTALL_STATE" ]] || return 1
     expected_request_ready || return 1
+    if [[ "$INSTALL_MODE" == "skills" ]]; then
+        skills_ready || return 1
+        return 0
+    fi
     [[ -d "$AGENTS_DST" ]] || return 1
     [[ -d "$COMMANDS_DST" ]] || return 1
     custom_agents_ready || return 1
@@ -213,20 +256,28 @@ install() {
         ok "ECC node_modules 已存在"
     fi
 
+    validate_skills_allowlist
+
     if [[ "$DRY_RUN" == true ]]; then
         print_install_scope
-        info "[DRY-RUN] 移除旧 agents/commands 符号链接"
         local args=()
         mapfile -t args < <(mode_install_args)
+        if [[ "$INSTALL_MODE" != "skills" ]]; then
+            info "[DRY-RUN] 移除旧 agents/commands 符号链接"
+        fi
         info "[DRY-RUN] (cd $ECC_DIR && ./install.sh ${args[*]})"
-        info "[DRY-RUN] cp $CUSTOM_AGENTS_DIR/*.md -> $AGENTS_DST/"
+        if [[ "$INSTALL_MODE" != "skills" ]]; then
+            info "[DRY-RUN] cp $CUSTOM_AGENTS_DIR/*.md -> $AGENTS_DST/"
+        fi
         info "[DRY-RUN] cleanup_ecc_rules (移动 $RULES_DST/ → \$CLAUDE_HOME/rules-available/ecc/)"
         return 0
     fi
 
     print_install_scope
 
-    remove_legacy_links
+    if [[ "$INSTALL_MODE" != "skills" ]]; then
+        remove_legacy_links
+    fi
     info "运行 ECC 官方安装器..."
     (
         cd "$ECC_DIR"
@@ -235,7 +286,9 @@ install() {
         ./install.sh "${args[@]}" > /dev/null 2>&1
     )
     ok "ECC 官方安装完成"
-    overlay_custom_agents
+    if [[ "$INSTALL_MODE" != "skills" ]]; then
+        overlay_custom_agents
+    fi
     cleanup_ecc_rules
 }
 
@@ -248,6 +301,11 @@ verify() {
     [[ -d "$ECC_DIR/node_modules" ]] || { err "ECC node_modules 不存在"; return 1; }
     [[ -f "$INSTALL_STATE" ]] || { err "ECC install-state 不存在"; return 1; }
     expected_request_ready || { err "ECC install-state 与期望安装范围不一致"; return 1; }
+    if [[ "$INSTALL_MODE" == "skills" ]]; then
+        skills_ready || { err "ECC allowlisted skills 未安装完整"; return 1; }
+        ok "ECC verify 通过"
+        return 0
+    fi
     [[ -d "$AGENTS_DST" ]] || { err "ECC agents 目录不存在"; return 1; }
     [[ ! -L "$AGENTS_DST" ]] || { err "ECC agents 不应为符号链接"; return 1; }
     [[ -d "$COMMANDS_DST" ]] || { err "ECC commands 目录不存在"; return 1; }
