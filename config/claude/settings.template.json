@@ -114,6 +114,15 @@
                 "hooks": [
                     {
                         "type": "command",
+                        "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/pretooluse.mjs"
+                    }
+                ]
+            },
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
                         "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rtk-rewrite.sh"
                     }
                 ]

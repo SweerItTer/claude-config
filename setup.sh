@@ -914,6 +914,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --update        更新当前仓库与 pinned submodules；搭配 --force 可强制重跑安装器"
             echo "  --update-third-party  与 --update 搭配，显式刷新第三方 submodules 到上游最新（可能产生 gitlink 变更）"
             echo "  --no-patch      跳过 context-mode routing.mjs strict-bash 补丁"
+            echo "  环境变量        CTX_INSTALL_MODE=auto|symlink|copy 控制 context-mode 安装方式 (默认 auto: symlink 失败自动 copy)"
             echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 冒烟检查"
             echo "  --ecc-full      安装 ECC full profile"
             echo "  --ecc-focused   安装 4 个基础 ECC 模块（agents/commands/hooks/workflow）"
