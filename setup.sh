@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # Claude Code Config Migration — 一键初始化脚本 v3
-# 用法: git clone --recurse-submodules <repo-url> && ./setup.sh
+# 用法: git clone <repo-url> && ./setup.sh
 # ============================================================
 set -euo pipefail
 
@@ -40,14 +40,8 @@ ECC_PROFILE=""
 ECC_MODULES=""
 ECC_SKILLS=""
 
-# Keep external/* submodules as the third-party source strategy for this change.
-THIRD_PARTY_SOURCES=(
-    "omc|external/oh-my-claudecode|git|https://github.com/Yeachan-Heo/oh-my-claudecode.git|omc"
-    "context-mode|external/context-mode|github|mksglu/context-mode|context-mode"
-    "ecc|external/everything-claude-code|github|affaan-m/everything-claude-code|"
-    "claude-plugins-official|external/claude-plugins-official|github|anthropics/claude-plugins-official|claude-plugins-official"
-    "superpowers|external/superpowers|git|https://github.com/obra/superpowers.git|superpowers"
-)
+KNOWN_MARKETPLACES_CONFIG="$REPO_ROOT/config/known_marketplaces.json"
+EXTERNAL_DIR="$REPO_ROOT/external"
 
 log()   { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -55,46 +49,6 @@ err()   { echo -e "${RED}[ERR]${NC} $*"; }
 info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
 phase() { echo ""; echo -e "${BLUE}═══ $* ═══${NC}"; echo ""; }
 pass()  { echo -e "${BLUE}[PASS]${NC} $*"; }
-
-third_party_refresh_guidance() {
-    local path="$1"
-    local remote_flag="${2:-false}"
-    local update_cmd="git submodule update --init --recursive"
-    if [[ "$remote_flag" == true ]]; then
-        update_cmd+=" --remote"
-    fi
-    update_cmd+=" -- $path"
-    printf '请先运行 "git submodule sync --recursive -- %s"，再运行 "%s"；若仍失败，请检查网络或上游仓库可达性。' "$path" "$update_cmd"
-}
-
-refresh_third_party_submodules() {
-    local remote_flag="${1:-false}"
-    local spec name path source_kind source_ref marketplace_name
-
-    (
-        cd "$REPO_ROOT"
-        for spec in "${THIRD_PARTY_SOURCES[@]}"; do
-            IFS='|' read -r name path source_kind source_ref marketplace_name <<< "$spec"
-            info "同步第三方 source: $name"
-            if ! git submodule sync --recursive -- "$path"; then
-                err "第三方 source 刷新失败: $name ($path)。$(third_party_refresh_guidance "$path" "$remote_flag")"
-                return 1
-            fi
-
-            if [[ "$remote_flag" == true ]]; then
-                if ! git submodule update --init --recursive --remote -- "$path"; then
-                    err "第三方 source 刷新失败: $name ($path)。$(third_party_refresh_guidance "$path" "$remote_flag")"
-                    return 1
-                fi
-            else
-                if ! git submodule update --init --recursive -- "$path"; then
-                    err "第三方 source 刷新失败: $name ($path)。$(third_party_refresh_guidance "$path" "$remote_flag")"
-                    return 1
-                fi
-            fi
-        done
-    )
-}
 
 symlink_points_to() {
     local link="$1"
@@ -321,13 +275,6 @@ with open(path, 'w', encoding='utf-8') as fh:
 PYEOF
 }
 
-submodules_clean() {
-    (
-        cd "$REPO_ROOT"
-        [[ $(git submodule status | grep -c '^-') -eq 0 ]]
-    )
-}
-
 ensure_claude_code() {
     local claude_bootstrap=false
 
@@ -363,31 +310,251 @@ ensure_claude_code() {
     [[ "$claude_bootstrap" == false ]] && pass "Claude Code 已就绪"
 }
 
-ensure_submodules() {
-    local remote_flag="${1:-false}"
+normalize_git_url() {
+    local url="$1"
+    url="${url#git+}"
+    url="${url%.git}"
+    url="${url%/}"
+    printf '%s' "$url"
+}
 
-    if [[ "$FORCE" == false ]] && submodules_clean; then
-        pass "Submodules 已就绪"
-        return 0
+remote_urls_compatible() {
+    local configured="$1"
+    local existing="$2"
+    [[ "$(normalize_git_url "$configured")" == "$(normalize_git_url "$existing")" ]]
+}
+
+safe_external_target() {
+    local target="$1"
+    [[ "$target" == "$EXTERNAL_DIR"/* ]] || return 1
+    [[ "$target" != "$EXTERNAL_DIR" ]]
+}
+
+list_third_party_sources() {
+    KNOWN_MARKETPLACES_CONFIG="$KNOWN_MARKETPLACES_CONFIG" \
+    REPO_ROOT="$REPO_ROOT" \
+    EXTERNAL_DIR="$EXTERNAL_DIR" \
+    python3 - <<'PYEOF'
+import json
+import os
+import sys
+from pathlib import Path
+
+config_path = Path(os.environ['KNOWN_MARKETPLACES_CONFIG'])
+repo_root = Path(os.environ['REPO_ROOT']).resolve()
+external_dir = Path(os.environ['EXTERNAL_DIR']).resolve()
+
+if not config_path.is_file():
+    print(f"known marketplaces config not found: {config_path}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    data = json.loads(config_path.read_text(encoding='utf-8'))
+except json.JSONDecodeError as exc:
+    print(f"invalid JSON in {config_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(data, dict):
+    print(f"invalid {config_path}: top-level value must be an object", file=sys.stderr)
+    sys.exit(1)
+
+for name, entry in data.items():
+    if not isinstance(name, str) or not name:
+        print(f"invalid {config_path}: marketplace names must be non-empty strings", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(entry, dict):
+        print(f"invalid {config_path}: entry {name!r} must be an object", file=sys.stderr)
+        sys.exit(1)
+
+    source = entry.get('source')
+    if not isinstance(source, dict):
+        print(f"invalid {config_path}: entry {name!r} missing source object", file=sys.stderr)
+        sys.exit(1)
+
+    source_kind = source.get('source')
+    if source_kind == 'github':
+        source_ref = source.get('repo')
+        if not isinstance(source_ref, str) or '/' not in source_ref or source_ref.count('/') != 1:
+            print(f"invalid {config_path}: entry {name!r} github source requires repo like owner/name", file=sys.stderr)
+            sys.exit(1)
+        clone_url = f"https://github.com/{source_ref}.git"
+    elif source_kind == 'git':
+        source_ref = source.get('url')
+        if not isinstance(source_ref, str) or not source_ref:
+            print(f"invalid {config_path}: entry {name!r} git source requires url", file=sys.stderr)
+            sys.exit(1)
+        clone_url = source_ref
+    else:
+        print(f"invalid {config_path}: entry {name!r} has unsupported source.source {source_kind!r}", file=sys.stderr)
+        sys.exit(1)
+
+    install_location = entry.get('installLocation')
+    if not isinstance(install_location, str) or not install_location:
+        print(f"invalid {config_path}: entry {name!r} requires installLocation", file=sys.stderr)
+        sys.exit(1)
+
+    if install_location.startswith('REPO_ROOT/'):
+        resolved = (repo_root / install_location[len('REPO_ROOT/'):]).resolve()
+    elif install_location == 'REPO_ROOT':
+        print(f"invalid {config_path}: entry {name!r} installLocation must be under REPO_ROOT/external", file=sys.stderr)
+        sys.exit(1)
+    elif os.path.isabs(install_location):
+        resolved = Path(install_location).resolve()
+        try:
+            resolved.relative_to(repo_root)
+        except ValueError:
+            print(f"invalid {config_path}: entry {name!r} absolute installLocation is outside repo root", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print(f"invalid {config_path}: entry {name!r} installLocation must use REPO_ROOT/... or a repo-local absolute path", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        resolved.relative_to(external_dir)
+    except ValueError:
+        print(f"invalid {config_path}: entry {name!r} installLocation must resolve under {external_dir}", file=sys.stderr)
+        sys.exit(1)
+    if resolved == external_dir:
+        print(f"invalid {config_path}: entry {name!r} installLocation must be a child of {external_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    print('\t'.join([name, source_kind, source_ref, clone_url, str(resolved)]))
+PYEOF
+}
+
+remove_and_clone_third_party_source() {
+    local name="$1"
+    local clone_url="$2"
+    local target="$3"
+    local reason="$4"
+
+    if ! safe_external_target "$target"; then
+        err "拒绝删除不安全路径: $target"
+        return 1
     fi
 
-    info "初始化第三方 submodules..."
     if [[ "$DRY_RUN" == true ]]; then
-        local spec name path source_kind source_ref marketplace_name
-        for spec in "${THIRD_PARTY_SOURCES[@]}"; do
-            IFS='|' read -r name path source_kind source_ref marketplace_name <<< "$spec"
-            info "[DRY-RUN] git submodule sync --recursive -- $path"
-            if [[ "$remote_flag" == true ]]; then
-                info "[DRY-RUN] git submodule update --init --recursive --remote -- $path"
-            else
-                info "[DRY-RUN] git submodule update --init --recursive -- $path"
-            fi
-        done
+        info "[DRY-RUN] remove $target ($reason)"
+        info "[DRY-RUN] git clone --depth=1 $clone_url $target"
         return 0
     fi
 
-    refresh_third_party_submodules "$remote_flag"
-    log "第三方 submodules 就绪"
+    rm -rf "$target"
+    git clone --depth=1 "$clone_url" "$target"
+    log "第三方 source 已重新克隆: $name"
+}
+
+refresh_existing_third_party_source() {
+    local name="$1"
+    local clone_url="$2"
+    local target="$3"
+    local origin_url branch remote_branch
+
+    origin_url="$(git -C "$target" remote get-url origin 2>/dev/null || true)"
+    if [[ -z "$origin_url" ]]; then
+        if [[ "$FORCE" == true ]]; then
+            remove_and_clone_third_party_source "$name" "$clone_url" "$target" "missing origin remote"
+            return $?
+        fi
+        err "第三方 source 缺少 origin remote: $name ($target)。使用 --force 可删除并重新 clone。"
+        return 1
+    fi
+
+    if ! remote_urls_compatible "$clone_url" "$origin_url"; then
+        if [[ "$FORCE" == true ]]; then
+            remove_and_clone_third_party_source "$name" "$clone_url" "$target" "origin remote mismatch: $origin_url"
+            return $?
+        fi
+        err "第三方 source origin 不匹配: $name ($target)。配置: $clone_url，当前: $origin_url。使用 --force 可删除并重新 clone。"
+        return 1
+    fi
+
+    if ! git -C "$target" diff --quiet -- || ! git -C "$target" diff --cached --quiet -- || [[ -n "$(git -C "$target" ls-files --others --exclude-standard)" ]]; then
+        if [[ "$FORCE" == true ]]; then
+            remove_and_clone_third_party_source "$name" "$clone_url" "$target" "dirty checkout"
+            return $?
+        fi
+        err "第三方 source 有本地修改: $name ($target)。请先提交/清理，或使用 --force 删除并重新 clone。"
+        return 1
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] refresh shallow checkout $name at $target from $clone_url"
+        info "[DRY-RUN] git -C $target fetch --depth=1 origin"
+        info "[DRY-RUN] checkout origin default branch or current upstream branch, then reset --hard"
+        return 0
+    fi
+
+    git -C "$target" fetch --depth=1 origin
+    remote_branch="$(git -C "$target" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+    branch="$(git -C "$target" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$target" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        remote_branch="$branch"
+    fi
+    if [[ -n "$remote_branch" ]] && git -C "$target" show-ref --verify --quiet "refs/remotes/origin/$remote_branch"; then
+        git -C "$target" checkout -B "$remote_branch" "origin/$remote_branch"
+        git -C "$target" reset --hard "origin/$remote_branch"
+    else
+        git -C "$target" checkout --detach FETCH_HEAD
+        git -C "$target" reset --hard FETCH_HEAD
+    fi
+    log "第三方 source 已刷新: $name"
+}
+
+sync_third_party_source() {
+    local name="$1"
+    local source_kind="$2"
+    local source_ref="$3"
+    local clone_url="$4"
+    local target="$5"
+
+    if ! safe_external_target "$target"; then
+        err "第三方 source 路径不安全: $name ($target)"
+        return 1
+    fi
+
+    if [[ ! -e "$target" && ! -L "$target" ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] git clone --depth=1 $clone_url $target ($name from $source_kind:$source_ref)"
+            return 0
+        fi
+        git clone --depth=1 "$clone_url" "$target"
+        log "第三方 source 已克隆: $name"
+        return 0
+    fi
+
+    if [[ ! -d "$target/.git" && ! -f "$target/.git" ]]; then
+        if [[ "$FORCE" == true ]]; then
+            remove_and_clone_third_party_source "$name" "$clone_url" "$target" "non-git destination"
+            return $?
+        fi
+        err "第三方 source 目标已存在但不是 git checkout: $name ($target)。使用 --force 可删除并重新 clone。"
+        return 1
+    fi
+
+    refresh_existing_third_party_source "$name" "$clone_url" "$target"
+}
+
+ensure_third_party_sources() {
+    info "读取 marketplace source 配置: $KNOWN_MARKETPLACES_CONFIG"
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] mkdir -p $EXTERNAL_DIR"
+    else
+        mkdir -p "$EXTERNAL_DIR"
+    fi
+
+    local sources name source_kind source_ref clone_url target
+    if ! sources="$(list_third_party_sources)"; then
+        return 1
+    fi
+
+    while IFS=$'\t' read -r name source_kind source_ref clone_url target; do
+        [[ -n "$name" ]] || continue
+        info "准备第三方 source: $name -> $target"
+        sync_third_party_source "$name" "$source_kind" "$source_ref" "$clone_url" "$target"
+    done <<< "$sources"
+
+    log "配置中的第三方仓库已准备为最新 shallow checkout"
 }
 
 update_repository() {
@@ -396,24 +563,13 @@ update_repository() {
         return 0
     fi
 
-    info "更新当前仓库与第三方 submodules..."
+    info "更新当前仓库与配置中的第三方仓库..."
     if [[ "$UPDATE_THIRD_PARTY_REMOTE" == true ]]; then
-        info "第三方 submodules 将显式刷新到上游最新；这可能产生 gitlink 变更"
-    else
-        info "第三方 submodules 使用当前仓库记录的 pinned 版本，避免日常 gitlink 噪音"
+        info "兼容标志 --update-third-party 已启用：第三方仓库会刷新到最新 shallow checkout"
     fi
     if [[ "$DRY_RUN" == true ]]; then
         info "[DRY-RUN] git pull --ff-only"
-        local spec name path source_kind source_ref marketplace_name
-        for spec in "${THIRD_PARTY_SOURCES[@]}"; do
-            IFS='|' read -r name path source_kind source_ref marketplace_name <<< "$spec"
-            info "[DRY-RUN] git submodule sync --recursive -- $path"
-            if [[ "$UPDATE_THIRD_PARTY_REMOTE" == true ]]; then
-                info "[DRY-RUN] git submodule update --init --recursive --remote -- $path"
-            else
-                info "[DRY-RUN] git submodule update --init --recursive -- $path"
-            fi
-        done
+        ensure_third_party_sources
         info "[DRY-RUN] SETUP_UPDATE_REEXECED=true ./setup.sh ${ORIGINAL_ARGS[*]}"
         return 0
     fi
@@ -422,10 +578,10 @@ update_repository() {
         cd "$REPO_ROOT"
         git pull --ff-only
     )
-    refresh_third_party_submodules "$UPDATE_THIRD_PARTY_REMOTE"
+    ensure_third_party_sources
 
     export SETUP_UPDATE_REEXECED=true
-    log "仓库与第三方 submodules 已更新"
+    log "仓库与配置中的第三方仓库已更新"
     info "重新执行 setup 以加载更新后的脚本..."
     exec "$REPO_ROOT/setup.sh" "${ORIGINAL_ARGS[@]}"
 }
@@ -489,44 +645,42 @@ ensure_settings_json() {
     log "settings.json 已生成"
 }
 
-generate_known_marketplaces() {
+copy_known_marketplaces() {
     local target="$CLAUDE_HOME/plugins/known_marketplaces.json"
 
-    info "生成 known_marketplaces.json..."
+    info "同步 known_marketplaces.json..."
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] write $target"
+        info "[DRY-RUN] copy $KNOWN_MARKETPLACES_CONFIG to $target with REPO_ROOT resolved to $REPO_ROOT"
         return 0
     fi
 
     mkdir -p "$CLAUDE_HOME/plugins"
-    THIRD_PARTY_SOURCES_JSON="$(printf '%s\n' "${THIRD_PARTY_SOURCES[@]}")" \
-    python3 - "$REPO_ROOT" <<'PYEOF' > "$target"
+    KNOWN_MARKETPLACES_CONFIG="$KNOWN_MARKETPLACES_CONFIG" \
+    REPO_ROOT="$REPO_ROOT" \
+    python3 - <<'PYEOF' > "$target"
 import json
 import os
 import sys
+from pathlib import Path
 
-repo = sys.argv[1]
-ts = "2026-01-01T00:00:00.000Z"
-out = {}
-for raw in os.environ.get("THIRD_PARTY_SOURCES_JSON", "").splitlines():
-    if not raw:
-        continue
-    name, path, source_kind, source_ref, marketplace_name = raw.split("|", 4)
-    if not marketplace_name:
-        continue
-    if source_kind == "github":
-        source = {"source": "github", "repo": source_ref}
-    else:
-        source = {"source": "git", "url": source_ref}
-    out[marketplace_name] = {
-        "source": source,
-        "installLocation": os.path.join(repo, path),
-        "lastUpdated": ts,
-    }
-json.dump(out, sys.stdout, indent=4)
+config_path = Path(os.environ['KNOWN_MARKETPLACES_CONFIG'])
+repo_root = os.environ['REPO_ROOT']
+with config_path.open('r', encoding='utf-8') as fh:
+    data = json.load(fh)
+
+def resolve(value):
+    if isinstance(value, str) and value.startswith('REPO_ROOT/'):
+        return str(Path(repo_root) / value[len('REPO_ROOT/'):])
+    return value
+
+for entry in data.values():
+    if isinstance(entry, dict) and 'installLocation' in entry:
+        entry['installLocation'] = resolve(entry['installLocation'])
+
+json.dump(data, sys.stdout, indent=4, ensure_ascii=False)
 print()
 PYEOF
-    log "known_marketplaces.json 已生成"
+    log "known_marketplaces.json 已同步"
 }
 
 verify_repository_cleanliness() {
@@ -879,7 +1033,7 @@ while [[ $# -gt 0 ]]; do
         --no-verify) NO_VERIFY=true; shift ;;
         --force) FORCE=true; shift ;;
         --update) UPDATE=true; shift ;;
-        --update-third-party) UPDATE_THIRD_PARTY_REMOTE=true; shift ;;
+        --update-third-party) UPDATE=true; UPDATE_THIRD_PARTY_REMOTE=true; shift ;;
         --no-patch) NO_PATCH=true; shift ;;
         --smoke-test) SMOKE_TEST=true; shift ;;
         --ecc-full) ECC_FULL=true; shift ;;
@@ -911,8 +1065,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
-            echo "  --update        更新当前仓库与 pinned submodules；搭配 --force 可强制重跑安装器"
-            echo "  --update-third-party  与 --update 搭配，显式刷新第三方 submodules 到上游最新（可能产生 gitlink 变更）"
+            echo "  --update        更新当前仓库与配置中的第三方仓库；搭配 --force 可强制重跑安装器"
+            echo "  --update-third-party  兼容别名：刷新配置中的第三方仓库到最新 shallow checkout"
             echo "  --no-patch      跳过 context-mode routing.mjs strict-bash 补丁"
             echo "  环境变量        CTX_INSTALL_MODE=auto|symlink|copy 控制 context-mode 安装方式 (默认 auto: symlink 失败自动 copy)"
             echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 冒烟检查"
@@ -926,11 +1080,6 @@ while [[ $# -gt 0 ]]; do
         *) err "未知参数: $1"; exit 1 ;;
     esac
 done
-
-if [[ "$UPDATE_THIRD_PARTY_REMOTE" == true && "$UPDATE" != true ]]; then
-    err "--update-third-party 需要与 --update 搭配使用"
-    exit 1
-fi
 
 main() {
     echo ""
@@ -953,8 +1102,8 @@ main() {
 
     [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
     [[ "$CI_MODE" == true ]] && info "CI 模式"
-    [[ "$UPDATE" == true && "$FORCE" == true ]] && info "Update 模式 — 将更新仓库/submodules 并强制重跑安装器"
-    [[ "$UPDATE" == true && "$FORCE" == false ]] && info "Update 模式 — 将更新仓库/submodules；不会重跑第三方安装器"
+    [[ "$UPDATE" == true && "$FORCE" == true ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库，并强制重跑安装器"
+    [[ "$UPDATE" == true && "$FORCE" == false ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库；不会重跑第三方安装器"
 
     if [[ "$UPDATE" == true ]]; then
         phase "Phase 0: 仓库更新"
@@ -973,15 +1122,15 @@ main() {
     phase "Phase 1: Claude Code"
     ensure_claude_code
 
-    phase "Phase 2: Git Submodules + 核心配置"
-    ensure_submodules "$UPDATE_THIRD_PARTY_REMOTE"
+    phase "Phase 2: 第三方源码 + 核心配置"
+    ensure_third_party_sources
     ensure_core_config
 
     if [[ "$UPDATE" == true && "$FORCE" == false ]]; then
         phase "Phase 3: CodeGraph"
         run_installer codegraph true
         ensure_settings_json
-        generate_known_marketplaces
+        copy_known_marketplaces
         phase "Phase 5: 最终验证"
         verify_core_config
         run_final_doctor
@@ -1016,7 +1165,7 @@ main() {
     run_installer omc
     run_installer rtk
     run_installer superpowers
-    generate_known_marketplaces
+    copy_known_marketplaces
     clean_installed_plugins_json
 
     phase "Phase 5: 最终验证"

@@ -18,10 +18,10 @@ GLOBAL_OMC_COMPANION="$CLAUDE_HOME/CLAUDE-omc.md"
 LOCAL_CLAUDE_MD="$REPO_ROOT/.claude/CLAUDE.md"
 
 LEGACY_SKILLS=(
-    omc-reference omc-setup omc-doctor ai-slop-cleaner autodoc autopilot autoresearch
+    omc-setup omc-doctor ai-slop-cleaner autodoc autopilot autoresearch
     cancel ccg configure-notifications context-mode ctx-doctor ctx-insight ctx-purge
     ctx-stats ctx-upgrade debug deep-dive deep-interview external-context hud learner
-    mcp-setup omc-teams omc-reference omc-setup plan project-session-manager ralph ralplan
+    mcp-setup omc-teams omc-setup plan project-session-manager ralph ralplan
     release remember sciomc self-improve setup skill skillify team trace ultraqa ultrawork verify
     visual-verdict wiki writer-memory
 )
@@ -217,10 +217,12 @@ link_wiki() {
 }
 
 install() {
-    [[ -d "$OMC_DIR" ]] || {
+    if [[ true == "$DRY_RUN" && ! -d "$OMC_DIR" ]]; then
+        info "[DRY-RUN] assume prepared source exists: $OMC_DIR"
+    elif [[ ! -d "$OMC_DIR" ]]; then
         err "OMC 源目录不存在: $OMC_DIR"
         return 1
-    }
+    fi
 
     if [[ ! -d "$OMC_DIR/node_modules" ]]; then
         info "npm install OMC..."

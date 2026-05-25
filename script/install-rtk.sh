@@ -102,12 +102,11 @@ link_config() {
 }
 
 run_rtk_init() {
+    local bin
+    bin="$(rtk_bin)"
+
     info "执行 rtk init..."
-    if [[ "$RTK_BIN" == "$(command -v rtk 2>/dev/null || true)" ]]; then
-        "$RTK_BIN" init -g --auto-patch 2>&1 || info "rtk init 返回非零，继续用 verify 判定结果"
-    else
-        "$RTK_BIN" init -g --auto-patch 2>&1 || info "rtk init 返回非零，继续用 verify 判定结果"
-    fi
+    "$bin" init -g --auto-patch 2>&1 || info "rtk init 返回非零，继续用 verify 判定结果"
 }
 
 ensure_hook_script() {

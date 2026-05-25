@@ -213,10 +213,12 @@ apply_routing_patch() {
 install() {
     validate_install_mode || return 1
 
-    [[ -d "$CTX_DIR" ]] || {
+    if [[ true == "$DRY_RUN" && ! -d "$CTX_DIR" ]]; then
+        info "[DRY-RUN] assume prepared source exists: $CTX_DIR"
+    elif [[ ! -d "$CTX_DIR" ]]; then
         err "context-mode 源目录不存在: $CTX_DIR"
         return 1
-    }
+    fi
 
     info "context-mode 安装模式: $CTX_INSTALL_MODE"
 
