@@ -576,7 +576,7 @@ update_repository() {
 
     (
         cd "$REPO_ROOT"
-        git pull --ff-only
+        git pull --ff-only --depth=1
     )
     ensure_third_party_sources
 
