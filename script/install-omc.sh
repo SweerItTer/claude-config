@@ -5,6 +5,10 @@ set -euo pipefail
 REPO_ROOT="${1:?需要 REPO_ROOT}"
 DRY_RUN="${2:-false}"
 FORCE="${3:-false}"
+ACTION="${ACTION:-install}"
+
+# shellcheck source=./install-common.sh
+source "$REPO_ROOT/script/install-common.sh"
 
 OMC_DIR="$REPO_ROOT/external/oh-my-claudecode"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -16,6 +20,10 @@ OMC_CLAUDE_MD_STYLE="${OMC_CLAUDE_MD_STYLE:-overwrite}"
 GLOBAL_CLAUDE_MD="$CLAUDE_HOME/CLAUDE.md"
 GLOBAL_OMC_COMPANION="$CLAUDE_HOME/CLAUDE-omc.md"
 LOCAL_CLAUDE_MD="$REPO_ROOT/.claude/CLAUDE.md"
+OMC_PLUGIN_KEY="oh-my-claudecode@omc"
+INSTALLED_PLUGINS_JSON="$CLAUDE_HOME/plugins/installed_plugins.json"
+OMC_REFERENCE_SKILL_SRC="$OMC_DIR/skills/omc-reference/SKILL.md"
+OMC_REFERENCE_SKILL_DST="$CLAUDE_HOME/skills/omc-reference/SKILL.md"
 
 LEGACY_SKILLS=(
     omc-setup omc-doctor ai-slop-cleaner autodoc autopilot autoresearch
@@ -25,11 +33,6 @@ LEGACY_SKILLS=(
     release remember sciomc self-improve setup skill skillify team trace ultraqa ultrawork verify
     visual-verdict wiki writer-memory
 )
-
-pass() { echo "  [PASS] $*"; }
-info() { echo "  [INFO] $*"; }
-ok()   { echo "  [OK] $*"; }
-err()  { echo "  [ERR] $*"; }
 
 symlink_points_to() {
     local link="$1"
@@ -114,6 +117,87 @@ wiki_ready() {
     symlink_points_to "$WIKI_DST" "$WIKI_SRC"
 }
 
+omc_reference_skill_ready() {
+    [[ -f "$OMC_REFERENCE_SKILL_SRC" ]] || return 1
+    [[ -f "$OMC_REFERENCE_SKILL_DST" ]] || return 1
+    cmp -s "$OMC_REFERENCE_SKILL_SRC" "$OMC_REFERENCE_SKILL_DST"
+}
+
+installed_plugins_enable_omc() {
+    [[ -f "$INSTALLED_PLUGINS_JSON" ]] || return 1
+    python3 - "$INSTALLED_PLUGINS_JSON" "$OMC_PLUGIN_KEY" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+plugin_key = sys.argv[2]
+data = json.loads(path.read_text(encoding='utf-8'))
+enabled = data.setdefault('enabledPlugins', {})
+changed = enabled.get(plugin_key) is not True
+if changed:
+    enabled[plugin_key] = True
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+raise SystemExit(0)
+PY
+}
+
+installed_plugins_omc_enabled() {
+    [[ -f "$INSTALLED_PLUGINS_JSON" ]] || return 1
+    python3 - "$INSTALLED_PLUGINS_JSON" "$OMC_PLUGIN_KEY" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+plugin_key = sys.argv[2]
+data = json.loads(path.read_text(encoding='utf-8'))
+enabled = data.get('enabledPlugins', {})
+raise SystemExit(0 if enabled.get(plugin_key) is True else 1)
+PY
+}
+
+installed_plugins_disable_omc() {
+    [[ -f "$INSTALLED_PLUGINS_JSON" ]] || return 0
+    python3 - "$INSTALLED_PLUGINS_JSON" "$OMC_PLUGIN_KEY" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+plugin_key = sys.argv[2]
+data = json.loads(path.read_text(encoding='utf-8'))
+enabled = data.get('enabledPlugins', {})
+if enabled.pop(plugin_key, None) is not None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+raise SystemExit(0)
+PY
+}
+
+sync_omc_reference_skill() {
+    [[ -f "$OMC_REFERENCE_SKILL_SRC" ]] || {
+        err "OMC reference skill 源文件不存在: $OMC_REFERENCE_SKILL_SRC"
+        return 1
+    }
+
+    mkdir -p "$(dirname "$OMC_REFERENCE_SKILL_DST")"
+    cp "$OMC_REFERENCE_SKILL_SRC" "$OMC_REFERENCE_SKILL_DST"
+    ok "OMC reference skill 已安装"
+}
+
+remove_omc_reference_skill() {
+    [[ -f "$OMC_REFERENCE_SKILL_DST" ]] || return 0
+
+    if [[ -f "$OMC_REFERENCE_SKILL_SRC" ]] && cmp -s "$OMC_REFERENCE_SKILL_SRC" "$OMC_REFERENCE_SKILL_DST"; then
+        rm -f "$OMC_REFERENCE_SKILL_DST"
+        rmdir --ignore-fail-on-non-empty "$(dirname "$OMC_REFERENCE_SKILL_DST")" 2>/dev/null || true
+        ok "OMC reference skill 已移除"
+        return 0
+    fi
+
+    info "跳过移除 OMC reference skill：目标内容已被本地修改"
+}
+
 is_ready() {
     [[ -d "$OMC_DIR" ]] || return 1
     [[ -d "$OMC_DIR/node_modules" ]] || return 1
@@ -121,6 +205,8 @@ is_ready() {
     claude_md_ready || return 1
     legacy_skills_cleared || return 1
     wiki_ready || return 1
+    omc_reference_skill_ready || return 1
+    installed_plugins_omc_enabled || return 1
     return 0
 }
 
@@ -248,6 +334,8 @@ install() {
             info "[DRY-RUN] CLAUDE_PLUGIN_ROOT=$OMC_DIR bash $OMC_DIR/scripts/setup-claude-md.sh global $OMC_CLAUDE_MD_STYLE"
         fi
         info "[DRY-RUN] node bridge/cli.cjs setup --plugin-dir-mode --quiet"
+        info "[DRY-RUN] cp $OMC_REFERENCE_SKILL_SRC -> $OMC_REFERENCE_SKILL_DST"
+        info "[DRY-RUN] ensure $INSTALLED_PLUGINS_JSON enables $OMC_PLUGIN_KEY"
         info "[DRY-RUN] ln -sfn $WIKI_SRC -> $WIKI_DST"
         return 0
     fi
@@ -256,7 +344,24 @@ install() {
     cleanup_legacy_skills
     setup_claude_md
     run_bridge_setup
+    sync_omc_reference_skill
+    installed_plugins_enable_omc
     link_wiki
+}
+
+status() {
+    local failed=0
+
+    [[ -d "$OMC_DIR" ]] && pass "source: $OMC_DIR" || { err "source: OMC 源目录不存在"; failed=1; }
+    [[ -d "$OMC_DIR/node_modules" ]] && pass "source: node_modules" || { err "source: node_modules 不存在"; failed=1; }
+    symlink_points_to "$MARKETPLACE_DST" "$OMC_DIR" && pass "marketplace: omc" || { err "marketplace: 未指向源码目录"; failed=1; }
+    claude_md_ready && pass "config: CLAUDE.md 注入" || { claude_md_error; failed=1; }
+    legacy_skills_cleared && pass "cleanup: legacy skills" || { err "cleanup: 旧 OMC skills 仍存在"; failed=1; }
+    omc_reference_skill_ready && pass "skills: omc-reference" || { err "skills: omc-reference 未安装或内容漂移"; failed=1; }
+    installed_plugins_omc_enabled && pass "registry: installed_plugins enabled OMC" || { err "registry: installed_plugins.json 未启用 $OMC_PLUGIN_KEY"; failed=1; }
+    wiki_ready && pass "wiki: linked" || { err "wiki: symlink 不正确"; failed=1; }
+
+    return $failed
 }
 
 verify() {
@@ -265,50 +370,40 @@ verify() {
         return 0
     fi
 
-    [[ -d "$OMC_DIR" ]] || {
-        err "OMC 源目录不存在: $OMC_DIR"
-        return 1
-    }
-
-    [[ -d "$OMC_DIR/node_modules" ]] || {
-        err "OMC node_modules 不存在"
-        return 1
-    }
-
-    symlink_points_to "$MARKETPLACE_DST" "$OMC_DIR" || {
-        err "OMC marketplace 未指向源码目录"
-        return 1
-    }
-
-    claude_md_ready || {
-        claude_md_error
-        return 1
-    }
-
-    legacy_skills_cleared || {
-        err "旧 OMC skills 残留未清理"
-        return 1
-    }
-
-    wiki_ready || {
-        err "OMC wiki symlink 不正确"
-        return 1
-    }
-
+    status
     ok "OMC verify 通过"
+}
+
+uninstall() {
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] remove owned omc marketplace and wiki symlink"
+        info "[DRY-RUN] remove managed omc-reference skill"
+        info "[DRY-RUN] disable $OMC_PLUGIN_KEY in $INSTALLED_PLUGINS_JSON"
+        return 0
+    fi
+
+    remove_symlink_if_target "$MARKETPLACE_DST" "$OMC_DIR"
+    remove_symlink_if_target "$WIKI_DST" "$WIKI_SRC"
+    remove_omc_reference_skill
+    installed_plugins_disable_omc
+    ok "OMC owned symlink 与受管注册项已移除；CLAUDE.md 注入内容保持不动"
+}
+
+doctor() {
+    info "OMC doctor"
+    status
 }
 
 main() {
     validate_claude_md_config
 
-    if [[ false == "$FORCE" ]] && is_ready; then
+    if [[ "$ACTION" == "install" && false == "$FORCE" ]] && is_ready; then
         pass "OMC 已就绪，跳过"
         verify
         return 0
     fi
 
-    install
-    verify
+    run_module_action "$ACTION"
 }
 
 main "$@"

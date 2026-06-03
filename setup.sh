@@ -39,6 +39,8 @@ ECC_FOCUSED=false
 ECC_PROFILE=""
 ECC_MODULES=""
 ECC_SKILLS=""
+ACTION="install"
+ACTION_EXPLICIT=false
 
 KNOWN_MARKETPLACES_CONFIG="$REPO_ROOT/config/known_marketplaces.json"
 EXTERNAL_DIR="$REPO_ROOT/external"
@@ -174,8 +176,8 @@ run_installer() {
         return 1
     fi
 
-    info "--- ${name} ---"
-    bash "$script" "$REPO_ROOT" "$DRY_RUN" "$FORCE" "$@"
+    info "--- ${name} [${ACTION}] ---"
+    ACTION="$ACTION" bash "$script" "$REPO_ROOT" "$DRY_RUN" "$FORCE" "$@"
 }
 
 render_settings_template() {
@@ -207,6 +209,8 @@ merge_settings_json() {
     TARGET_SETTINGS_PATH="$target" RENDERED_TEMPLATE_JSON="$rendered_template" python3 - <<'PYEOF'
 import json
 import os
+
+PLAYWRIGHT_PLUGIN = 'playwright@claude-plugins-official'
 
 
 def merge_object(dst, src, skip_empty=False, prefer_existing=False):
@@ -243,6 +247,16 @@ def merge_permissions(existing, template):
     return merged
 
 
+def migrate_default_disabled_plugins(current, template):
+    enabled = dict(current.get('enabledPlugins') or {})
+    template_enabled = template.get('enabledPlugins') if isinstance(template.get('enabledPlugins'), dict) else {}
+
+    if PLAYWRIGHT_PLUGIN not in template_enabled:
+        enabled.pop(PLAYWRIGHT_PLUGIN, None)
+
+    return enabled
+
+
 path = os.environ['TARGET_SETTINGS_PATH']
 rendered_template = os.environ['RENDERED_TEMPLATE_JSON']
 with open(path, 'r', encoding='utf-8') as fh:
@@ -251,6 +265,7 @@ template = json.loads(rendered_template)
 
 current['env'] = merge_object(current.get('env'), template.get('env'), skip_empty=True, prefer_existing=True)
 current['enabledPlugins'] = merge_object(current.get('enabledPlugins'), template.get('enabledPlugins'), prefer_existing=True)
+current['enabledPlugins'] = migrate_default_disabled_plugins(current, template)
 current['extraKnownMarketplaces'] = merge_object(current.get('extraKnownMarketplaces'), template.get('extraKnownMarketplaces'), prefer_existing=True)
 
 hooks = current.get('hooks') if isinstance(current.get('hooks'), dict) else {}
@@ -865,8 +880,14 @@ run_final_doctor() {
         return 0
     fi
 
+    info "运行 context-mode doctor..."
+    local previous_action="$ACTION"
+    ACTION="doctor"
+    run_installer context-mode "$NO_PATCH"
+    ACTION="$previous_action"
+
     if [[ "$SMOKE_TEST" != true ]]; then
-        info "跳过最终 doctor (--smoke-test 未启用)"
+        info "跳过扩展冒烟测试 (--smoke-test 未启用)"
         return 0
     fi
 
@@ -895,7 +916,77 @@ run_final_doctor() {
     return 0
 }
 
+set_ecc_mode() {
+    ECC_MODE="interactive"
+    if [[ "$CI_MODE" == true || "$ECC_FULL" == true ]]; then
+        ECC_MODE="full"
+    elif [[ "$ECC_FOCUSED" == true ]]; then
+        ECC_MODE="focused"
+    elif [[ -n "$ECC_PROFILE" ]]; then
+        ECC_MODE="profile:$ECC_PROFILE"
+    elif [[ -n "$ECC_MODULES" ]]; then
+        ECC_MODE="modules:$ECC_MODULES"
+    elif [[ -n "$ECC_SKILLS" ]]; then
+        ECC_MODE="skills:$ECC_SKILLS"
+    fi
+}
+
+run_priority_module_actions() {
+    run_installer context-mode "$NO_PATCH"
+    run_installer omc
+    run_installer rtk
+    run_installer superpowers
+}
+
+run_install_flow() {
+    phase "Phase 1: Claude Code"
+    ensure_claude_code
+
+    phase "Phase 2: 第三方源码 + 核心配置"
+    ensure_third_party_sources
+    ensure_core_config
+    ensure_settings_json
+    copy_known_marketplaces
+
+    if [[ "$UPDATE" == true && "$FORCE" == false ]]; then
+        phase "Phase 3: CodeGraph + context-mode + OpenSpec 同步"
+        run_installer codegraph true
+        run_installer context-mode "$NO_PATCH"
+        run_installer openspec
+        phase "Phase 5: 最终验证"
+        verify_core_config
+        run_final_doctor
+        return 0
+    fi
+
+    phase "Phase 3: 安装器编排"
+    set_ecc_mode
+    run_installer codegraph "$UPDATE"
+    run_installer ecc "$ECC_MODE"
+    run_installer context-mode "$NO_PATCH"
+    run_installer openspec
+
+    phase "Phase 4: 后置安装器"
+    run_installer omc
+    run_installer rtk
+    run_installer superpowers
+    clean_installed_plugins_json
+
+    phase "Phase 5: 最终验证"
+    verify_core_config
+    run_final_doctor
+}
+
+run_inspection_flow() {
+    phase "Phase 1: 核心配置状态"
+    verify_core_config
+
+    phase "Phase 2: 生命周期模块状态"
+    run_priority_module_actions
+}
+
 UNINSTALL=""
+ECC_MODE="interactive"
 
 remove_symlink_if_ours() {
     local path="$1"
@@ -1059,27 +1150,36 @@ while [[ $# -gt 0 ]]; do
             [[ "$UNINSTALL" =~ ^(core|ecc|all)$ ]] || { err "--uninstall 参数无效: $UNINSTALL (有效值: core, ecc, all)"; exit 1; }
             shift ;;
         -h|--help)
-            echo "用法: ./setup.sh [选项]"
+            echo "用法: ./setup.sh [action] [选项]"
+            echo "  action          install | update | reinstall | uninstall | verify | status | doctor"
             echo "  --ci            CI 模式 (跳过手动提示，ECC 使用全量安装以覆盖测试)"
             echo "  --dry-run       预览，不实际修改"
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
-            echo "  --update        更新当前仓库与配置中的第三方仓库；搭配 --force 可强制重跑安装器"
+            echo "  --update        兼容旧 flag：等价于 action=update"
             echo "  --update-third-party  兼容别名：刷新配置中的第三方仓库到最新 shallow checkout"
             echo "  --no-patch      跳过 context-mode routing.mjs strict-bash 补丁"
             echo "  环境变量        CTX_INSTALL_MODE=auto|symlink|copy 控制 context-mode 安装方式 (默认 auto: symlink 失败自动 copy)"
-            echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 冒烟检查"
+            echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 扩展冒烟检查"
             echo "  --ecc-full      安装 ECC full profile"
             echo "  --ecc-focused   安装 4 个基础 ECC 模块（agents/commands/hooks/workflow）"
             echo "  --ecc-profile P 安装 ECC 官方 profile: minimal/core/developer/security/research/full"
-            echo "  --ecc-modules M 安装逗号分隔的 ECC 模块 ID"
-            echo "  --ecc-skills S 安装逗号分隔的 ECC skill ID allowlist"
-            echo "  --uninstall [M] 卸载配置 (core=核心配置, ecc=含ECC, all=全部)"
+            echo "  --ecc-modules M 安装逗号分隔模块 ID"
+            echo "  --ecc-skills S 安装逗号分隔 skill ID allowlist"
+            echo "  --uninstall [M] 兼容旧卸载模式 (core=核心配置, ecc=含ECC, all=全部)"
             exit 0 ;;
+        install|update|reinstall|uninstall|verify|status|doctor)
+            ACTION="$1"
+            ACTION_EXPLICIT=true
+            shift ;;
         *) err "未知参数: $1"; exit 1 ;;
     esac
 done
+
+if [[ "$UPDATE" == true && "$ACTION_EXPLICIT" == false ]]; then
+    ACTION="update"
+fi
 
 main() {
     echo ""
@@ -1102,11 +1202,12 @@ main() {
 
     [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
     [[ "$CI_MODE" == true ]] && info "CI 模式"
-    [[ "$UPDATE" == true && "$FORCE" == true ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库，并强制重跑安装器"
-    [[ "$UPDATE" == true && "$FORCE" == false ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库；不会重跑第三方安装器"
+    [[ "$ACTION" == "update" && "$FORCE" == true ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库，并强制重跑安装器"
+    [[ "$ACTION" == "update" && "$FORCE" == false ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库；不会重跑第三方安装器"
 
-    if [[ "$UPDATE" == true ]]; then
+    if [[ "$ACTION" == "update" ]]; then
         phase "Phase 0: 仓库更新"
+        UPDATE=true
         update_repository
     fi
 
@@ -1119,71 +1220,33 @@ main() {
     log "git, curl, tar, node, npm, python3 已就绪"
     info "系统: $(uname -s) / $(uname -m)"
 
-    phase "Phase 1: Claude Code"
-    ensure_claude_code
-
-    phase "Phase 2: 第三方源码 + 核心配置"
-    ensure_third_party_sources
-    ensure_core_config
-
-    if [[ "$UPDATE" == true && "$FORCE" == false ]]; then
-        phase "Phase 3: CodeGraph"
-        run_installer codegraph true
-        ensure_settings_json
-        copy_known_marketplaces
-        phase "Phase 5: 最终验证"
-        verify_core_config
-        run_final_doctor
-        echo ""
-        echo -e "${GREEN}============================================${NC}"
-        echo -e "${GREEN}  Claude Code 配置更新完成!${NC}"
-        echo -e "${GREEN}============================================${NC}"
-        echo ""
-        return 0
-    fi
-
-    phase "Phase 3: 安装器编排"
-    local ecc_mode="interactive"
-    if [[ "$CI_MODE" == true || "$ECC_FULL" == true ]]; then
-        ecc_mode="full"
-    elif [[ "$ECC_FOCUSED" == true ]]; then
-        ecc_mode="focused"
-    elif [[ -n "$ECC_PROFILE" ]]; then
-        ecc_mode="profile:$ECC_PROFILE"
-    elif [[ -n "$ECC_MODULES" ]]; then
-        ecc_mode="modules:$ECC_MODULES"
-    elif [[ -n "$ECC_SKILLS" ]]; then
-        ecc_mode="skills:$ECC_SKILLS"
-    fi
-    run_installer codegraph "$UPDATE"
-    run_installer ecc "$ecc_mode"
-    run_installer context-mode "$NO_PATCH"
-    run_installer openspec
-
-    phase "Phase 4: settings.json + 后置安装器"
-    ensure_settings_json
-    run_installer omc
-    run_installer rtk
-    run_installer superpowers
-    copy_known_marketplaces
-    clean_installed_plugins_json
-
-    phase "Phase 5: 最终验证"
-    verify_core_config
-    run_final_doctor
-
-    echo ""
-    echo -e "${GREEN}============================================${NC}"
-    echo -e "${GREEN}  Claude Code 配置迁移完成!${NC}"
-    echo -e "${GREEN}============================================${NC}"
-    echo ""
-    if [[ "$CI_MODE" == true ]]; then
-        log "CI 模式 — 所有配置已自动完成"
-    else
-        echo "验证: claude --version  |  rtk --version"
-        echo "      ls ~/.claude/plugins/marketplaces/"
-        echo ""
-    fi
+    case "$ACTION" in
+        install|update|reinstall)
+            run_install_flow
+            echo ""
+            echo -e "${GREEN}============================================${NC}"
+            echo -e "${GREEN}  Claude Code 配置迁移完成!${NC}"
+            echo -e "${GREEN}============================================${NC}"
+            echo ""
+            if [[ "$CI_MODE" == true ]]; then
+                log "CI 模式 — 所有配置已自动完成"
+            else
+                echo "验证: claude --version  |  rtk --version"
+                echo "      ls ~/.claude/plugins/marketplaces/"
+                echo ""
+            fi
+            ;;
+        verify|status|doctor)
+            run_inspection_flow
+            ;;
+        uninstall)
+            uninstall_all
+            ;;
+        *)
+            err "未处理的 action: $ACTION"
+            exit 1
+            ;;
+    esac
 }
 
 main "$@"

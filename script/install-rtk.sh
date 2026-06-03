@@ -5,6 +5,10 @@ set -euo pipefail
 REPO_ROOT="${1:?需要 REPO_ROOT}"
 DRY_RUN="${2:-false}"
 FORCE="${3:-false}"
+ACTION="${ACTION:-install}"
+
+# shellcheck source=./install-common.sh
+source "$REPO_ROOT/script/install-common.sh"
 
 RTK_VERSION="v0.40.0"
 INSTALL_DIR="$HOME/.local/bin"
@@ -16,11 +20,6 @@ HOOKS_DIR="$CLAUDE_HOME/hooks"
 HOOK_SCRIPT="$HOOKS_DIR/rtk-rewrite.sh"
 HOOK_URL="https://raw.githubusercontent.com/rtk-ai/rtk/master/hooks/claude/rtk-rewrite.sh"
 
-pass() { echo "  [PASS] $*"; }
-info() { echo "  [INFO] $*"; }
-ok()   { echo "  [OK] $*"; }
-err()  { echo "  [ERR] $*"; }
-
 symlink_points_to() {
     local link="$1"
     local target="$2"
@@ -30,7 +29,7 @@ symlink_points_to() {
 }
 
 settings_have_rtk_hook() {
-    grep -q 'rtk-rewrite' "$CLAUDE_HOME/settings.json" 2>/dev/null
+    grep -Eq 'rtk-rewrite|rtk hook claude' "$CLAUDE_HOME/settings.json" 2>/dev/null
 }
 
 hook_script_ready() {
@@ -51,7 +50,6 @@ is_ready() {
     symlink_points_to "$CFG_DST/config.toml" "$CFG_SRC/config.toml" || return 1
     symlink_points_to "$CFG_DST/filters.toml" "$CFG_SRC/filters.toml" || return 1
     hook_script_ready || return 1
-    settings_have_rtk_hook || return 1
 }
 
 download_rtk() {
@@ -149,31 +147,55 @@ install() {
     ensure_hook_script
 }
 
+status() {
+    local failed=0
+
+    { command -v rtk >/dev/null 2>&1 || [[ -x "$RTK_BIN" ]]; } && pass "binary: rtk" || { err "binary: rtk 不存在"; failed=1; }
+    { rtk --version >/dev/null 2>&1 || "$RTK_BIN" --version >/dev/null 2>&1; } && pass "runtime: rtk --version" || { err "runtime: rtk --version 失败"; failed=1; }
+    symlink_points_to "$CFG_DST/config.toml" "$CFG_SRC/config.toml" && pass "config: config.toml" || { err "config: config.toml symlink 错误"; failed=1; }
+    symlink_points_to "$CFG_DST/filters.toml" "$CFG_SRC/filters.toml" && pass "config: filters.toml" || { err "config: filters.toml symlink 错误"; failed=1; }
+    hook_script_ready && pass "hook: rtk-rewrite.sh" || { err "hook: rtk-rewrite.sh 缺失或不可执行"; failed=1; }
+
+    return $failed
+}
+
 verify() {
     if [[ "$DRY_RUN" == true ]]; then
         info "dry-run 模式跳过 verify"
         return 0
     fi
 
-    { command -v rtk >/dev/null 2>&1 || [[ -x "$RTK_BIN" ]]; } || { err "rtk 命令不存在"; return 1; }
-    { rtk --version >/dev/null 2>&1 || "$RTK_BIN" --version >/dev/null 2>&1; } || { err "rtk --version 失败"; return 1; }
-    symlink_points_to "$CFG_DST/config.toml" "$CFG_SRC/config.toml" || { err "config.toml symlink 错误"; return 1; }
-    symlink_points_to "$CFG_DST/filters.toml" "$CFG_SRC/filters.toml" || { err "filters.toml symlink 错误"; return 1; }
-    hook_script_ready || { err "rtk-rewrite.sh 缺失或不可执行"; return 1; }
-    settings_have_rtk_hook || { err "settings.json 缺少 rtk hook"; return 1; }
-
+    status
     ok "RTK verify 通过"
 }
 
+uninstall() {
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] remove owned RTK config symlinks and hook script"
+        return 0
+    fi
+
+    remove_symlink_if_target "$CFG_DST/config.toml" "$CFG_SRC/config.toml"
+    remove_symlink_if_target "$CFG_DST/filters.toml" "$CFG_SRC/filters.toml"
+    if [[ -f "$HOOK_SCRIPT" ]] && grep -q 'rtk' "$HOOK_SCRIPT" 2>/dev/null; then
+        rm -f "$HOOK_SCRIPT"
+    fi
+    ok "RTK owned 配置与 hook 已移除；二进制保留"
+}
+
+doctor() {
+    info "RTK doctor"
+    status
+}
+
 main() {
-    if [[ "$FORCE" == false ]] && is_ready; then
+    if [[ "$ACTION" == "install" && "$FORCE" == false ]] && is_ready; then
         pass "RTK 已就绪，跳过"
         verify
         return 0
     fi
 
-    install
-    verify
+    run_module_action "$ACTION"
 }
 
 main "$@"

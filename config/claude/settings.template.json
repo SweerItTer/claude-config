@@ -1,10 +1,10 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
     "CLAUDE_CODE_NEW_INIT": "1",
     "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-    "CTX_STRICT_BASH": "1"
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
   },
   "extraKnownMarketplaces": {
     "ecc": {
@@ -40,13 +40,12 @@
   },
   "model": "opus",
   "enabledPlugins": {
-    "obra/superpowers@superpowers": true,
-    "Yeachan-Heo/oh-my-claudecode@omc": true,
-    "mksglu/context-mode@context-mode": true,
+    "superpowers@superpowers": true,
+    "oh-my-claudecode@omc": true,
+    "context-mode@context-mode": true,
     "affaan-m/everything-claude-code@ecc": true,
     "code-review@claude-plugins-official": true,
     "feature-dev@claude-plugins-official": true,
-    "playwright@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
     "claude-code-setup@claude-plugins-official": true
   },
@@ -57,17 +56,6 @@
   },
   "effortLevel": "high",
   "hooks": {
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/posttooluse.mjs",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      }
-    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -88,24 +76,6 @@
         "matcher": "WebFetch"
       },
       {
-        "hooks": [
-          {
-            "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/pretooluse.mjs",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rtk-rewrite.sh",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
         "matcher": "Edit|Write",
         "hooks": [
           {
@@ -119,7 +89,7 @@
       {
         "hooks": [
           {
-            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs && openspec init --tools claude",
+            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs",
             "type": "command"
           }
         ]
