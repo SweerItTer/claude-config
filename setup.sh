@@ -44,6 +44,7 @@ ACTION_EXPLICIT=false
 
 KNOWN_MARKETPLACES_CONFIG="$REPO_ROOT/config/known_marketplaces.json"
 EXTERNAL_DIR="$REPO_ROOT/external"
+NVM_INSTALL_VERSION="v0.40.4"
 
 log()   { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -51,6 +52,231 @@ err()   { echo -e "${RED}[ERR]${NC} $*"; }
 info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
 phase() { echo ""; echo -e "${BLUE}═══ $* ═══${NC}"; echo ""; }
 pass()  { echo -e "${BLUE}[PASS]${NC} $*"; }
+
+detect_pkg_manager() {
+    if command -v apt-get >/dev/null 2>&1; then
+        printf '%s\n' "apt"
+    elif command -v dnf >/dev/null 2>&1; then
+        printf '%s\n' "dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        printf '%s\n' "yum"
+    elif command -v brew >/dev/null 2>&1; then
+        printf '%s\n' "brew"
+    elif command -v pacman >/dev/null 2>&1; then
+        printf '%s\n' "pacman"
+    else
+        printf '%s\n' "unknown"
+    fi
+}
+
+run_package_install() {
+    local pkg_mgr="$1"
+    shift
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] 自动安装依赖: $pkg_mgr -> $*"
+        return 0
+    fi
+
+    case "$pkg_mgr" in
+        apt)
+            if [[ "$(id -u)" -eq 0 ]]; then
+                apt-get update && apt-get install -y "$@"
+            elif command -v sudo >/dev/null 2>&1; then
+                sudo apt-get update && sudo apt-get install -y "$@"
+            else
+                err "缺少 sudo，无法通过 apt 自动安装: $*"
+                return 1
+            fi
+            ;;
+        dnf)
+            if [[ "$(id -u)" -eq 0 ]]; then
+                dnf install -y "$@"
+            elif command -v sudo >/dev/null 2>&1; then
+                sudo dnf install -y "$@"
+            else
+                err "缺少 sudo，无法通过 dnf 自动安装: $*"
+                return 1
+            fi
+            ;;
+        yum)
+            if [[ "$(id -u)" -eq 0 ]]; then
+                yum install -y "$@"
+            elif command -v sudo >/dev/null 2>&1; then
+                sudo yum install -y "$@"
+            else
+                err "缺少 sudo，无法通过 yum 自动安装: $*"
+                return 1
+            fi
+            ;;
+        brew)
+            brew install "$@"
+            ;;
+        pacman)
+            if [[ "$(id -u)" -eq 0 ]]; then
+                pacman -S --noconfirm "$@"
+            elif command -v sudo >/dev/null 2>&1; then
+                sudo pacman -S --noconfirm "$@"
+            else
+                err "缺少 sudo，无法通过 pacman 自动安装: $*"
+                return 1
+            fi
+            ;;
+        *)
+            err "未识别系统包管理器，无法自动安装: $*"
+            return 1
+            ;;
+    esac
+}
+
+install_latest_node_with_nvm() {
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] 使用 Node 官方推荐脚本安装 nvm (${NVM_INSTALL_VERSION}) 并安装最新 Node.js（自带 npm）"
+        return 0
+    fi
+
+    case "$(uname -s)" in
+        Linux|Darwin) ;;
+        *)
+            err "node/npm 自动安装仅支持 Linux/macOS 的官方脚本路径"
+            return 1
+            ;;
+    esac
+
+    local install_cmd="curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_INSTALL_VERSION}/install.sh | bash"
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+
+    info "使用 Node 官方推荐脚本安装最新版 Node.js（自带 npm）..."
+    bash -lc "set -euo pipefail; ${install_cmd}; export NVM_DIR=\"${nvm_dir}\"; . \"${nvm_dir}/nvm.sh\"; nvm install node; nvm use node >/dev/null; node --version; npm --version"
+
+    export NVM_DIR="$nvm_dir"
+    if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+        . "$NVM_DIR/nvm.sh"
+        nvm use node >/dev/null
+        hash -r
+    fi
+}
+
+try_install_dep() {
+    local dep="$1"
+    local pkg_mgr="$2"
+
+    if command -v "$dep" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    info "尝试安装缺失依赖: $dep"
+    case "$dep" in
+        git|curl)
+            run_package_install "$pkg_mgr" "$dep"
+            ;;
+        tar)
+            if [[ "$pkg_mgr" == "brew" ]]; then
+                warn "brew 无法直接补齐 tar 命令，跳过自动安装"
+                return 1
+            fi
+            run_package_install "$pkg_mgr" tar
+            ;;
+        node|npm)
+            install_latest_node_with_nvm
+            ;;
+        python3)
+            case "$pkg_mgr" in
+                apt|dnf|yum)
+                    run_package_install "$pkg_mgr" python3
+                    ;;
+                pacman)
+                    run_package_install "$pkg_mgr" python
+                    ;;
+                brew)
+                    run_package_install "$pkg_mgr" python
+                    ;;
+                *)
+                    err "未识别系统包管理器，无法自动安装 python3"
+                    return 1
+                    ;;
+            esac
+            ;;
+        *)
+            err "未知依赖，无法自动安装: $dep"
+            return 1
+            ;;
+    esac
+}
+
+print_dependency_install_help() {
+    local pkg_mgr="$1"
+    local missing=("$@")
+    missing=("${missing[@]:1}")
+
+    case "$pkg_mgr" in
+        apt)
+            info "可手动执行: sudo apt-get update && sudo apt-get install -y ${missing[*]}"
+            ;;
+        dnf)
+            info "可手动执行: sudo dnf install -y ${missing[*]}"
+            ;;
+        yum)
+            info "可手动执行: sudo yum install -y ${missing[*]}"
+            ;;
+        brew)
+            info "可手动执行: brew install ${missing[*]}"
+            ;;
+        pacman)
+            info "可手动执行: sudo pacman -S --noconfirm ${missing[*]}"
+            ;;
+        *)
+            info "请手动安装后重试: ${missing[*]}"
+            ;;
+    esac
+
+    if printf '%s\n' "${missing[@]}" | grep -Eq '^(node|npm)$'; then
+        info "node/npm 建议按 Node.js 官方下载页的推荐脚本方式安装最新版（通过 nvm 安装，npm 随 Node 一起提供）"
+    fi
+}
+
+ensure_system_dependencies() {
+    local deps=(git curl tar node npm python3)
+    local missing=()
+    local dep
+    for dep in "${deps[@]}"; do
+        command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        local pkg_mgr
+        pkg_mgr="$(detect_pkg_manager)"
+        warn "缺少依赖: ${missing[*]}，尝试自动安装..."
+        local node_group_attempted=false
+        for dep in "${missing[@]}"; do
+            command -v "$dep" >/dev/null 2>&1 && continue
+            if [[ "$dep" == "node" || "$dep" == "npm" ]]; then
+                if [[ "$node_group_attempted" == true ]]; then
+                    continue
+                fi
+                node_group_attempted=true
+            fi
+            try_install_dep "$dep" "$pkg_mgr" || true
+        done
+
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] 跳过依赖安装后的就绪复检"
+            return 0
+        fi
+
+        local still_missing=()
+        for dep in "${deps[@]}"; do
+            command -v "$dep" >/dev/null 2>&1 || still_missing+=("$dep")
+        done
+        if [[ ${#still_missing[@]} -gt 0 ]]; then
+            err "以下依赖无法自动安装: ${still_missing[*]}"
+            print_dependency_install_help "$pkg_mgr" "${still_missing[@]}"
+            return 1
+        fi
+    fi
+
+    log "git, curl, tar, node, npm, python3 已就绪"
+}
 
 symlink_points_to() {
     local link="$1"
@@ -914,7 +1140,10 @@ run_context_smoke_test() {
         return 1
     fi
 
-    local timeout_seconds="${CLAUDE_CONTEXT_TIMEOUT:-180}"
+    local timeout_seconds="${CLAUDE_CONTEXT_TIMEOUT:-10}"
+    if [[ "$timeout_seconds" =~ ^[0-9]+$ ]] && (( timeout_seconds > 10 )); then
+        timeout_seconds=10
+    fi
     local tmp
     tmp="$(mktemp)"
     set +e
@@ -968,13 +1197,18 @@ run_final_doctor() {
         return 0
     fi
 
+    local doctor_timeout_seconds="${CLAUDE_DOCTOR_TIMEOUT:-10}"
+    if [[ "$doctor_timeout_seconds" =~ ^[0-9]+$ ]] && (( doctor_timeout_seconds > 10 )); then
+        doctor_timeout_seconds=10
+    fi
+
     info "运行最终 Claude doctor..."
-    if timeout 120 "$REPO_ROOT/script/check-claude-doctor.sh"; then
+    if timeout "$doctor_timeout_seconds" "$REPO_ROOT/script/check-claude-doctor.sh"; then
         log "Claude doctor 通过"
     else
         local rc=$?
         if [[ $rc -eq 124 ]]; then
-            err "Claude doctor 超时"
+            err "Claude doctor 超时 (${doctor_timeout_seconds}s)"
         else
             err "Claude doctor 失败 ($rc)"
         fi
@@ -1424,12 +1658,7 @@ main() {
     fi
 
     phase "Phase 0: 环境检测"
-    local missing=()
-    for dep in git curl tar node npm python3; do
-        command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
-    done
-    [[ ${#missing[@]} -gt 0 ]] && { err "缺少依赖: ${missing[*]}"; exit 1; }
-    log "git, curl, tar, node, npm, python3 已就绪"
+    ensure_system_dependencies || exit 1
     info "系统: $(uname -s) / $(uname -m)"
 
     case "$ACTION" in

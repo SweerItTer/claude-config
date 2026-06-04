@@ -1,59 +1,128 @@
 # Claude Code Configuration
 
-一键迁移 Claude Code 配置到新系统。幂等 — 可安全重复运行。
+一键收敛 Claude Code 配置与插件栈。脚本幂等，可安全重复运行。
 
-## 首次安装
+## 快速开始
 
-**前置条件**: `git` `curl` `tar` `node>=18`，以及认证环境变量（`ANTHROPIC_*` 或 `CLAUDE_API_KEY`）。
+### 1) 克隆仓库
 
 ```bash
 git clone --recurse-submodules git@github.com:SweerItTer/claude-config.git
-~/claude-config/setup.sh --ecc-focused --force
+cd ~/claude-config
 ```
 
-安装后重启 Claude Code，验证：
+### 2) 选择一种搭建路径
+
+```bash
+# 最小路径：只同步核心配置（CLAUDE.md / rules / settings / marketplaces）
+./setup.sh core
+
+# 推荐路径：完整安装 + 4 个基础 ECC 模块
+./setup.sh --ecc-focused --force
+
+# 只做检查，不改动已有配置
+./setup.sh verify
+```
+
+### 3) setup 会先尝试补环境
+
+推荐系统已具备这些命令：`git` `curl` `tar` `node` `npm` `python3`。
+
+如果缺少其中任意一个，`setup.sh` 会先尝试自动补环境：
+- `git` / `curl` / `tar` / `python3`：优先走系统包管理器（`apt-get` / `dnf` / `yum` / `brew` / `pacman`）
+- `node` / `npm`：改走 Node 官方推荐的脚本方式，先安装 `nvm`，再安装最新版 Node.js（自带最新 npm）
+
+实在装不上，才会报错并提示你手动补装。
+
+### 4) 安装后验证
 
 ```bash
 claude --version
 rtk --version
-ls ~/.claude/plugins/marketplaces/          # 4 个：omc superpowers context-mode claude-plugins-official
-grep "OMC:START" ~/.claude/CLAUDE.md        # OMC 已注入
-ls ~/.claude/agents/ ~/.claude/commands/    # ECC agents + commands
+./setup.sh verify
+ls ~/.claude/plugins/marketplaces/
 ```
 
-`--force` 强制跳过幂等检测，`--ecc-focused` 安装 4 个基础 ECC 模块（见下方说明）。
+如果你走的是完整安装路径，还可以额外检查：
 
-## 更新
+```bash
+grep "OMC:START" ~/.claude/CLAUDE.md
+ls ~/.claude/agents/ ~/.claude/commands/
+```
+
+## 常用路径
+
+### 最小安装
+
+```bash
+./setup.sh core
+```
+
+只同步核心配置：
+- `~/.claude/CLAUDE.md`
+- `~/.claude/itp.md`
+- `~/.claude/haiku-throttle.md`
+- `~/.claude/RTK.md`
+- `rules/` / `rules-available/`
+- `settings.json`
+- `known_marketplaces.json`
+
+适合先把 Claude 环境搭起来，再按需装插件。
+
+### 完整安装
+
+```bash
+./setup.sh --ecc-focused --force
+```
+
+这条路径会：
+- 安装或收敛核心配置
+- 安装 `context-mode`、`omc`、`rtk`、`superpowers`
+- 显式安装 ECC 的 `focused` 基础模块
+
+说明：ECC 现在是 **显式 opt-in**，不再默认安装。只有传入 `--ecc-*` 参数时才会安装或同步 ECC。
+
+### 日常更新
 
 ```bash
 git -C ~/claude-config pull --recurse-submodules
-~/claude-config/setup.sh                    # 无 --force，仅收敛差异；第三方 submodules 使用仓库 pinned 版本
+~/claude-config/setup.sh
 ```
 
-默认更新不会推进第三方 submodule gitlink，避免每次追上游最新都产生主仓库索引变更。需要显式刷新第三方到上游最新时再运行：
+默认更新只收敛差异，不会强制刷新第三方到上游最新。若你明确要推进第三方仓库版本：
 
 ```bash
 ~/claude-config/setup.sh --update --update-third-party
 ```
 
-`--update-third-party` 可能产生 `external/*` gitlink 变更；确认后应作为一次有意的第三方版本更新提交。若未来需要“第三方永远最新且主仓库零 gitlink 变更”，应迁移到 setup 管理的 ignored vendor cache，而不是 tracked submodules。
+### 验证 / 状态 / 诊断
 
-## 按需扩展
+```bash
+./setup.sh verify
+./setup.sh status
+./setup.sh doctor
+```
 
-### 启用 MCP 服务器
+- `verify`：检查核心配置是否齐全
+- `status`：检查核心配置与模块状态
+- `doctor`：走诊断路径，适合排查安装异常
+
+### 按需扩展
+
+#### 启用 MCP 服务器
 
 所有 MCP 默认禁用（`disabledMcpServers`）。在 Claude Code 内：
 
+```text
+/mcp add <server-name>
+/mcp list
 ```
-/mcp add <server-name>    # 启用
-/mcp list                 # 查看状态
-```
 
-### 添加语言规则
+#### 添加语言规则
 
-规则位于 `rules-available/`（不会自动加载）。编辑代码前告诉 Claude 加载对应规则，或在对话中手动引用 `rules-available/<lang>/`。
+`rules-available/` 中是按需规则，不会自动加载。需要时在对话里明确让 Claude 使用对应规则。
 
-### 增加 ECC 模块
+#### 增加 ECC 模块
 
 ```bash
 # 列出可用模块
@@ -64,73 +133,95 @@ cd ~/claude-config
 ./setup.sh --ecc-modules skill-java-coding-standards,skill-cpp-coding-standards
 ```
 
-只安装指定 ECC skill ID：`./setup.sh --ecc-skills <id,id,...>`。
+只安装指定 ECC skill：
 
 ```bash
-# 查看可用 skill ID
 cd ~/claude-config/external/everything-claude-code && node scripts/install-plan.js --list-components --family skill
-
-# 预览只安装指定 skill
 cd ~/claude-config
 ./setup.sh --dry-run --ecc-skills skill-stocktake
 ```
 
-ECC 安装范围选项：
+ECC 范围选项：
 
 | 命令 | 范围 |
 |------|------|
 | `--ecc-focused` | 4 个基础模块（推荐） |
 | `--ecc-full` | full profile |
 | `--ecc-profile <name>` | minimal / core / developer / security / research |
-| `--ecc-modules <ids>` | 逗号分隔的模块 ID |
-| `--ecc-skills <ids>` | 逗号分隔的 ECC skill ID allowlist |
+| `--ecc-modules <ids>` | 逗号分隔模块 ID |
+| `--ecc-skills <ids>` | 逗号分隔 skill ID allowlist |
 
 同时传多个范围参数时，setup 按 `--ecc-full` → `--ecc-focused` → `--ecc-profile` → `--ecc-modules` → `--ecc-skills` 选择安装范围。
 
-### CodeGraph
+#### CodeGraph
 
-- `setup.sh` 会安装并验证 CodeGraph。
-- Linux/macOS 优先使用上游 shell installer；失败时回退到全局 `npm i -g @colbymchenry/codegraph@latest`。
-- 若现有 `codegraph --version` 已可用，常规运行会跳过重装；`--update` 或 `--force` 可刷新安装。
-- setup 默认不会运行 `codegraph init`，不会在任意仓库创建 `.codegraph/`；仅做轻量可用性校验。
+- `setup.sh` 会安装并验证 CodeGraph
+- Linux/macOS 优先使用上游 shell installer；失败时回退到 `npm i -g @colbymchenry/codegraph@latest`
+- 常规运行会跳过已可用的 `codegraph`
+- setup 默认不会运行 `codegraph init`
 
-## 故障回退
+## 故障恢复
 
-- **安装后异常**：直接重跑 `~/claude-config/setup.sh --force --ecc-focused`，幂等恢复所有配置。
-- **插件 hook 报错**：运行 `/reload-plugins`；仍有问题则 `~/claude-config/setup.sh --force --ecc-focused && /reload-plugins`。
-- **配置冲突**：`--smoke-test` 参数会运行 doctor 诊断具体冲突项。
-- **版本回退**：`git -C ~/claude-config log --oneline` 查看历史，`git -C ~/claude-config checkout <commit>` 回退后重跑 `setup.sh --force`。
+- **安装后异常**：
+  ```bash
+  ~/claude-config/setup.sh --force --ecc-focused
+  ```
+- **只想检查，不想重装**：
+  ```bash
+  ~/claude-config/setup.sh verify
+  ```
+- **需要更深的检查**：
+  ```bash
+  ~/claude-config/setup.sh --smoke-test
+  ```
+- **插件 hook 报错**：先 `/reload-plugins`，仍有问题再重跑 setup
+- **自动补环境失败**：按 setup 输出的提示补装；其中 `node` / `npm` 建议继续走 Node 官方推荐脚本路径（`nvm` + 最新 Node.js）
+- **版本回退**：
+  ```bash
+  git -C ~/claude-config log --oneline
+  git -C ~/claude-config checkout <commit>
+  ~/claude-config/setup.sh --force
+  ```
 
 ## 卸载
 
 ```bash
-~/claude-config/setup.sh --uninstall core   # 仅核心配置
-~/claude-config/setup.sh --uninstall ecc    # 核心 + ECC
-~/claude-config/setup.sh --uninstall all    # 完全卸载（保留 settings.json）
+~/claude-config/setup.sh --uninstall core
+~/claude-config/setup.sh --uninstall ecc
+~/claude-config/setup.sh --uninstall all
 ```
 
-`settings.json` 不会被自动删除以保护自定义配置。如需彻底重置：`rm ~/.claude/settings.json`。
+`settings.json` 默认保留，避免误删你的自定义配置。若你要彻底重置：
 
-## 其他选项
+```bash
+rm ~/.claude/settings.json
+```
+
+## 常用选项
 
 | 选项 | 作用 |
 |------|------|
-| `--ci` | CI 模式（ECC 用 full profile） |
+| `--force` | 强制重跑安装流程 |
 | `--dry-run` | 预览，不实际修改 |
 | `--no-claude` | 跳过 Claude Code CLI 安装 |
-| `--smoke-test` | 运行 doctor 诊断 |
+| `--smoke-test` | 运行 doctor 与上下文注入检查 |
+| `--update` | 执行更新流程 |
+| `--update-third-party` | 刷新第三方仓库到上游最新 |
+| `--ci` | CI 模式 |
 
 ## 架构概要
 
-```
+```text
 ~/.claude/
-  CLAUDE.md        → config/claude/CLAUDE.md      (OMC 编排 + 规则入口)
-  RTK.md           → config/claude/RTK.md         (token 压缩代理)
-  rules/           → config/claude/rules/         (基线自动加载：common/)
-  rules-available/ → config/claude/rules-available/ (按需规则：python web zh …)
+  CLAUDE.md        → config/claude/CLAUDE.md.ccfg（或由 OMC 注入后的宿主文件）
+  itp.md           → config/claude/itp.md
+  haiku-throttle.md → config/claude/haiku-throttle.md
+  RTK.md           → config/claude/RTK.md
+  rules/           → config/claude/rules/
+  rules-available/ → config/claude/rules-available/
   agents/          ← ECC agents-core + 自定义覆盖
   commands/        ← ECC commands-core
-  settings.json    ← 从 settings.template.json 渲染 + 合并
+  settings.json    ← 从 settings.template.json 渲染并合并
   plugins/
     marketplaces/{omc,superpowers,context-mode,claude-plugins-official}
     known_marketplaces.json
@@ -140,6 +231,6 @@ ECC 安装范围选项：
 |-----------|------|------|
 | oh-my-claudecode | Yeachan-Heo/oh-my-claudecode | 多 Agent 编排 |
 | superpowers | obra/superpowers | 开发 skills + SessionStart |
-| context-mode | mksglu/context-mode | 上下文压缩 (≈70% 节省) |
-| everything-claude-code | affaan-m/everything-claude-code | Agents/Commands/Hooks |
+| context-mode | mksglu/context-mode | 上下文压缩 |
+| everything-claude-code | affaan-m/everything-claude-code | Agents / Commands / Hooks |
 | claude-plugins-official | anthropics/claude-plugins-official | 官方插件市场 |
