@@ -60,6 +60,31 @@ symlink_points_to() {
     [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]
 }
 
+file_has_block() {
+    local path="$1"
+    local block_name="$2"
+    local pattern="<!--[[:space:]]*${block_name}:START[[:space:]]*-->"
+    [[ -f "$path" ]] || return 1
+    grep -Eq "$pattern" "$path" 2>/dev/null
+}
+
+is_valid_claude_md() {
+    local claude_md="$1"
+    local ccfg_src="$2"
+
+    if symlink_points_to "$claude_md" "$ccfg_src"; then
+        return 0
+    fi
+
+    if [[ -f "$claude_md" && ! -L "$claude_md" ]] \
+        && file_has_block "$claude_md" "Claude-Config" \
+        && file_has_block "$claude_md" "OMC"; then
+        return 0
+    fi
+
+    return 1
+}
+
 ensure_managed_block() {
     local src="$1"
     local dst="$2"
@@ -786,10 +811,18 @@ verify_core_config() {
     fi
 
     local failed=0
-    if symlink_points_to "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/config/claude/CLAUDE.md.ccfg"; then
-        pass "CLAUDE.md symlink"
+    if is_valid_claude_md "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/config/claude/CLAUDE.md.ccfg"; then
+        if symlink_points_to "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/config/claude/CLAUDE.md.ccfg"; then
+            pass "CLAUDE.md symlink"
+        else
+            pass "CLAUDE.md injected file (OMC + Claude-Config)"
+        fi
     else
-        err "CLAUDE.md symlink 缺失"
+        if [[ -f "$CLAUDE_HOME/CLAUDE.md" && ! -L "$CLAUDE_HOME/CLAUDE.md" ]]; then
+            err "CLAUDE.md 是普通文件但缺少 OMC 或 Claude-Config block"
+        else
+            err "CLAUDE.md 未配置 (需要 symlink 或包含 OMC + Claude-Config blocks 的普通文件)"
+        fi
         failed=1
     fi
 
@@ -1123,7 +1156,11 @@ uninstall_core() {
     phase "Uninstall: 核心配置"
     local repo="$REPO_ROOT/config/claude"
 
-    remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink" "$repo/CLAUDE.md.ccfg"
+    if [[ -L "$CLAUDE_HOME/CLAUDE.md" ]]; then
+        remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink" "$repo/CLAUDE.md.ccfg"
+    elif [[ -f "$CLAUDE_HOME/CLAUDE.md" ]] && file_has_block "$CLAUDE_HOME/CLAUDE.md" "Claude-Config"; then
+        remove_managed_block "$CLAUDE_HOME/CLAUDE.md" "Claude-Config" "CLAUDE.md Claude-Config block"
+    fi
     remove_symlink_if_ours "$CLAUDE_HOME/itp.md" "itp.md symlink" "$repo/itp.md"
     remove_symlink_if_ours "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink" "$repo/haiku-throttle.md"
 
