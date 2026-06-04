@@ -159,16 +159,35 @@ install_lts_node_with_nvm() {
 
     local install_cmd="curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_INSTALL_VERSION}/install.sh | bash"
     local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    local version_file
+    version_file="$(mktemp)"
 
     info "使用 Node 官方推荐脚本安装并切换到最新 LTS Node.js（自带 npm）..."
-    bash -lc "set -euo pipefail; ${install_cmd}; export NVM_DIR=\"${nvm_dir}\"; . \"${nvm_dir}/nvm.sh\"; nvm install --lts; nvm alias default 'lts/*' >/dev/null; nvm use --lts >/dev/null; node --version; npm --version"
+    if ! LTS_VERSION_FILE="$version_file" bash -lc "set -eo pipefail; ${install_cmd}; export NVM_DIR=\"${nvm_dir}\"; . \"${nvm_dir}/nvm.sh\"; nvm install --lts; nvm alias default 'lts/*' >/dev/null; node -p 'process.versions.node' > \"\$LTS_VERSION_FILE\"; node --version; npm --version"; then
+        rm -f "$version_file"
+        return 1
+    fi
+
+    local selected_version
+    selected_version="$(cat "$version_file" 2>/dev/null || true)"
+    rm -f "$version_file"
+    if [[ ! "$selected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        err "无法确定最新 LTS Node.js 版本"
+        return 1
+    fi
 
     export NVM_DIR="$nvm_dir"
-    if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-        . "$NVM_DIR/nvm.sh"
-        nvm use --lts >/dev/null
-        hash -r
+    local selected_bin="$NVM_DIR/versions/node/v${selected_version}/bin"
+    if [[ ! -d "$selected_bin" ]]; then
+        err "未找到已安装的 LTS Node.js 目录: $selected_bin"
+        return 1
     fi
+
+    case ":$PATH:" in
+        *":$selected_bin:"*) ;;
+        *) export PATH="$selected_bin:$PATH" ;;
+    esac
+    hash -r
 }
 
 ensure_supported_node_runtime() {
