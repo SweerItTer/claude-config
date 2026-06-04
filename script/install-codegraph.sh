@@ -34,7 +34,18 @@ require_supported_platform() {
     esac
 }
 
+ensure_codegraph_path() {
+    local user_bin="$HOME/.local/bin"
+    [[ -d "$user_bin" ]] || return 0
+
+    case ":$PATH:" in
+        *":$user_bin:"*) ;;
+        *) export PATH="$user_bin:$PATH" ;;
+    esac
+}
+
 codegraph_ready() {
+    ensure_codegraph_path
     command -v codegraph >/dev/null 2>&1 || return 1
     codegraph --version >/dev/null 2>&1
 }
@@ -48,6 +59,7 @@ install_with_upstream() {
     fi
 
     if curl -fsSL "$CODEGRAPH_INSTALLER_URL" | sh; then
+        ensure_codegraph_path
         ok "CodeGraph 官方安装器执行完成"
         return 0
     fi
@@ -70,6 +82,7 @@ install_with_npm_fallback() {
     fi
 
     npm i -g "$CODEGRAPH_NPM_PACKAGE"
+    ensure_codegraph_path
     ok "CodeGraph 已通过 npm fallback 安装"
     info "如需恢复到官方安装路径，请在网络恢复后重新运行: $CODEGRAPH_UPSTREAM_COMMAND"
 }
@@ -89,6 +102,8 @@ verify() {
         info "dry-run 模式跳过 verify"
         return 0
     fi
+
+    ensure_codegraph_path
 
     if ! command -v codegraph >/dev/null 2>&1; then
         err "CodeGraph verify 失败: 未找到 codegraph 命令"
