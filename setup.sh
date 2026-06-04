@@ -211,6 +211,10 @@ import json
 import os
 
 PLAYWRIGHT_PLUGIN = 'playwright@claude-plugins-official'
+LEGACY_PLUGIN_KEYS = {
+    'obra/superpowers@superpowers': 'superpowers@superpowers',
+    'ecc@ecc': 'affaan-m/everything-claude-code@ecc',
+}
 
 
 def merge_object(dst, src, skip_empty=False, prefer_existing=False):
@@ -250,6 +254,12 @@ def merge_permissions(existing, template):
 def migrate_default_disabled_plugins(current, template):
     enabled = dict(current.get('enabledPlugins') or {})
     template_enabled = template.get('enabledPlugins') if isinstance(template.get('enabledPlugins'), dict) else {}
+
+    for legacy_key, canonical_key in LEGACY_PLUGIN_KEYS.items():
+        if legacy_key in enabled:
+            if enabled.get(legacy_key) is True and canonical_key not in enabled:
+                enabled[canonical_key] = True
+            enabled.pop(legacy_key, None)
 
     if PLAYWRIGHT_PLUGIN not in template_enabled:
         enabled.pop(PLAYWRIGHT_PLUGIN, None)
@@ -550,6 +560,14 @@ sync_third_party_source() {
     refresh_existing_third_party_source "$name" "$clone_url" "$target"
 }
 
+should_sync_marketplace_source() {
+    local name="$1"
+    if [[ "$name" == "ecc" ]] && ! ecc_requested; then
+        return 1
+    fi
+    return 0
+}
+
 ensure_third_party_sources() {
     info "读取 marketplace source 配置: $KNOWN_MARKETPLACES_CONFIG"
     if [[ "$DRY_RUN" == true ]]; then
@@ -565,6 +583,10 @@ ensure_third_party_sources() {
 
     while IFS=$'\t' read -r name source_kind source_ref clone_url target; do
         [[ -n "$name" ]] || continue
+        if ! should_sync_marketplace_source "$name"; then
+            info "未显式请求 ECC，跳过第三方 source: $name"
+            continue
+        fi
         info "准备第三方 source: $name -> $target"
         sync_third_party_source "$name" "$source_kind" "$source_ref" "$clone_url" "$target"
     done <<< "$sources"
@@ -604,7 +626,9 @@ update_repository() {
 ensure_core_config() {
     mkdir -p "$CLAUDE_HOME"
 
-    ensure_managed_block "$REPO_ROOT/config/claude/CLAUDE.md" "$CLAUDE_HOME/CLAUDE.md" "Claude-Config" "CLAUDE.md 配置块"
+    ensure_symlink "$REPO_ROOT/config/claude/CLAUDE.md.ccfg" "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink"
+    ensure_symlink "$REPO_ROOT/config/claude/itp.md" "$CLAUDE_HOME/itp.md" "itp.md symlink"
+    ensure_symlink "$REPO_ROOT/config/claude/haiku-throttle.md" "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink"
     remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md 旧 symlink" "$REPO_ROOT/config/claude/AGENTS.md"
 
     for file in RTK.md; do
@@ -755,14 +779,21 @@ verify_core_config() {
     fi
 
     local failed=0
-    if grep -Eq '<!--[[:space:]]*Claude-Config:START[[:space:]]*-->' "$CLAUDE_HOME/CLAUDE.md" 2>/dev/null \
-        && grep -Eq '<!--[[:space:]]*Claude-Config:END[[:space:]]*-->' "$CLAUDE_HOME/CLAUDE.md" 2>/dev/null; then
-        pass "CLAUDE.md 配置块"
+    if symlink_points_to "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/config/claude/CLAUDE.md.ccfg"; then
+        pass "CLAUDE.md symlink"
     else
-        err "CLAUDE.md 配置块缺失"
+        err "CLAUDE.md symlink 缺失"
         failed=1
     fi
 
+    if symlink_points_to "$CLAUDE_HOME/itp.md" "$REPO_ROOT/config/claude/itp.md" \
+        && symlink_points_to "$CLAUDE_HOME/haiku-throttle.md" "$REPO_ROOT/config/claude/haiku-throttle.md"; then
+        pass "ITP/throttle symlink"
+    else
+        err "ITP/throttle symlink 缺失"
+        failed=1
+    fi
+    
     if symlink_points_to "$CLAUDE_HOME/RTK.md" "$REPO_ROOT/config/claude/RTK.md"; then
         pass "RTK.md symlink"
     else
@@ -916,9 +947,13 @@ run_final_doctor() {
     return 0
 }
 
+ecc_requested() {
+    [[ "$ECC_FULL" == true || "$ECC_FOCUSED" == true || -n "$ECC_PROFILE" || -n "$ECC_MODULES" || -n "$ECC_SKILLS" ]]
+}
+
 set_ecc_mode() {
-    ECC_MODE="interactive"
-    if [[ "$CI_MODE" == true || "$ECC_FULL" == true ]]; then
+    ECC_MODE=""
+    if [[ "$ECC_FULL" == true ]]; then
         ECC_MODE="full"
     elif [[ "$ECC_FOCUSED" == true ]]; then
         ECC_MODE="focused"
@@ -962,7 +997,11 @@ run_install_flow() {
     phase "Phase 3: 安装器编排"
     set_ecc_mode
     run_installer codegraph "$UPDATE"
-    run_installer ecc "$ECC_MODE"
+    if ecc_requested; then
+        run_installer ecc "$ECC_MODE"
+    else
+        info "未显式请求 ECC，跳过 ECC 安装"
+    fi
     run_installer context-mode "$NO_PATCH"
     run_installer openspec
 
@@ -977,6 +1016,19 @@ run_install_flow() {
     run_final_doctor
 }
 
+run_core_flow() {
+    phase "Phase 1: Claude Code"
+    ensure_claude_code
+
+    phase "Phase 2: 核心配置"
+    ensure_core_config
+    ensure_settings_json
+    copy_known_marketplaces
+
+    phase "Phase 3: 最终验证"
+    verify_core_config
+}
+
 run_inspection_flow() {
     phase "Phase 1: 核心配置状态"
     verify_core_config
@@ -986,7 +1038,7 @@ run_inspection_flow() {
 }
 
 UNINSTALL=""
-ECC_MODE="interactive"
+ECC_MODE=""
 
 remove_symlink_if_ours() {
     local path="$1"
@@ -1063,8 +1115,11 @@ PYEOF
 uninstall_core() {
     phase "Uninstall: 核心配置"
     local repo="$REPO_ROOT/config/claude"
-    remove_managed_block "$CLAUDE_HOME/CLAUDE.md" "Claude-Config" "CLAUDE.md 配置块"
-    remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink" "$repo/CLAUDE.md"
+
+    remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink" "$repo/CLAUDE.md.ccfg"
+    remove_symlink_if_ours "$CLAUDE_HOME/itp.md" "itp.md symlink" "$repo/itp.md"
+    remove_symlink_if_ours "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink" "$repo/haiku-throttle.md"
+
     remove_symlink_if_ours "$CLAUDE_HOME/RTK.md" "RTK.md" "$repo/RTK.md"
     remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md" "$repo/AGENTS.md"
     remove_symlink_if_ours "$CLAUDE_HOME/rules" "rules/" "$repo/rules"
@@ -1080,20 +1135,92 @@ clean_installed_plugins_json() {
     local target="$CLAUDE_HOME/plugins/installed_plugins.json"
     [[ -f "$target" ]] || return 0
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] 从 installed_plugins.json 移除 ecc@ecc"
+        info "[DRY-RUN] 从 installed_plugins.json 移除 ECC 注册"
         return 0
     fi
     python3 - "$target" <<'PYEOF'
 import json, sys
-with open(sys.argv[1], 'r+') as f:
+plugin_keys = ('ecc@ecc', 'affaan-m/everything-claude-code@ecc')
+with open(sys.argv[1], 'r+', encoding='utf-8') as f:
     data = json.load(f)
-    data.get('plugins', {}).pop('ecc@ecc', None)
-    data.get('enabledPlugins', {}).pop('ecc@ecc', None)
+    plugins = data.get('plugins', {})
+    enabled = data.get('enabledPlugins', {})
+    for key in plugin_keys:
+        plugins.pop(key, None)
+        enabled.pop(key, None)
     f.seek(0)
-    json.dump(data, f, indent=2)
+    json.dump(data, f, indent=2, ensure_ascii=False)
     f.write('\n')
     f.truncate()
 PYEOF
+}
+
+clean_ecc_settings_json() {
+    local target="$CLAUDE_HOME/settings.json"
+    [[ -f "$target" ]] || return 0
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] 从 settings.json 禁用 ECC plugin"
+        return 0
+    fi
+    python3 - "$target" <<'PYEOF'
+import json, sys
+plugin_keys = ('ecc@ecc', 'affaan-m/everything-claude-code@ecc')
+with open(sys.argv[1], 'r+', encoding='utf-8') as f:
+    data = json.load(f)
+    enabled = data.get('enabledPlugins', {})
+    for key in plugin_keys:
+        enabled.pop(key, None)
+    f.seek(0)
+    json.dump(data, f, indent=4, ensure_ascii=False)
+    f.write('\n')
+    f.truncate()
+PYEOF
+}
+
+remove_ecc_skill_symlinks() {
+    local ecc_dir="$REPO_ROOT/external/everything-claude-code"
+    local skills_dir="$CLAUDE_HOME/skills"
+    [[ -d "$skills_dir" ]] || return 0
+
+    local skill_path removed=0
+    shopt -s nullglob
+    for skill_path in "$skills_dir"/*; do
+        [[ -L "$skill_path" ]] || continue
+        if symlink_points_to "$skill_path" "$ecc_dir/skills/$(basename "$skill_path")"; then
+            if [[ "$DRY_RUN" == true ]]; then
+                info "[DRY-RUN] rm $skill_path"
+            else
+                rm -f "$skill_path"
+            fi
+            removed=$((removed + 1))
+        fi
+    done
+    shopt -u nullglob
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] 预计移除 $removed 个 ECC skills symlink"
+    else
+        info "已移除 $removed 个 ECC skills symlink"
+    fi
+}
+
+remove_ecc_skill_tree() {
+    local skills_tree="$CLAUDE_HOME/skills/ecc"
+    [[ -d "$skills_tree" ]] || return 0
+
+    local skill_count
+    skill_count="$(find "$skills_tree" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')"
+    if [[ "$skill_count" -eq 0 ]]; then
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] rm -rf $skills_tree ($skill_count ECC skills)"
+        return 0
+    fi
+
+    rm -rf "$skills_tree"
+    info "已移除 ECC skills 目录树 ($skill_count skills)"
 }
 
 uninstall_ecc() {
@@ -1102,8 +1229,11 @@ uninstall_ecc() {
     remove_symlink_if_ours "$CLAUDE_HOME/plugins/marketplaces/ecc" "ECC marketplace" "$ecc_dir"
     rm -rf "$CLAUDE_HOME/ecc"
     rm -rf "$CLAUDE_HOME/plugins/cache/ecc"
+    remove_ecc_skill_symlinks
+    remove_ecc_skill_tree
+    clean_ecc_settings_json
     clean_installed_plugins_json
-    log "已移除 ECC install-state + plugin cache + installed_plugins 注册"
+    log "已移除 ECC install-state + plugin cache + skills 残留 + settings/installed_plugins 注册"
 }
 
 uninstall_all() {
@@ -1151,8 +1281,8 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         -h|--help)
             echo "用法: ./setup.sh [action] [选项]"
-            echo "  action          install | update | reinstall | uninstall | verify | status | doctor"
-            echo "  --ci            CI 模式 (跳过手动提示，ECC 使用全量安装以覆盖测试)"
+            echo "  action          install | update | reinstall | core | uninstall | verify | status | doctor"
+            echo "  --ci            CI 模式 (跳过手动提示)"
             echo "  --dry-run       预览，不实际修改"
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
@@ -1169,7 +1299,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --ecc-skills S 安装逗号分隔 skill ID allowlist"
             echo "  --uninstall [M] 兼容旧卸载模式 (core=核心配置, ecc=含ECC, all=全部)"
             exit 0 ;;
-        install|update|reinstall|uninstall|verify|status|doctor)
+        install|update|reinstall|core|uninstall|verify|status|doctor)
             ACTION="$1"
             ACTION_EXPLICIT=true
             shift ;;
@@ -1235,6 +1365,14 @@ main() {
                 echo "      ls ~/.claude/plugins/marketplaces/"
                 echo ""
             fi
+            ;;
+        core)
+            run_core_flow
+            echo ""
+            echo -e "${GREEN}============================================${NC}"
+            echo -e "${GREEN}  Claude Core 配置已同步!${NC}"
+            echo -e "${GREEN}============================================${NC}"
+            echo ""
             ;;
         verify|status|doctor)
             run_inspection_flow
