@@ -215,6 +215,9 @@ LEGACY_PLUGIN_KEYS = {
     'obra/superpowers@superpowers': 'superpowers@superpowers',
     'ecc@ecc': 'affaan-m/everything-claude-code@ecc',
 }
+OPT_IN_PLUGIN_KEYS = {
+    'affaan-m/everything-claude-code@ecc',
+}
 
 
 def merge_object(dst, src, skip_empty=False, prefer_existing=False):
@@ -260,6 +263,10 @@ def migrate_default_disabled_plugins(current, template):
             if enabled.get(legacy_key) is True and canonical_key not in enabled:
                 enabled[canonical_key] = True
             enabled.pop(legacy_key, None)
+
+    for opt_in_key in OPT_IN_PLUGIN_KEYS:
+        if opt_in_key not in template_enabled:
+            enabled.pop(opt_in_key, None)
 
     if PLAYWRIGHT_PLUGIN not in template_enabled:
         enabled.pop(PLAYWRIGHT_PLUGIN, None)
@@ -1226,14 +1233,23 @@ remove_ecc_skill_tree() {
 uninstall_ecc() {
     phase "Uninstall: ECC"
     local ecc_dir="$REPO_ROOT/external/everything-claude-code"
-    remove_symlink_if_ours "$CLAUDE_HOME/plugins/marketplaces/ecc" "ECC marketplace" "$ecc_dir"
+    local ecc_marketplace="$CLAUDE_HOME/plugins/marketplaces/ecc"
+    remove_symlink_if_ours "$ecc_marketplace" "ECC marketplace" "$ecc_dir"
+    if [[ -d "$ecc_marketplace" && ! -L "$ecc_marketplace" ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] rm -rf $ecc_marketplace"
+        else
+            rm -rf "$ecc_marketplace"
+            info "已移除 ECC marketplace 目录"
+        fi
+    fi
     rm -rf "$CLAUDE_HOME/ecc"
     rm -rf "$CLAUDE_HOME/plugins/cache/ecc"
     remove_ecc_skill_symlinks
     remove_ecc_skill_tree
     clean_ecc_settings_json
     clean_installed_plugins_json
-    log "已移除 ECC install-state + plugin cache + skills 残留 + settings/installed_plugins 注册"
+    log "已移除 ECC install-state + plugin cache + marketplace + skills 残留 + settings/installed_plugins 注册"
 }
 
 uninstall_all() {

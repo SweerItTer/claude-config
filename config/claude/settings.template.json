@@ -4,7 +4,9 @@
     "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
     "CLAUDE_CODE_NEW_INIT": "1",
     "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+    "CTX_STRICT_BASH": "0",
+    "ENABLE_TOOL_SEARCH": "true"
   },
   "extraKnownMarketplaces": {
     "ecc": {
@@ -38,7 +40,6 @@
       }
     }
   },
-  "model": "opus",
   "enabledPlugins": {
     "superpowers@superpowers": true,
     "oh-my-claudecode@omc": true,
@@ -55,6 +56,17 @@
   },
   "effortLevel": "high",
   "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/posttooluse.mjs",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -63,16 +75,16 @@
             "type": "command"
           }
         ],
-        "matcher": "Read"
+        "matcher": "WebFetch|Read|Bash"
       },
       {
         "hooks": [
           {
-            "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/pretooluse.mjs",
+            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rtk-rewrite.sh",
             "type": "command"
           }
         ],
-        "matcher": "WebFetch"
+        "matcher": "Bash"
       },
       {
         "matcher": "Edit|Write",
@@ -88,7 +100,7 @@
       {
         "hooks": [
           {
-            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs",
+            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs && openspec init --tools claude",
             "type": "command"
           }
         ]
