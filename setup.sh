@@ -45,6 +45,8 @@ ACTION_EXPLICIT=false
 KNOWN_MARKETPLACES_CONFIG="$REPO_ROOT/config/known_marketplaces.json"
 EXTERNAL_DIR="$REPO_ROOT/external"
 NVM_INSTALL_VERSION="v0.40.4"
+MIN_SUPPORTED_NODE_MAJOR=20
+MAX_SUPPORTED_NODE_MAJOR=25
 
 log()   { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -129,9 +131,21 @@ run_package_install() {
     esac
 }
 
-install_latest_node_with_nvm() {
+node_major_version() {
+    command -v node >/dev/null 2>&1 || return 1
+    node -p "process.versions.node.split('.')[0]" 2>/dev/null
+}
+
+node_runtime_supported() {
+    local major
+    major="$(node_major_version)" || return 1
+    [[ "$major" =~ ^[0-9]+$ ]] || return 1
+    (( major >= MIN_SUPPORTED_NODE_MAJOR && major <= MAX_SUPPORTED_NODE_MAJOR ))
+}
+
+install_lts_node_with_nvm() {
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] 使用 Node 官方推荐脚本安装 nvm (${NVM_INSTALL_VERSION}) 并安装最新 Node.js（自带 npm）"
+        info "[DRY-RUN] 使用 Node 官方推荐脚本安装 nvm (${NVM_INSTALL_VERSION}) 并切换到最新 LTS Node.js（自带 npm）"
         return 0
     fi
 
@@ -146,15 +160,35 @@ install_latest_node_with_nvm() {
     local install_cmd="curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_INSTALL_VERSION}/install.sh | bash"
     local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
 
-    info "使用 Node 官方推荐脚本安装最新版 Node.js（自带 npm）..."
-    bash -lc "set -euo pipefail; ${install_cmd}; export NVM_DIR=\"${nvm_dir}\"; . \"${nvm_dir}/nvm.sh\"; nvm install node; nvm use node >/dev/null; node --version; npm --version"
+    info "使用 Node 官方推荐脚本安装并切换到最新 LTS Node.js（自带 npm）..."
+    bash -lc "set -euo pipefail; ${install_cmd}; export NVM_DIR=\"${nvm_dir}\"; . \"${nvm_dir}/nvm.sh\"; nvm install --lts; nvm alias default 'lts/*' >/dev/null; nvm use --lts >/dev/null; node --version; npm --version"
 
     export NVM_DIR="$nvm_dir"
     if [[ -s "$NVM_DIR/nvm.sh" ]]; then
         . "$NVM_DIR/nvm.sh"
-        nvm use node >/dev/null
+        nvm use --lts >/dev/null
         hash -r
     fi
+}
+
+ensure_supported_node_runtime() {
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && node_runtime_supported; then
+        return 0
+    fi
+
+    if command -v node >/dev/null 2>&1; then
+        local current_major
+        current_major="$(node_major_version 2>/dev/null || true)"
+        if [[ -n "$current_major" ]]; then
+            warn "当前 Node.js 主版本 $current_major 超出兼容范围，切换到最新 LTS..."
+        else
+            warn "当前 Node.js 版本无法识别，切换到最新 LTS..."
+        fi
+    else
+        warn "缺少 node/npm，安装最新 LTS..."
+    fi
+
+    install_lts_node_with_nvm
 }
 
 try_install_dep() {
@@ -178,7 +212,7 @@ try_install_dep() {
             run_package_install "$pkg_mgr" tar
             ;;
         node|npm)
-            install_latest_node_with_nvm
+            ensure_supported_node_runtime
             ;;
         python3)
             case "$pkg_mgr" in
@@ -236,26 +270,25 @@ print_dependency_install_help() {
 }
 
 ensure_system_dependencies() {
-    local deps=(git curl tar node npm python3)
+    local deps=(git curl tar python3)
     local missing=()
     local dep
     for dep in "${deps[@]}"; do
         command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
     done
 
+    if ! ensure_supported_node_runtime; then
+        err "node/npm 无法自动安装或切换到兼容的 LTS 版本"
+        info "建议重新运行 Node 官方脚本方式安装并切到最新 LTS：nvm install --lts && nvm use --lts"
+        return 1
+    fi
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         local pkg_mgr
         pkg_mgr="$(detect_pkg_manager)"
         warn "缺少依赖: ${missing[*]}，尝试自动安装..."
-        local node_group_attempted=false
         for dep in "${missing[@]}"; do
             command -v "$dep" >/dev/null 2>&1 && continue
-            if [[ "$dep" == "node" || "$dep" == "npm" ]]; then
-                if [[ "$node_group_attempted" == true ]]; then
-                    continue
-                fi
-                node_group_attempted=true
-            fi
             try_install_dep "$dep" "$pkg_mgr" || true
         done
 

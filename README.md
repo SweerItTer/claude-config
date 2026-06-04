@@ -30,7 +30,7 @@ cd ~/claude-config
 
 如果缺少其中任意一个，`setup.sh` 会先尝试自动补环境：
 - `git` / `curl` / `tar` / `python3`：优先走系统包管理器（`apt-get` / `dnf` / `yum` / `brew` / `pacman`）
-- `node` / `npm`：改走 Node 官方推荐的脚本方式，先安装 `nvm`，再安装最新版 Node.js（自带最新 npm）
+- `node` / `npm`：改走 Node 官方推荐的脚本方式，先安装 `nvm`，再安装并切换到**最新 LTS** Node.js（自带 npm）；若当前已装的是不兼容的 current 版本，setup 会主动切回 LTS
 
 实在装不上，才会报错并提示你手动补装。
 
@@ -175,7 +175,7 @@ ECC 范围选项：
   ~/claude-config/setup.sh --smoke-test
   ```
 - **插件 hook 报错**：先 `/reload-plugins`，仍有问题再重跑 setup
-- **自动补环境失败**：按 setup 输出的提示补装；其中 `node` / `npm` 建议继续走 Node 官方推荐脚本路径（`nvm` + 最新 Node.js）
+- **自动补环境失败**：按 setup 输出的提示补装；其中 `node` / `npm` 建议继续走 Node 官方推荐脚本路径（`nvm` + 最新 LTS Node.js）
 - **版本回退**：
   ```bash
   git -C ~/claude-config log --oneline
