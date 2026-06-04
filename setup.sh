@@ -1230,6 +1230,34 @@ remove_ecc_skill_tree() {
     info "已移除 ECC skills 目录树 ($skill_count skills)"
 }
 
+remove_ecc_command_files() {
+    local ecc_commands_dir="$REPO_ROOT/external/everything-claude-code/commands"
+    local commands_dir="$CLAUDE_HOME/commands"
+    [[ -d "$commands_dir" && -d "$ecc_commands_dir" ]] || return 0
+
+    local command_path source_path removed=0
+    shopt -s nullglob
+    for command_path in "$commands_dir"/*.md; do
+        source_path="$ecc_commands_dir/$(basename "$command_path")"
+        [[ -f "$source_path" ]] || continue
+        if cmp -s "$command_path" "$source_path"; then
+            if [[ "$DRY_RUN" == true ]]; then
+                info "[DRY-RUN] rm $command_path"
+            else
+                rm -f "$command_path"
+            fi
+            removed=$((removed + 1))
+        fi
+    done
+    shopt -u nullglob
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] 预计移除 $removed 个 ECC commands 文件"
+    else
+        info "已移除 $removed 个 ECC commands 文件"
+    fi
+}
+
 uninstall_ecc() {
     phase "Uninstall: ECC"
     local ecc_dir="$REPO_ROOT/external/everything-claude-code"
@@ -1247,9 +1275,10 @@ uninstall_ecc() {
     rm -rf "$CLAUDE_HOME/plugins/cache/ecc"
     remove_ecc_skill_symlinks
     remove_ecc_skill_tree
+    remove_ecc_command_files
     clean_ecc_settings_json
     clean_installed_plugins_json
-    log "已移除 ECC install-state + plugin cache + marketplace + skills 残留 + settings/installed_plugins 注册"
+    log "已移除 ECC install-state + plugin cache + marketplace + skills/commands 残留 + settings/installed_plugins 注册"
 }
 
 uninstall_all() {
