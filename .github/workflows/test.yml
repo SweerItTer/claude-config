@@ -229,6 +229,11 @@ jobs:
             exit 1
           fi
 
+      - name: Verify setup dependency bootstrap regression script
+        run: |
+          chmod +x ./script/test-setup-dependencies.sh
+          ./script/test-setup-dependencies.sh
+
       - name: Verify settings merge regression script
         run: |
           chmod +x ./script/test-settings-merge.sh

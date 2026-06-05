@@ -71,6 +71,36 @@ detect_pkg_manager() {
     fi
 }
 
+run_privileged_install() {
+    local manual_cmd="$1"
+    shift
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        "$@"
+        return $?
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        err "缺少 sudo，无法自动安装: $manual_cmd"
+        return 1
+    fi
+
+    if [[ "$CI_MODE" == true || ! -t 0 ]]; then
+        warn "安装依赖需要 sudo 权限，但当前不是交互式终端，无法请求密码。"
+        info "请在交互式终端执行: $manual_cmd"
+        return 1
+    fi
+
+    info "安装依赖需要 sudo 权限，将请求交互式密码输入..."
+    if ! sudo -v; then
+        err "sudo 授权失败，无法自动安装: $manual_cmd"
+        info "请在交互式终端执行: $manual_cmd"
+        return 1
+    fi
+
+    sudo "$@"
+}
+
 run_package_install() {
     local pkg_mgr="$1"
     shift
@@ -82,47 +112,27 @@ run_package_install() {
 
     case "$pkg_mgr" in
         apt)
-            if [[ "$(id -u)" -eq 0 ]]; then
-                apt-get update && apt-get install -y "$@"
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo apt-get update && sudo apt-get install -y "$@"
-            else
-                err "缺少 sudo，无法通过 apt 自动安装: $*"
-                return 1
-            fi
+            run_privileged_install \
+                "sudo apt-get update && sudo apt-get install -y $*" \
+                bash -c 'apt-get update && apt-get install -y "$@"' bash "$@"
             ;;
         dnf)
-            if [[ "$(id -u)" -eq 0 ]]; then
+            run_privileged_install \
+                "sudo dnf install -y $*" \
                 dnf install -y "$@"
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo dnf install -y "$@"
-            else
-                err "缺少 sudo，无法通过 dnf 自动安装: $*"
-                return 1
-            fi
             ;;
         yum)
-            if [[ "$(id -u)" -eq 0 ]]; then
+            run_privileged_install \
+                "sudo yum install -y $*" \
                 yum install -y "$@"
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo yum install -y "$@"
-            else
-                err "缺少 sudo，无法通过 yum 自动安装: $*"
-                return 1
-            fi
             ;;
         brew)
             brew install "$@"
             ;;
         pacman)
-            if [[ "$(id -u)" -eq 0 ]]; then
+            run_privileged_install \
+                "sudo pacman -S --noconfirm $*" \
                 pacman -S --noconfirm "$@"
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo pacman -S --noconfirm "$@"
-            else
-                err "缺少 sudo，无法通过 pacman 自动安装: $*"
-                return 1
-            fi
             ;;
         *)
             err "未识别系统包管理器，无法自动安装: $*"
@@ -296,12 +306,6 @@ ensure_system_dependencies() {
         command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
     done
 
-    if ! ensure_supported_node_runtime; then
-        err "node/npm 无法自动安装或切换到兼容的 LTS 版本"
-        info "建议重新运行 Node 官方脚本方式安装并切到最新 LTS：nvm install --lts && nvm use --lts"
-        return 1
-    fi
-
     if [[ ${#missing[@]} -gt 0 ]]; then
         local pkg_mgr
         pkg_mgr="$(detect_pkg_manager)"
@@ -325,6 +329,12 @@ ensure_system_dependencies() {
             print_dependency_install_help "$pkg_mgr" "${still_missing[@]}"
             return 1
         fi
+    fi
+
+    if ! ensure_supported_node_runtime; then
+        err "node/npm 无法自动安装或切换到兼容的 LTS 版本"
+        info "建议重新运行 Node 官方脚本方式安装并切到最新 LTS：nvm install --lts && nvm use --lts"
+        return 1
     fi
 
     log "git, curl, tar, node, npm, python3 已就绪"
