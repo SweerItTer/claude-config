@@ -25,6 +25,191 @@ jobs:
         with:
           node-version: 22
 
+      - name: Verify install-codegraph.sh shell syntax
+        run: bash -n ./script/install-codegraph.sh
+
+      - name: Verify install-codegraph.sh layered success path
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+
+          mkdir -p "$fixture/bin" "$fixture/home"
+
+          cat >"$fixture/bin/codegraph" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1:-}" == "--version" ]]; then
+            echo "codegraph v0.9.9"
+            exit 0
+          fi
+
+          echo "unexpected codegraph args: $*" >&2
+          exit 1
+          EOF
+
+          cat >"$fixture/bin/claude" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1:-}" == "mcp" && "${2:-}" == "get" && "${3:-}" == "codegraph" ]]; then
+            cat <<'OUT'
+          Scope: User config
+          Status: ✓ Connected
+          Type: stdio
+          Command: codegraph
+          Args: serve --mcp
+          OUT
+            exit 0
+          fi
+
+          echo "unexpected claude args: $*" >&2
+          exit 1
+          EOF
+
+          chmod +x "$fixture/bin/codegraph" "$fixture/bin/claude"
+
+          cat >"$fixture/home/.claude.json" <<'EOF'
+          {
+            "mcpServers": {
+              "codegraph": {
+                "type": "stdio",
+                "command": "codegraph",
+                "args": ["serve", "--mcp"]
+              }
+            }
+          }
+          EOF
+
+          output=$(HOME="$fixture/home" PATH="$fixture/bin:$PATH" bash ./script/install-codegraph.sh "$REPO_ROOT" false false false 2>&1)
+          echo "$output"
+
+          printf '%s\n' "$output" | grep -q '\[PASS\] CodeGraph 已就绪，跳过'
+          printf '%s\n' "$output" | grep -q 'CodeGraph install 通过: codegraph v0.9.9'
+          printf '%s\n' "$output" | grep -q 'CodeGraph configure 通过: .*/.claude.json 已包含期望的 mcpServers.codegraph 配置'
+          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 通过: claude mcp get codegraph 显示 ✓ Connected'
+          printf '%s\n' "$output" | grep -q 'CodeGraph overall 通过: CLI、配置与离线发现均通过'
+
+      - name: Verify install-codegraph.sh repairs missing Claude config
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+
+          mkdir -p "$fixture/bin" "$fixture/home"
+
+          cat >"$fixture/bin/codegraph" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1:-}" == "--version" ]]; then
+            echo "codegraph v0.9.9"
+            exit 0
+          fi
+
+          if [[ "${1:-}" == "install" && "${2:-}" == "-t" && "${3:-}" == "claude" ]]; then
+            cat >"$HOME/.claude.json" <<'OUT'
+          {
+            "mcpServers": {
+              "codegraph": {
+                "type": "stdio",
+                "command": "codegraph",
+                "args": ["serve", "--mcp"]
+              }
+            }
+          }
+          OUT
+            exit 0
+          fi
+
+          echo "unexpected codegraph args: $*" >&2
+          exit 1
+          EOF
+
+          cat >"$fixture/bin/claude" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1:-}" == "mcp" && "${2:-}" == "get" && "${3:-}" == "codegraph" ]]; then
+            cat <<'OUT'
+          Scope: User config
+          Status: ✓ Connected
+          Type: stdio
+          Command: codegraph
+          Args: serve --mcp
+          OUT
+            exit 0
+          fi
+
+          echo "unexpected claude args: $*" >&2
+          exit 1
+          EOF
+
+          chmod +x "$fixture/bin/codegraph" "$fixture/bin/claude"
+
+          output=$(HOME="$fixture/home" PATH="$fixture/bin:$PATH" bash ./script/install-codegraph.sh "$REPO_ROOT" false false false 2>&1)
+          echo "$output"
+
+          printf '%s\n' "$output" | grep -q 'CodeGraph configure 通过: .*/.claude.json 已包含期望的 mcpServers.codegraph 配置'
+          printf '%s\n' "$output" | grep -q 'CodeGraph overall 通过: CLI、配置与离线发现均通过'
+
+      - name: Verify install-codegraph.sh offline failure is soft
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+
+          mkdir -p "$fixture/bin" "$fixture/home"
+
+          cat >"$fixture/bin/codegraph" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1:-}" == "--version" ]]; then
+            echo "codegraph v0.9.9"
+            exit 0
+          fi
+
+          echo "unexpected codegraph args: $*" >&2
+          exit 1
+          EOF
+
+          cat >"$fixture/bin/claude" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1:-}" == "mcp" && "${2:-}" == "get" && "${3:-}" == "codegraph" ]]; then
+            cat <<'OUT'
+          Scope: User config
+          Status: Disconnected
+          Type: stdio
+          Command: codegraph
+          Args: serve --mcp
+          OUT
+            exit 0
+          fi
+
+          echo "unexpected claude args: $*" >&2
+          exit 1
+          EOF
+
+          chmod +x "$fixture/bin/codegraph" "$fixture/bin/claude"
+
+          cat >"$fixture/home/.claude.json" <<'EOF'
+          {
+            "mcpServers": {
+              "codegraph": {
+                "type": "stdio",
+                "command": "codegraph",
+                "args": ["serve", "--mcp"]
+              }
+            }
+          }
+          EOF
+
+          output=$(HOME="$fixture/home" PATH="$fixture/bin:$PATH" bash ./script/install-codegraph.sh "$REPO_ROOT" false false false 2>&1)
+          echo "$output"
+
+          printf '%s\n' "$output" | grep -q 'CodeGraph install 通过: codegraph v0.9.9'
+          printf '%s\n' "$output" | grep -q 'CodeGraph configure 通过: .*/.claude.json 已包含期望的 mcpServers.codegraph 配置'
+          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 失败: claude 已发现 codegraph，但未显示 ✓ Connected'
+          printf '%s\n' "$output" | grep -q 'CodeGraph overall: CLI 与配置已通过，但离线发现失败'
+
       - name: Verify user ECC scope requires selection
         run: |
           set -euo pipefail
@@ -44,12 +229,18 @@ jobs:
             exit 1
           fi
 
+      - name: Verify settings merge regression script
+        run: |
+          chmod +x ./script/test-settings-merge.sh
+          ./script/test-settings-merge.sh
+
       - name: Run setup.sh smoke test
         run: |
           chmod +x ./setup.sh
           ./setup.sh --ci --smoke-test
         env:
           REPO_ROOT: ${{ github.workspace }}
+          CTX_INSTALL_MODE: copy
           CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
           CLAUDE_MODEL: deepseek-v4-flash
@@ -57,18 +248,32 @@ jobs:
       - name: Verify idempotency with second run
         run: |
           set -euo pipefail
-          echo "=== 第二次运行 (应主要走已就绪路径) ==="
-          output=$(./setup.sh --ci 2>&1)
-          echo "$output"
 
-          pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
-          echo "检测到 $pass_count 个 [PASS] 标记"
-          if [[ "$pass_count" -lt 4 ]]; then
+          attempt=1
+          while true; do
+            echo "=== 第 ${attempt} 次幂等性检查 ==="
+            output=$(./setup.sh --ci 2>&1)
+            echo "$output"
+
+            pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
+            echo "检测到 $pass_count 个 [PASS] 标记"
+            if [[ "$pass_count" -ge 4 ]]; then
+              break
+            fi
+
+            if printf '%s\n' "$output" | grep -q 'CLAUDE_HOME 未初始化，已后台启动 Claude Code' && [[ "$attempt" -lt 3 ]]; then
+              echo "检测到 Claude 首次初始化，等待后重试..."
+              sleep 5
+              attempt=$((attempt + 1))
+              continue
+            fi
+
             echo "FAIL: 第二次运行没有体现足够的幂等性"
             exit 1
-          fi
+          done
         env:
           REPO_ROOT: ${{ github.workspace }}
+          CTX_INSTALL_MODE: copy
           CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
           CLAUDE_MODEL: deepseek-v4-flash
