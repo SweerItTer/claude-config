@@ -1,5 +1,6 @@
 # Information Transmission Protocol (ITP)
 
+> Be sure to read the rules of /oh-my-claudecode:team before reading this document to enable the team
 > Every inter-tier message contains only what the receiver needs to act.
 > Code does not travel up. Escalation is triggered by failure, not habit.
 

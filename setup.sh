@@ -71,6 +71,36 @@ detect_pkg_manager() {
     fi
 }
 
+run_privileged_install() {
+    local manual_cmd="$1"
+    shift
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        "$@"
+        return $?
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        err "缺少 sudo，无法自动安装: $manual_cmd"
+        return 1
+    fi
+
+    if [[ "$CI_MODE" == true || ! -t 0 ]]; then
+        warn "安装依赖需要 sudo 权限，但当前不是交互式终端，无法请求密码。"
+        info "请在交互式终端执行: $manual_cmd"
+        return 1
+    fi
+
+    info "安装依赖需要 sudo 权限，将请求交互式密码输入..."
+    if ! sudo -v; then
+        err "sudo 授权失败，无法自动安装: $manual_cmd"
+        info "请在交互式终端执行: $manual_cmd"
+        return 1
+    fi
+
+    sudo "$@"
+}
+
 run_package_install() {
     local pkg_mgr="$1"
     shift
@@ -82,47 +112,27 @@ run_package_install() {
 
     case "$pkg_mgr" in
         apt)
-            if [[ "$(id -u)" -eq 0 ]]; then
-                apt-get update && apt-get install -y "$@"
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo apt-get update && sudo apt-get install -y "$@"
-            else
-                err "缺少 sudo，无法通过 apt 自动安装: $*"
-                return 1
-            fi
+            run_privileged_install \
+                "sudo apt-get update && sudo apt-get install -y $*" \
+                bash -c 'apt-get update && apt-get install -y "$@"' bash "$@"
             ;;
         dnf)
-            if [[ "$(id -u)" -eq 0 ]]; then
+            run_privileged_install \
+                "sudo dnf install -y $*" \
                 dnf install -y "$@"
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo dnf install -y "$@"
-            else
-                err "缺少 sudo，无法通过 dnf 自动安装: $*"
-                return 1
-            fi
             ;;
         yum)
-            if [[ "$(id -u)" -eq 0 ]]; then
+            run_privileged_install \
+                "sudo yum install -y $*" \
                 yum install -y "$@"
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo yum install -y "$@"
-            else
-                err "缺少 sudo，无法通过 yum 自动安装: $*"
-                return 1
-            fi
             ;;
         brew)
             brew install "$@"
             ;;
         pacman)
-            if [[ "$(id -u)" -eq 0 ]]; then
+            run_privileged_install \
+                "sudo pacman -S --noconfirm $*" \
                 pacman -S --noconfirm "$@"
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo pacman -S --noconfirm "$@"
-            else
-                err "缺少 sudo，无法通过 pacman 自动安装: $*"
-                return 1
-            fi
             ;;
         *)
             err "未识别系统包管理器，无法自动安装: $*"
@@ -296,12 +306,6 @@ ensure_system_dependencies() {
         command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
     done
 
-    if ! ensure_supported_node_runtime; then
-        err "node/npm 无法自动安装或切换到兼容的 LTS 版本"
-        info "建议重新运行 Node 官方脚本方式安装并切到最新 LTS：nvm install --lts && nvm use --lts"
-        return 1
-    fi
-
     if [[ ${#missing[@]} -gt 0 ]]; then
         local pkg_mgr
         pkg_mgr="$(detect_pkg_manager)"
@@ -325,6 +329,12 @@ ensure_system_dependencies() {
             print_dependency_install_help "$pkg_mgr" "${still_missing[@]}"
             return 1
         fi
+    fi
+
+    if ! ensure_supported_node_runtime; then
+        err "node/npm 无法自动安装或切换到兼容的 LTS 版本"
+        info "建议重新运行 Node 官方脚本方式安装并切到最新 LTS：nvm install --lts && nvm use --lts"
+        return 1
     fi
 
     log "git, curl, tar, node, npm, python3 已就绪"
@@ -530,51 +540,52 @@ def merge_object(dst, src, skip_empty=False, prefer_existing=False):
             if skip_empty and value == '':
                 continue
             if prefer_existing and key in base:
+                existing = base[key]
+                if isinstance(existing, dict) and isinstance(value, dict):
+                    base[key] = merge_object(existing, value, skip_empty=skip_empty, prefer_existing=True)
                 continue
             base[key] = value
     return base
 
 
 def merge_list(existing, template):
-    existing_list = existing if isinstance(existing, list) else []
-    template_list = template if isinstance(template, list) else []
-    merged = list(existing_list)
-    seen = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in existing_list}
-    for item in template_list:
-        key = json.dumps(item, sort_keys=True, ensure_ascii=False)
-        if key not in seen:
-            merged.append(item)
-            seen.add(key)
-    return merged
+    if isinstance(existing, list):
+        return list(existing)
+    if isinstance(template, list):
+        return list(template)
+    return []
+
+
+def merge_missing(existing, template, skip_empty=False):
+    if skip_empty and template == '':
+        return existing
+
+    if isinstance(existing, dict) and isinstance(template, dict):
+        merged = dict(existing)
+        for key, value in template.items():
+            if skip_empty and value == '':
+                continue
+            if key in merged:
+                merged[key] = merge_missing(merged.get(key), value, skip_empty=skip_empty)
+            else:
+                merged[key] = merge_missing(None, value, skip_empty=skip_empty)
+        return merged
+
+    if isinstance(existing, list):
+        return list(existing)
+    if isinstance(template, list):
+        return list(template)
+    if existing is None:
+        return template
+    return existing
 
 
 def merge_permissions(existing, template):
-    merged = merge_object(existing, template, prefer_existing=True)
-    if isinstance(template, dict):
-        for key, value in template.items():
-            if isinstance(value, list):
-                merged[key] = merge_list(merged.get(key), value)
-    return merged
+    return merge_missing(existing, template)
 
 
-def migrate_default_disabled_plugins(current, template):
-    enabled = dict(current.get('enabledPlugins') or {})
-    template_enabled = template.get('enabledPlugins') if isinstance(template.get('enabledPlugins'), dict) else {}
-
-    for legacy_key, canonical_key in LEGACY_PLUGIN_KEYS.items():
-        if legacy_key in enabled:
-            if enabled.get(legacy_key) is True and canonical_key not in enabled:
-                enabled[canonical_key] = True
-            enabled.pop(legacy_key, None)
-
-    for opt_in_key in OPT_IN_PLUGIN_KEYS:
-        if opt_in_key not in template_enabled:
-            enabled.pop(opt_in_key, None)
-
-    if PLAYWRIGHT_PLUGIN not in template_enabled:
-        enabled.pop(PLAYWRIGHT_PLUGIN, None)
-
-    return enabled
+def migrate_default_disabled_plugins(enabled_plugins):
+    return dict(enabled_plugins) if isinstance(enabled_plugins, dict) else {}
 
 
 path = os.environ['TARGET_SETTINGS_PATH']
@@ -583,27 +594,8 @@ with open(path, 'r', encoding='utf-8') as fh:
     current = json.load(fh)
 template = json.loads(rendered_template)
 
-current['env'] = merge_object(current.get('env'), template.get('env'), skip_empty=True, prefer_existing=True)
-current['enabledPlugins'] = merge_object(current.get('enabledPlugins'), template.get('enabledPlugins'), prefer_existing=True)
-current['enabledPlugins'] = migrate_default_disabled_plugins(current, template)
-current['extraKnownMarketplaces'] = merge_object(current.get('extraKnownMarketplaces'), template.get('extraKnownMarketplaces'), prefer_existing=True)
-
-hooks = current.get('hooks') if isinstance(current.get('hooks'), dict) else {}
-template_hooks = template.get('hooks') if isinstance(template.get('hooks'), dict) else {}
-for hook_name, template_items in template_hooks.items():
-    hooks[hook_name] = merge_list(hooks.get(hook_name), template_items)
-current['hooks'] = hooks
-
-if 'permissions' in template:
-    current['permissions'] = merge_permissions(current.get('permissions'), template.get('permissions'))
-
-if 'disabledMcpServers' in template:
-    current['disabledMcpServers'] = merge_list(current.get('disabledMcpServers'), template.get('disabledMcpServers'))
-
-for key in ['think', 'skipDangerousModePermissionPrompt', 'attribution', 'statusLine', 'language', 'effortLevel']:
-    if key in template and key not in current:
-        current[key] = template[key]
-
+current = merge_missing(current, template, skip_empty=True)
+current['enabledPlugins'] = migrate_default_disabled_plugins(current.get('enabledPlugins'))
 with open(path, 'w', encoding='utf-8') as fh:
     json.dump(current, fh, indent=4, ensure_ascii=False)
     fh.write('\n')
@@ -952,6 +944,28 @@ ensure_core_config() {
     ensure_symlink "$REPO_ROOT/config/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink"
     ensure_symlink "$REPO_ROOT/config/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook"
 
+    local repo_skills_dir="$REPO_ROOT/config/claude/skills"
+    if [[ -d "$repo_skills_dir" ]]; then
+        mkdir -p "$CLAUDE_HOME/skills"
+
+        local skill_src skill_name skill_dst
+        for skill_src in "$repo_skills_dir"/*; do
+            [[ -e "$skill_src" ]] || continue
+            skill_name="$(basename "$skill_src")"
+            skill_dst="$CLAUDE_HOME/skills/$skill_name"
+
+            if [[ -e "$skill_dst" || -L "$skill_dst" ]] && ! symlink_points_to "$skill_dst" "$skill_src"; then
+                if [[ "$DRY_RUN" == true ]]; then
+                    info "[DRY-RUN] 重建已有 skill 目标: $skill_dst"
+                else
+                    rm -rf "$skill_dst"
+                fi
+            fi
+
+            ensure_symlink "$skill_src" "$skill_dst" "skill symlink '$skill_name'"
+        done
+    fi
+
     local cpo_src="$REPO_ROOT/external/claude-plugins-official"
     local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
     if [[ -d "$cpo_src" ]]; then
@@ -972,14 +986,14 @@ ensure_settings_json() {
     rendered_settings="$(render_settings_template "$template")"
 
     if [[ -f "$target" ]] && [[ "$CI_MODE" != true ]]; then
-        info "合并现有 settings.json..."
+        info "合并现有 settings.json（保留已有值，仅补齐缺失项）..."
         if [[ "$DRY_RUN" == true ]]; then
             info "[DRY-RUN] merge settings.json with template-backed migration keys"
             return 0
         fi
         mkdir -p "$CLAUDE_HOME"
         merge_settings_json "$target" "$rendered_settings"
-        log "settings.json 已合并"
+        log "settings.json 已合并并补齐缺失项"
         return 0
     fi
 
@@ -1155,6 +1169,29 @@ verify_core_config() {
         pass "rules-loader hook"
     else
         err "rules-loader hook 缺失"
+        failed=1
+    fi
+
+    local repo_skills_dir="$REPO_ROOT/config/claude/skills"
+    local repo_skills_ok=0
+    if [[ -d "$repo_skills_dir" ]]; then
+        repo_skills_ok=1
+        local skill_src skill_name skill_dst
+        for skill_src in "$repo_skills_dir"/*; do
+            [[ -e "$skill_src" ]] || continue
+            skill_name="$(basename "$skill_src")"
+            skill_dst="$CLAUDE_HOME/skills/$skill_name"
+            if ! symlink_points_to "$skill_dst" "$skill_src"; then
+                repo_skills_ok=0
+                break
+            fi
+        done
+    fi
+
+    if [[ $repo_skills_ok -eq 1 ]]; then
+        pass "repo skills symlink"
+    else
+        err "repo skills symlink 缺失"
         failed=1
     fi
 
@@ -1455,6 +1492,18 @@ uninstall_core() {
     remove_symlink_if_ours "$CLAUDE_HOME/rules" "rules/" "$repo/rules"
     remove_symlink_if_ours "$CLAUDE_HOME/rules-available" "rules-available/" "$repo/rules-available"
     remove_symlink_if_ours "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook" "$repo/hooks/rules-loader.sh"
+
+    local repo_skills_dir="$repo/skills"
+    if [[ -d "$repo_skills_dir" && -d "$CLAUDE_HOME/skills" ]]; then
+        local skill_src skill_name skill_dst
+        for skill_src in "$repo_skills_dir"/*; do
+            [[ -e "$skill_src" ]] || continue
+            skill_name="$(basename "$skill_src")"
+            skill_dst="$CLAUDE_HOME/skills/$skill_name"
+            remove_symlink_if_ours "$skill_dst" "repo skill '$skill_name'" "$skill_src"
+        done
+    fi
+
     # 如果 hooks 目录为空则清理
     if [[ -d "$CLAUDE_HOME/hooks" ]]; then
         rmdir "$CLAUDE_HOME/hooks" 2>/dev/null && info "已清理空 hooks 目录" || true

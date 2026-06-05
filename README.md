@@ -14,7 +14,7 @@ cd ~/claude-config
 ### 2) 选择一种搭建路径
 
 ```bash
-# 最小路径：只同步核心配置（CLAUDE.md / rules / settings / marketplaces）
+# 最小路径：只同步核心配置（CLAUDE.md / rules / settings / marketplaces；已存在的 settings.json 会保留并补齐缺失项）
 ./setup.sh core
 
 # 推荐路径：完整安装 + 4 个基础 ECC 模块
@@ -64,7 +64,7 @@ ls ~/.claude/agents/ ~/.claude/commands/
 - `~/.claude/haiku-throttle.md`
 - `~/.claude/RTK.md`
 - `rules/` / `rules-available/`
-- `settings.json`
+- `settings.json`（缺失时生成，已存在时按模板补齐缺失项）
 - `known_marketplaces.json`
 
 适合先把 Claude 环境搭起来，再按需装插件。
@@ -219,6 +219,7 @@ rm ~/.claude/settings.json
   RTK.md           → config/claude/RTK.md
   rules/           → config/claude/rules/
   rules-available/ → config/claude/rules-available/
+  skills/          → config/claude/skills/
   agents/          ← ECC agents-core + 自定义覆盖
   commands/        ← ECC commands-core
   settings.json    ← 从 settings.template.json 渲染并合并

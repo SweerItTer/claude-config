@@ -9,91 +9,10 @@ Always load `@RTK.md`.
 
 <startup>
 If inside a repo, read `progress.md` and `git.md` if present.
+Load @~/.claude/skills/TTO/SKILL.md before any multi-step or agent task.
 </startup>
 
----
-
-## Three-Tier Pipeline (Core Architecture)
-
-> This is the canonical execution model. Never collapse, shortcut, or bypass tiers.
-
-```
-[Tier-1: Conductor]  ←→  [Tier-2: Reviewer]  ←→  [Tier-3: Executor]
-       Opus                    Sonnet                  Haiku
-Strategy & Ownership       Verify & Gate         Atomic Execution
-```
-
-### Tier-1 — Conductor (Opus)
-- Owns objective, constraints, acceptance criteria.
-- Decomposes requirements → assigns atomic tasks to Tier-3 via Tier-2.
-- Receives only **consolidated, reviewed results** from Tier-2. Never raw Tier-3 output.
-- Makes all architectural and conflict-resolution decisions.
-- Does not implement, edit files, run tests, or write docs directly.
-
-### Tier-2 — Reviewer (Sonnet)
-- Receives atomic tasks from Tier-1 with explicit acceptance criteria.
-- Dispatches tasks to Tier-3. Retains the task context throughout the retry loop.
-- Validates Tier-3 output against acceptance criteria before escalating.
-- **Rejects and re-dispatches** failed tasks to Tier-3 — never escalates partial or unverified work.
-- Reports to Tier-1 only after criteria are met; report must include evidence (diff, test output, log, etc.).
-- If Tier-3 fails 3 consecutive attempts, escalates to Tier-1 with a detailed failure report.
-
-### Tier-3 — Executor (Haiku)
-- Receives one atomic task at a time with explicit scope, inputs, outputs, and constraints.
-- Scope is bounded: single file, single function, single config block, or single test.
-- Returns structured output: result artifact + self-check notes.
-- Does not communicate with Tier-1 directly.
-
----
-
-<team_mode>
-Three-Tier Pipeline activates only in the apply phase (`/opsx:apply`).
-
-Pre-conditions (all must pass before `/team` is invoked):
-- `openspec/changes/*/tasks.md` exists and is non-empty
-- Current phase is apply — never activate during explore or propose
-- Task boundaries are explicit; if ambiguous, resolve with Opus before dispatching
-
-Exempt from `/team` (use direct execution instead):
-- Pure Q&A, single-line edits, scripts under 30 lines, text polishing
-- explore-phase file reads (use read_strategy instead)
-
-When uncertain whether a task qualifies — default to `/team`.
-</team_mode>
-
-<read_strategy>
-Two phases, two modes:
-
-explore (`/opsx:explore`):
-  Opus dispatches Haiku agents in parallel via `dispatching-parallel-agents`.
-  Each Haiku agent receives one target path; returns:
-    - structure map: directory tree or file outline (headers, exports, key symbols)
-    - one-paragraph summary: purpose, dependencies, notable constraints
-    - path reference: exact file path for later precision reads
-  Haiku does NOT return full file contents. Opus assembles the map from summaries.
-  Precision reads (specific function or block) are permitted only when the map
-  reveals a direct dependency on the current question.
-
-apply (`/opsx:apply`):
-  File reads follow ITP — Haiku reads, returns diff-sized excerpts to Sonnet only.
-  Full file contents never enter Opus context.
-  Read before write; never re-read a file already mapped in explore phase without cause.
-</read_strategy>
-
----
-
-<haiku_throttle>
-See @haiku-throttle.md
-</haiku_throttle>
-
----
-
-<itp>
-See @itp.md — message formats, transmission rules, escalation flow.
-</itp>
-
 <rules>
-Token budgets are hard limits.
 Expose conflicts; never merge them silently.
 Tests must verify intent, not implementation details.
 Follow project conventions.
