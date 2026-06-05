@@ -37,4 +37,4 @@ cache/
 # Hook markers
 .dirty
 
-.code*
+.*/
