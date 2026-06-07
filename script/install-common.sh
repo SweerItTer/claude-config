@@ -288,14 +288,25 @@ for entry in entries:
             resolved_cache = cache_path.resolve(strict=False)
             resolved_source = source_path.resolve(strict=False)
             if resolved_cache != resolved_source:
-                print(f"  [ERR] registry: cache 入口冲突，跳过 {plugin_key}: {cache_path} -> {resolved_cache}，期望 {resolved_source}", file=sys.stderr)
+                if prefer_managed:
+                    backup_path = cache_path.with_name(f"{cache_path.name}.backup.{int(datetime.now(timezone.utc).timestamp())}")
+                    cache_path.rename(backup_path)
+                    print(f"  [WARN] registry: 已备份冲突 cache 入口 {plugin_key}: {backup_path}", file=sys.stderr)
+                else:
+                    print(f"  [ERR] registry: cache 入口冲突，跳过 {plugin_key}: {cache_path} -> {resolved_cache}，期望 {resolved_source}", file=sys.stderr)
+                    failed = True
+                    continue
+        elif cache_path.exists():
+            if prefer_managed:
+                backup_path = cache_path.with_name(f"{cache_path.name}.backup.{int(datetime.now(timezone.utc).timestamp())}")
+                cache_path.rename(backup_path)
+                print(f"  [WARN] registry: 已备份冲突 cache 入口 {plugin_key}: {backup_path}", file=sys.stderr)
+            else:
+                print(f"  [ERR] registry: cache 入口已存在且不是 symlink，跳过 {plugin_key}: {cache_path}", file=sys.stderr)
                 failed = True
                 continue
-        elif cache_path.exists():
-            print(f"  [ERR] registry: cache 入口已存在且不是 symlink，跳过 {plugin_key}: {cache_path}", file=sys.stderr)
-            failed = True
-            continue
-        else:
+
+        if not cache_path.exists():
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.symlink_to(source_path)
             print(f"  [OK] registry: cache entry {plugin_key} -> {cache_path}")

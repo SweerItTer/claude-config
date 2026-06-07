@@ -358,6 +358,8 @@ JSON
 printf 'context ok\n'
 SH
     chmod +x "$fixture/bin/claude"
+    mkdir -p "$fixture/home/plugins/cache/context-mode/context-mode/1.0.162"
+    printf 'stale cache directory\n' > "$fixture/home/plugins/cache/context-mode/context-mode/1.0.162/stale.txt"
 
     PATH="$fixture/bin:$PATH" \
     ACTION=doctor \
