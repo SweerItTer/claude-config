@@ -24,6 +24,8 @@ else
 fi
 
 SCRIPT_DIR="$REPO_ROOT/script"
+# shellcheck source=script/install-common.sh
+source "$SCRIPT_DIR/install-common.sh"
 
 DRY_RUN=false
 CI_MODE=false
@@ -1008,42 +1010,71 @@ ensure_settings_json() {
     log "settings.json 已生成"
 }
 
-copy_known_marketplaces() {
-    local target="$CLAUDE_HOME/plugins/known_marketplaces.json"
-
-    info "同步 known_marketplaces.json..."
-    if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] copy $KNOWN_MARKETPLACES_CONFIG to $target with REPO_ROOT resolved to $REPO_ROOT"
-        return 0
-    fi
-
-    mkdir -p "$CLAUDE_HOME/plugins"
-    KNOWN_MARKETPLACES_CONFIG="$KNOWN_MARKETPLACES_CONFIG" \
-    REPO_ROOT="$REPO_ROOT" \
-    python3 - <<'PYEOF' > "$target"
+build_plugin_registration_entries() {
+    SETTINGS_TEMPLATE_JSON="$REPO_ROOT/config/claude/settings.template.json" \
+    EXTERNAL_DIR="$EXTERNAL_DIR" \
+    python3 - <<'PYEOF'
 import json
 import os
-import sys
 from pathlib import Path
 
-config_path = Path(os.environ['KNOWN_MARKETPLACES_CONFIG'])
-repo_root = os.environ['REPO_ROOT']
-with config_path.open('r', encoding='utf-8') as fh:
-    data = json.load(fh)
+settings_path = Path(os.environ['SETTINGS_TEMPLATE_JSON'])
+external_dir = Path(os.environ['EXTERNAL_DIR'])
 
-def resolve(value):
-    if isinstance(value, str) and value.startswith('REPO_ROOT/'):
-        return str(Path(repo_root) / value[len('REPO_ROOT/'):])
-    return value
 
-for entry in data.values():
-    if isinstance(entry, dict) and 'installLocation' in entry:
-        entry['installLocation'] = resolve(entry['installLocation'])
+def manifest_candidates(marketplace_name, plugin_name):
+    marketplace_dir_by_name = {
+        'omc': external_dir / 'oh-my-claudecode',
+        'superpowers': external_dir / 'superpowers',
+        'claude-plugins-official': external_dir / 'claude-plugins-official',
+    }
+    root = marketplace_dir_by_name.get(marketplace_name, external_dir / marketplace_name)
+    return [
+        root,
+        root / plugin_name,
+        root / 'plugins' / plugin_name,
+        root / 'packages' / plugin_name,
+    ]
 
-json.dump(data, sys.stdout, indent=4, ensure_ascii=False)
-print()
+
+def entry(plugin_key, marketplace_name, plugin_name):
+    candidates = manifest_candidates(marketplace_name, plugin_name)
+    selected = candidates[0]
+    for candidate in candidates:
+        if (candidate / '.claude-plugin' / 'plugin.json').is_file():
+            selected = candidate
+            break
+    return {
+        'pluginKey': plugin_key,
+        'marketplaceName': marketplace_name,
+        'pluginName': plugin_name,
+        'sourcePath': str(selected),
+        'pluginJsonPath': str(selected / '.claude-plugin' / 'plugin.json'),
+    }
+
+entries = [
+    entry('oh-my-claudecode@omc', 'omc', 'oh-my-claudecode'),
+    entry('superpowers@superpowers', 'superpowers', 'superpowers'),
+]
+
+if settings_path.is_file():
+    settings = json.loads(settings_path.read_text(encoding='utf-8'))
+    enabled = settings.get('enabledPlugins') or {}
+    for plugin_key, is_enabled in sorted(enabled.items()):
+        if is_enabled is True and plugin_key.endswith('@claude-plugins-official'):
+            plugin_name = plugin_key.rsplit('@claude-plugins-official', 1)[0]
+            entries.append(entry(plugin_key, 'claude-plugins-official', plugin_name))
+
+print(json.dumps(entries, ensure_ascii=False))
 PYEOF
-    log "known_marketplaces.json 已同步"
+}
+
+register_repository_plugins() {
+    local entries_json
+
+    info "修复 repository-managed plugin registry..."
+    entries_json="$(build_plugin_registration_entries)"
+    register_plugins_to_installed_json "$entries_json" "$CLAUDE_HOME/plugins/installed_plugins.json" "$CLAUDE_HOME"
 }
 
 verify_repository_cleanliness() {
@@ -1344,7 +1375,7 @@ run_install_flow() {
     ensure_third_party_sources
     ensure_core_config
     ensure_settings_json
-    copy_known_marketplaces
+    merge_known_marketplaces
 
     if [[ "$UPDATE" == true && "$FORCE" == false ]]; then
         phase "Phase 3: CodeGraph + context-mode + OpenSpec 同步"
@@ -1374,6 +1405,9 @@ run_install_flow() {
     run_installer superpowers
     clean_installed_plugins_json
 
+    phase "Phase 4.5: Plugin registry 修复"
+    register_repository_plugins
+
     phase "Phase 5: 最终验证"
     verify_core_config
     run_final_doctor
@@ -1386,7 +1420,7 @@ run_core_flow() {
     phase "Phase 2: 核心配置"
     ensure_core_config
     ensure_settings_json
-    copy_known_marketplaces
+    merge_known_marketplaces
 
     phase "Phase 3: 最终验证"
     verify_core_config

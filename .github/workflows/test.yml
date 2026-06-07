@@ -2,7 +2,7 @@ name: Test setup.sh
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/abstract-plugin-registry-heal]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -238,6 +238,11 @@ jobs:
         run: |
           chmod +x ./script/test-settings-merge.sh
           ./script/test-settings-merge.sh
+
+      - name: Verify plugin registry heal regression script
+        run: |
+          chmod +x ./script/test-plugin-registry-heal.sh
+          ./script/test-plugin-registry-heal.sh
 
       - name: Run setup.sh smoke test
         run: |
