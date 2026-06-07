@@ -319,6 +319,72 @@ print("PASS: context-mode shared registry heal")
 PYEOF
 }
 
+assert_context_mode_doctor_heals_registry_drift() {
+    local fixture
+
+    fixture="$(mktemp -d)"
+    trap 'rm -rf "$fixture"' RETURN
+
+    mkdir -p \
+        "$fixture/repo/script" \
+        "$fixture/repo/external/context-mode/.claude-plugin" \
+        "$fixture/repo/external/context-mode/node_modules" \
+        "$fixture/repo/external/context-mode/hooks/core" \
+        "$fixture/home/plugins/marketplaces" \
+        "$fixture/bin"
+
+    cp "$COMMON_SH" "$fixture/repo/script/install-common.sh"
+    cat > "$fixture/repo/external/context-mode/.claude-plugin/plugin.json" <<'JSON'
+{"name":"context-mode","version":"1.0.162"}
+JSON
+    cat > "$fixture/repo/external/context-mode/hooks/core/routing.mjs" <<'JS'
+// CTX_STRICT_BASH
+JS
+    git -C "$fixture/repo/external/context-mode" init -q
+    git -C "$fixture/repo/external/context-mode" config user.name "CI Test"
+    git -C "$fixture/repo/external/context-mode" config user.email "ci@example.invalid"
+    git -C "$fixture/repo/external/context-mode" add .
+    git -C "$fixture/repo/external/context-mode" commit -q -m "fixture context-mode"
+    cp -a "$fixture/repo/external/context-mode" "$fixture/home/plugins/marketplaces/context-mode"
+    git -C "$fixture/repo/external/context-mode" rev-parse HEAD > "$fixture/home/plugins/marketplaces/context-mode/.source-rev"
+    cat > "$fixture/home/settings.json" <<'JSON'
+{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}]}}
+JSON
+    cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
+{"context-mode":{"installLocation":"/tmp/context-mode"}}
+JSON
+    cat > "$fixture/bin/claude" <<'SH'
+#!/usr/bin/env bash
+printf 'context ok\n'
+SH
+    chmod +x "$fixture/bin/claude"
+
+    PATH="$fixture/bin:$PATH" \
+    ACTION=doctor \
+    CTX_INSTALL_MODE=copy \
+    CLAUDE_CONFIG_DIR="$fixture/home" \
+        bash "$CONTEXT_MODE_SH" "$fixture/repo" false false true \
+        >/tmp/test-plugin-registry-context-mode-doctor.out \
+        2>/tmp/test-plugin-registry-context-mode-doctor.err
+
+    python3 - "$fixture" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+fixture = Path(sys.argv[1])
+registry = json.loads((fixture / "home" / "plugins" / "installed_plugins.json").read_text())
+entry = registry["plugins"]["context-mode@context-mode"][0]
+expected = fixture / "home" / "plugins" / "cache" / "context-mode" / "context-mode" / "1.0.162"
+assert entry["installPath"] == str(expected), entry
+assert expected.exists(), expected
+assert expected.is_symlink(), expected
+assert expected.resolve() == (fixture / "home" / "plugins" / "marketplaces" / "context-mode").resolve()
+assert registry["enabledPlugins"]["context-mode@context-mode"] is True
+print("PASS: context-mode doctor heals registry drift")
+PYEOF
+}
+
 assert_setup_dry_run_surfaces_registry_phase() {
     local fixture
     local output
@@ -337,6 +403,7 @@ assert_closed_loop_registry_repair
 assert_dry_run_does_not_write_damaged_known_marketplaces
 assert_existing_valid_registry_entry_is_preserved
 assert_context_mode_uses_shared_registry_heal
+assert_context_mode_doctor_heals_registry_drift
 assert_setup_dry_run_surfaces_registry_phase
 
 echo "All plugin registry heal regression tests passed."

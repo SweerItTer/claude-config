@@ -595,6 +595,7 @@ uninstall() {
 
 doctor() {
     info "context-mode doctor"
+    heal_registry_drift
     status
 }
 
