@@ -260,10 +260,19 @@ jobs:
           while true; do
             echo "=== 第 ${attempt} 次幂等性检查 ==="
             set +e
-            output=$(./setup.sh --ci 2>&1)
+            output=$(./setup.sh --ci --force 2>&1)
             rc=$?
             set -e
             echo "$output"
+            if [[ "$rc" -ne 0 ]]; then
+              echo "=== 第三方 source 状态诊断 ==="
+              for repo in external/claude-plugins-official external/context-mode external/oh-my-claudecode external/superpowers; do
+                if [[ -d "$repo/.git" || -f "$repo/.git" ]]; then
+                  echo "--- $repo ---"
+                  git -C "$repo" status --short || true
+                fi
+              done
+            fi
 
             if printf '%s\n' "$output" | grep -q 'CLAUDE_HOME 未初始化，已后台启动 Claude Code' && [[ "$attempt" -lt 3 ]]; then
               echo "检测到 Claude 首次初始化，等待后重试..."
