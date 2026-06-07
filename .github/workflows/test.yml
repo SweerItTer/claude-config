@@ -259,20 +259,28 @@ jobs:
           attempt=1
           while true; do
             echo "=== 第 ${attempt} 次幂等性检查 ==="
+            set +e
             output=$(./setup.sh --ci 2>&1)
+            rc=$?
+            set -e
             echo "$output"
-
-            pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
-            echo "检测到 $pass_count 个 [PASS] 标记"
-            if [[ "$pass_count" -ge 4 ]]; then
-              break
-            fi
 
             if printf '%s\n' "$output" | grep -q 'CLAUDE_HOME 未初始化，已后台启动 Claude Code' && [[ "$attempt" -lt 3 ]]; then
               echo "检测到 Claude 首次初始化，等待后重试..."
               sleep 5
               attempt=$((attempt + 1))
               continue
+            fi
+
+            if [[ "$rc" -ne 0 ]]; then
+              echo "FAIL: setup.sh --ci exited with $rc"
+              exit "$rc"
+            fi
+
+            pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
+            echo "检测到 $pass_count 个 [PASS] 标记"
+            if [[ "$pass_count" -ge 4 ]]; then
+              break
             fi
 
             echo "FAIL: 第二次运行没有体现足够的幂等性"
