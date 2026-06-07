@@ -15,7 +15,6 @@ CTX_DIR="$REPO_ROOT/external/context-mode"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 MARKETPLACE_DST="$CLAUDE_HOME/plugins/marketplaces/context-mode"
 CACHE_ROOT="$CLAUDE_HOME/plugins/cache/context-mode/context-mode"
-CACHE_OWNER_FILE_SUFFIX=".setup-owned-cache-link"
 CTX_INSTALL_MODE="${CTX_INSTALL_MODE:-auto}"
 SOURCE_REV_FILE=".source-rev"
 SETTINGS_JSON="$CLAUDE_HOME/settings.json"
@@ -195,35 +194,12 @@ registry_has_context_mode() {
 }
 
 repo_plugin_version() {
-    REPO_PLUGIN_JSON="$CTX_DIR/.claude-plugin/plugin.json" python3 - <<'PYEOF'
-import json
-import os
-from pathlib import Path
-
-path = Path(os.environ['REPO_PLUGIN_JSON'])
-if not path.is_file():
-    raise SystemExit(1)
-print(json.loads(path.read_text(encoding='utf-8')).get('version', ''))
-PYEOF
+    plugin_manifest_version "$CTX_DIR/.claude-plugin/plugin.json"
 }
 
 repo_cache_entry_path() {
     local repo_version="$1"
-    printf '%s/%s\n' "$CACHE_ROOT" "$repo_version"
-}
-
-cache_owner_path() {
-    local version="$1"
-    printf '%s/%s%s\n' "$CACHE_ROOT" "$version" "$CACHE_OWNER_FILE_SUFFIX"
-}
-
-marketplace_is_managed_target() {
-    if symlink_points_to "$MARKETPLACE_DST" "$CTX_DIR"; then
-        return 0
-    fi
-
-    marketplace_copy_is_owned || return 1
-    copy_is_fresh
+    plugin_cache_entry_path "context-mode" "context-mode" "$repo_version" "$CLAUDE_HOME"
 }
 
 cache_entry_manifest_version() {
@@ -231,127 +207,28 @@ cache_entry_manifest_version() {
     local entry
     entry="$(repo_cache_entry_path "$version")"
 
-    CACHE_ENTRY_PLUGIN_JSON="$entry/.claude-plugin/plugin.json" python3 - <<'PYEOF'
-import json
-import os
-from pathlib import Path
-
-path = Path(os.environ['CACHE_ENTRY_PLUGIN_JSON'])
-if not path.is_file():
-    raise SystemExit(1)
-print(json.loads(path.read_text(encoding='utf-8')).get('version', ''))
-PYEOF
-}
-
-cache_entry_manifest_name() {
-    local version="$1"
-    local entry
-    entry="$(repo_cache_entry_path "$version")"
-
-    CACHE_ENTRY_PLUGIN_JSON="$entry/.claude-plugin/plugin.json" python3 - <<'PYEOF'
-import json
-import os
-from pathlib import Path
-
-path = Path(os.environ['CACHE_ENTRY_PLUGIN_JSON'])
-if not path.is_file():
-    raise SystemExit(1)
-print(json.loads(path.read_text(encoding='utf-8')).get('name', ''))
-PYEOF
-}
-
-backup_conflicting_cache_entry() {
-    local target_path="$1"
-    local backup_path="${target_path}.backup.$(date +%Y%m%d%H%M%S)"
-
-    mv "$target_path" "$backup_path"
-    printf '  [WARN] registry: 已备份冲突 cache 入口 -> %s\n' "$backup_path" >&2
+    plugin_manifest_version "$entry/.claude-plugin/plugin.json"
 }
 
 managed_cache_entry_points_to_marketplace() {
     local version="$1"
     local entry
-    local owner
     entry="$(repo_cache_entry_path "$version")"
-    owner="$(cache_owner_path "$version")"
 
     [[ -L "$entry" ]] || return 1
     symlink_points_to "$entry" "$MARKETPLACE_DST" || return 1
-    [[ -f "$owner" ]] || return 1
-    grep -qx "$MARKETPLACE_DST" "$owner" 2>/dev/null || return 1
     [[ "$(cache_entry_manifest_version "$version" 2>/dev/null || true)" == "$version" ]]
-}
-
-ensure_repo_cache_entry() {
-    local repo_version="$1"
-    local target_path
-    local owner_path
-    local manifest_version
-
-    [[ -n "$repo_version" ]] || return 1
-    [[ -f "$CTX_DIR/.claude-plugin/plugin.json" ]] || return 1
-    marketplace_is_managed_target || {
-        err "registry: 当前 marketplace 不是 setup 受管目标，拒绝创建 cache 入口"
-        return 1
-    }
-
-    target_path="$(repo_cache_entry_path "$repo_version")"
-    owner_path="$(cache_owner_path "$repo_version")"
-
-    if managed_cache_entry_points_to_marketplace "$repo_version"; then
-        printf '%s\t%s\n' "$repo_version" "$target_path"
-        return 0
-    fi
-
-    if [[ -L "$target_path" ]]; then
-        if symlink_points_to "$target_path" "$MARKETPLACE_DST"; then
-            printf '%s\n' "$MARKETPLACE_DST" > "$owner_path"
-            manifest_version="$(cache_entry_manifest_version "$repo_version" 2>/dev/null || true)"
-            if [[ "$manifest_version" != "$repo_version" ]]; then
-                err "registry: cache 入口 manifest 版本不一致，repo=$repo_version manifest=${manifest_version:-missing}"
-                return 1
-            fi
-            printf '%s\t%s\n' "$repo_version" "$target_path"
-            return 0
-        fi
-        backup_conflicting_cache_entry "$target_path"
-    fi
-
-    if [[ -d "$target_path" ]]; then
-        backup_conflicting_cache_entry "$target_path"
-    fi
-
-    if [[ -f "$target_path" ]]; then
-        backup_conflicting_cache_entry "$target_path"
-    fi
-
-    mkdir -p "$CACHE_ROOT"
-    ln -s "$MARKETPLACE_DST" "$target_path"
-    printf '%s\n' "$MARKETPLACE_DST" > "$owner_path"
-
-    manifest_version="$(cache_entry_manifest_version "$repo_version" 2>/dev/null || true)"
-    if [[ "$manifest_version" != "$repo_version" ]]; then
-        rm -f "$target_path" "$owner_path"
-        err "registry: cache 入口 manifest 版本不一致，repo=$repo_version manifest=${manifest_version:-missing}"
-        return 1
-    fi
-
-    printf '%s\t%s\n' "$repo_version" "$target_path"
 }
 
 cleanup_managed_cache_entry() {
     local repo_version="$1"
     local target_path
-    local owner_path
 
     [[ -n "$repo_version" ]] || return 0
     managed_cache_entry_points_to_marketplace "$repo_version" || return 0
 
     target_path="$(repo_cache_entry_path "$repo_version")"
-    owner_path="$(cache_owner_path "$repo_version")"
-
     rm -f "$target_path"
-    rm -f "$owner_path"
 }
 
 
@@ -416,36 +293,40 @@ registry_matches_repo() {
 }
 
 heal_registry_drift() {
-    local repo_version
-    local cache_line
-    local cache_version
-    local cache_path
-
     if [[ "$DRY_RUN" == true ]]; then
         info "[DRY-RUN] heal context-mode installed_plugins registry drift"
-        return 0
     fi
 
-    [[ -f "$INSTALLED_PLUGINS_JSON" ]] || return 0
     [[ -f "$CTX_DIR/.claude-plugin/plugin.json" ]] || return 0
     [[ -d "$MARKETPLACE_DST" || -L "$MARKETPLACE_DST" ]] || return 0
 
-    repo_version="$(repo_plugin_version 2>/dev/null || true)"
-    if [[ -z "$repo_version" ]]; then
-        warn "registry: 无法读取 repo context-mode 版本，跳过收敛"
-        return 1
-    fi
+    local entries_json
+    entries_json="$(CTX_DIR="$CTX_DIR" MARKETPLACE_DST="$MARKETPLACE_DST" python3 - <<'PYEOF'
+import json
+import os
+from pathlib import Path
 
-    cache_line="$(ensure_repo_cache_entry "$repo_version" 2>/dev/null || true)"
-    if [[ -z "$cache_line" ]]; then
-        warn "registry: 无法准备 repo 版本对应的 context-mode cache 入口"
-        return 1
-    fi
+ctx_dir = Path(os.environ['CTX_DIR'])
+marketplace_dst = Path(os.environ['MARKETPLACE_DST'])
+print(json.dumps([{
+    'pluginKey': 'context-mode@context-mode',
+    'marketplaceName': 'context-mode',
+    'pluginName': 'context-mode',
+    'sourcePath': str(marketplace_dst),
+    'pluginJsonPath': str(ctx_dir / '.claude-plugin' / 'plugin.json'),
+    'preferManaged': True,
+}], ensure_ascii=False))
+PYEOF
+)"
 
-    IFS=$'\t' read -r cache_version cache_path <<< "$cache_line"
-    if [[ -z "$cache_path" || "$cache_version" != "$repo_version" ]]; then
-        warn "registry: repo cache 入口异常，version=${cache_version:-missing} path=${cache_path:-missing}"
+    CTX_DIR="$CTX_DIR" MARKETPLACE_DST="$MARKETPLACE_DST" \
+        register_plugins_to_installed_json "$entries_json" "$INSTALLED_PLUGINS_JSON" "$CLAUDE_HOME" || {
+        warn "registry: 无法收敛 context-mode installed_plugins registry drift"
         return 1
+    }
+
+    if [[ "$DRY_RUN" == true ]]; then
+        return 0
     fi
 
     REGISTRY_JSON="$INSTALLED_PLUGINS_JSON" \
@@ -453,8 +334,6 @@ heal_registry_drift() {
     PLUGIN_KEY="$PLUGIN_KEY" \
     SETTINGS_PLUGIN_KEY="$SETTINGS_PLUGIN_KEY" \
     LEGACY_SETTINGS_PLUGIN_KEY="$LEGACY_SETTINGS_PLUGIN_KEY" \
-    CACHE_PATH="$cache_path" \
-    CACHE_VERSION="$cache_version" \
     python3 - <<'PYEOF'
 import json
 import os
@@ -465,39 +344,25 @@ settings_path = Path(os.environ['SETTINGS_JSON'])
 plugin_key = os.environ['PLUGIN_KEY']
 settings_plugin_key = os.environ['SETTINGS_PLUGIN_KEY']
 legacy_settings_plugin_key = os.environ['LEGACY_SETTINGS_PLUGIN_KEY']
-cache_path = os.environ['CACHE_PATH']
-cache_version = os.environ['CACHE_VERSION']
 
-registry = json.loads(registry_path.read_text(encoding='utf-8')) if registry_path.is_file() else {}
-plugins = registry.setdefault('plugins', {})
-enabled = registry.setdefault('enabledPlugins', {})
-current_entries = plugins.get(plugin_key)
-current_entry = current_entries[0] if isinstance(current_entries, list) and current_entries and isinstance(current_entries[0], dict) else {}
-changed = False
-expected_entry = {
-    'scope': current_entry.get('scope', 'user') if isinstance(current_entry, dict) else 'user',
-    'installPath': cache_path,
-    'version': cache_version,
-}
-if not isinstance(current_entries, list) or len(current_entries) != 1 or current_entry.get('installPath') != cache_path or current_entry.get('version') != cache_version:
-    plugins[plugin_key] = [expected_entry]
-    changed = True
-if enabled.get(plugin_key) is not True:
-    enabled[plugin_key] = True
-    changed = True
-if changed:
-    registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+if registry_path.is_file():
+    registry = json.loads(registry_path.read_text(encoding='utf-8'))
+    enabled = registry.setdefault('enabledPlugins', {})
+    if enabled.get(plugin_key) is not True:
+        enabled[plugin_key] = True
+        registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
 
 if settings_path.is_file():
     settings = json.loads(settings_path.read_text(encoding='utf-8'))
     settings_enabled = settings.setdefault('enabledPlugins', {})
-    legacy_present = legacy_settings_plugin_key in settings_enabled
-    if legacy_present:
+    changed = False
+    if legacy_settings_plugin_key in settings_enabled:
         settings_enabled.pop(legacy_settings_plugin_key, None)
+        changed = True
     if settings_enabled.get(settings_plugin_key) is not True:
         settings_enabled[settings_plugin_key] = True
-        legacy_present = True
-    if legacy_present:
+        changed = True
+    if changed:
         settings_path.write_text(json.dumps(settings, indent=4, ensure_ascii=False) + '\n', encoding='utf-8')
 PYEOF
 
@@ -730,6 +595,7 @@ uninstall() {
 
 doctor() {
     info "context-mode doctor"
+    heal_registry_drift
     status
 }
 

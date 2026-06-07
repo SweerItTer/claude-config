@@ -2,7 +2,7 @@ name: Test setup.sh
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/abstract-plugin-registry-heal]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -210,7 +210,7 @@ jobs:
           printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 失败: claude 已发现 codegraph，但未显示 ✓ Connected'
           printf '%s\n' "$output" | grep -q 'CodeGraph overall: CLI 与配置已通过，但离线发现失败'
 
-      - name: Verify user ECC scope requires selection
+      - name: Verify user ECC default skips install
         run: |
           set -euo pipefail
           tmp="$(mktemp -d)"
@@ -219,11 +219,8 @@ jobs:
           output=$(CLAUDE_CONFIG_DIR="$tmp" ./setup.sh --dry-run --no-claude --no-verify 2>&1)
           echo "$output"
 
-          printf '%s\n' "$output" | grep -q 'ECC 需要选择安装范围'
-          printf '%s\n' "$output" | grep -q '未选择 ECC 安装范围，跳过 ECC 官方安装器'
-          printf '%s\n' "$output" | grep -q -- './setup.sh --ecc-focused'
-          printf '%s\n' "$output" | grep -q -- './setup.sh --ecc-profile <name>'
-          printf '%s\n' "$output" | grep -q -- './setup.sh --ecc-modules <id,id,...>'
+          printf '%s\n' "$output" | grep -q '未显式请求 ECC，跳过第三方 source: ecc'
+          printf '%s\n' "$output" | grep -q '未显式请求 ECC，跳过 ECC 安装'
           if printf '%s\n' "$output" | grep -q -- 'ECC 默认安装范围\|npm install ECC\|--modules rules-core,agents-core\|--profile full'; then
             echo "FAIL: 用户默认路径不应自动安装或选择 ECC 安装范围"
             exit 1
@@ -238,6 +235,11 @@ jobs:
         run: |
           chmod +x ./script/test-settings-merge.sh
           ./script/test-settings-merge.sh
+
+      - name: Verify plugin registry heal regression script
+        run: |
+          chmod +x ./script/test-plugin-registry-heal.sh
+          ./script/test-plugin-registry-heal.sh
 
       - name: Run setup.sh smoke test
         run: |
@@ -257,13 +259,19 @@ jobs:
           attempt=1
           while true; do
             echo "=== 第 ${attempt} 次幂等性检查 ==="
-            output=$(./setup.sh --ci 2>&1)
+            set +e
+            output=$(./setup.sh --ci --force 2>&1)
+            rc=$?
+            set -e
             echo "$output"
-
-            pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
-            echo "检测到 $pass_count 个 [PASS] 标记"
-            if [[ "$pass_count" -ge 4 ]]; then
-              break
+            if [[ "$rc" -ne 0 ]]; then
+              echo "=== 第三方 source 状态诊断 ==="
+              for repo in external/claude-plugins-official external/context-mode external/oh-my-claudecode external/superpowers; do
+                if [[ -d "$repo/.git" || -f "$repo/.git" ]]; then
+                  echo "--- $repo ---"
+                  git -C "$repo" status --short || true
+                fi
+              done
             fi
 
             if printf '%s\n' "$output" | grep -q 'CLAUDE_HOME 未初始化，已后台启动 Claude Code' && [[ "$attempt" -lt 3 ]]; then
@@ -271,6 +279,17 @@ jobs:
               sleep 5
               attempt=$((attempt + 1))
               continue
+            fi
+
+            if [[ "$rc" -ne 0 ]]; then
+              echo "FAIL: setup.sh --ci exited with $rc"
+              exit "$rc"
+            fi
+
+            pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
+            echo "检测到 $pass_count 个 [PASS] 标记"
+            if [[ "$pass_count" -ge 4 ]]; then
+              break
             fi
 
             echo "FAIL: 第二次运行没有体现足够的幂等性"
