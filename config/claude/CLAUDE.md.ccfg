@@ -8,8 +8,7 @@ Always load `@RTK.md`.
 </toolchain>
 
 <startup>
-If inside a repo, read `progress.md` and `git.md` if present.
-Load @~/.claude/skills/TTO/SKILL.md before any multi-step or agent task.
+Load @~/.claude/skills/three-tier-orchestration-token-efficiency/SKILL.md And strictly comply with.
 </startup>
 
 <rules>
