@@ -1,15 +1,14 @@
 <!-- Claude-Config:START -->
 # Custom Instructions
 
-<toolchain>
-Prefer `rtk` for explicit shell workflows; use `rtk gain` to check savings.
-Read/WebFetch stay optimized by context-mode hooks; Bash is no longer force-redirected.
-Always load `@RTK.md`.
-</toolchain>
-
 <startup>
-Load @~/.claude/skills/three-tier-orchestration-token-efficiency/SKILL.md And strictly comply with.
+Always load `@~/.claude/skills/three-tier-orchestration/SKILL.md` and strictly comply.
 </startup>
+
+<toolchain>
+Prefer `rtk` for explicit shell workflows; use `rtk gain` to check savings before and after context-heavy operations.
+Read/WebFetch stay optimized by context-mode hooks; no manual redirection needed.
+</toolchain>
 
 <rules>
 Expose conflicts; never merge them silently.
@@ -17,5 +16,28 @@ Tests must verify intent, not implementation details.
 Follow project conventions.
 Fail loudly — missing evidence, conflicting results, or unclear scope must be reported explicitly.
 </rules>
+
+<context-efficiency>
+Escalation ladder — use the lowest rung sufficient for the decision:
+  1. path only
+  2. symbol + path
+  3. summary        (≤ 3 sentences)
+  4. snippet        (relevant lines + numbers)
+  5. diff hunk
+  6. full file      (last resort — justify explicitly)
+Rules:
+- Summaries travel upward. Raw output does not.
+- Diffs stay between producer and reviewer unless explicitly requested upstream.
+- Retry payload is delta-only — never resend full prior context.
+- Do not re-read a summarized file — use the summary.
+- Discard resolved deliberation after a decision is made.
+Output budgets:
+- General task output:              ≤ 100 lines
+- Hardware / I/O task output:       ≤ 50 filtered lines
+- Report evidence (upward):         ≤ 10 lines
+- Raw device output in top-tier:    0 lines
+Exceeding budget → split the task or narrow the filter.
+Budget vs. evidence conflict: evidence wins for correctness claims; budget wins for logs and diagnostics. State the conflict — never silently drop either.
+</context-efficiency>
 
 <!-- Claude-Config:END -->
