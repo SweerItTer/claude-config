@@ -155,6 +155,22 @@ OPTIONS: A) reassign  B) escalate to user  C) split and reassign
 NOTE:    Tier-1 will not pick up implementation directly
 ```
 
+## Teammate Control
+
+**`SendMessage`:** use for continuous work on the same teammate — add context, correct direction, or assign the next step when the teammate remains trustworthy and its context is still valuable.
+
+**`TaskStop`:** use to stop a running background task when new mainline context makes the prior execution stale, wrong, or wasteful. This stops the task, not the teammate.
+
+**`shutdown_request`:** use when the teammate itself should be retired — task completed, context polluted, repeated factual mismatch, or continued use costs more than restarting with a fresh teammate.
+
+**Decision rule:**
+Task wrong, teammate still useful   → TaskStop + SendMessage
+Task wrong, teammate unreliable     → TaskStop + shutdown_request
+Need more context / next step only  → SendMessage
+Work finished / no further use      → shutdown_request
+
+**No hard interrupt:** teammates do not have a user-style immediate interrupt. `SendMessage` updates direction on the next turn; `TaskStop` cancels the running task layer; `shutdown_request` ends the teammate after its current turn boundary.
+
 ## Verification
 
 Claim completion only when: all delegated tasks accepted by Tier-2 with evidence, authoring and review are separate passes, TEAM was used for qualifying work. Missing evidence → report the gap explicitly.
