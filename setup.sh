@@ -41,6 +41,9 @@ ECC_FOCUSED=false
 ECC_PROFILE=""
 ECC_MODULES=""
 ECC_SKILLS=""
+PLUGIN_FILTER_ENABLED=false
+SELECTED_PLUGINS=()
+KNOWN_PLUGIN_MODULES=(rtk openspec codegraph context-mode omc superpowers ponytail ecc)
 ACTION="install"
 ACTION_EXPLICIT=false
 
@@ -481,7 +484,7 @@ ensure_symlink() {
     log "$label 已更新"
 }
 
-run_installer() {
+__setup_original_run_installer() {
     local name="$1"
     local script="$SCRIPT_DIR/install-${name}.sh"
     shift || true
@@ -494,6 +497,130 @@ run_installer() {
     info "--- ${name} [${ACTION}] ---"
     ACTION="$ACTION" bash "$script" "$REPO_ROOT" "$DRY_RUN" "$FORCE" "$@"
 }
+
+run_installer() {
+  local name="${1:-}"
+  if ! should_run_plugin "$name"; then
+    info "Skip plugin installer: $name (--plugins filter active)"
+    return 0
+  fi
+  __setup_original_run_installer "$@"
+}
+
+normalize_plugin_name() {
+  local name="${1:-}"
+  name="${name,,}"
+  name="${name//_/-}"
+
+  case "$name" in
+    context|contextmode|context-mode) echo "context-mode" ;;
+    oh-my-claudecode|oh-my-cc|omc) echo "omc" ;;
+    superpower|superpowers) echo "superpowers" ;;
+    everything-claude-code|everything-claude|ecc) echo "ecc" ;;
+    pony|ponytail) echo "ponytail" ;;
+    open-spec|openspec) echo "openspec" ;;
+    code-graph|codegraph) echo "codegraph" ;;
+    rtk) echo "rtk" ;;
+    *) echo "$name" ;;
+  esac
+}
+
+add_selected_plugins() {
+  local raw="${1:-}"
+  local item normalized
+
+  PLUGIN_FILTER_ENABLED=true
+  raw="${raw//,/ }"
+
+  for item in $raw; do
+    normalized="$(normalize_plugin_name "$item")"
+    [[ -n "$normalized" ]] || continue
+    SELECTED_PLUGINS+=("$normalized")
+  done
+}
+
+plugin_selected() {
+  local query
+  query="$(normalize_plugin_name "$1")"
+
+  local item
+  for item in "${SELECTED_PLUGINS[@]}"; do
+    [[ "$item" == "$query" ]] && return 0
+  done
+
+  return 1
+}
+
+selected_plugins_csv() {
+  local IFS=,
+  echo "${SELECTED_PLUGINS[*]}"
+}
+
+validate_selected_plugins() {
+  [[ "$PLUGIN_FILTER_ENABLED" == "true" ]] || return 0
+
+  local selected known ok
+  local unknowns=()
+  for selected in "${SELECTED_PLUGINS[@]}"; do
+    ok=false
+    for known in "${KNOWN_PLUGIN_MODULES[@]}"; do
+      if [[ "$selected" == "$known" ]]; then
+        ok=true
+        break
+      fi
+    done
+    [[ "$ok" == "true" ]] || unknowns+=("$selected")
+  done
+
+  if ((${#unknowns[@]} > 0)); then
+    err "Unknown plugin(s): ${unknowns[*]}"
+    err "Known plugins: ${KNOWN_PLUGIN_MODULES[*]}"
+    return 1
+  fi
+
+  if ((${#SELECTED_PLUGINS[@]} == 0)); then
+    err "--plugins was provided but no plugin name was parsed"
+    return 1
+  fi
+}
+
+should_run_plugin() {
+  [[ "$PLUGIN_FILTER_ENABLED" != "true" ]] || plugin_selected "$1"
+}
+
+preparse_plugin_filter_args() {
+  SETUP_FILTERED_ARGS=()
+
+  local arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    shift
+
+    case "$arg" in
+      --plugin|--plugins|--only-plugin|--only-plugins)
+        if [[ $# -eq 0 ]]; then
+          echo "[ERR] $arg requires at least one plugin name" >&2
+          return 1
+        fi
+        add_selected_plugins "$1"
+        shift
+        ;;
+      --plugin=*|--plugins=*|--only-plugin=*|--only-plugins=*)
+        add_selected_plugins "${arg#*=}"
+        ;;
+      *)
+        SETUP_FILTERED_ARGS+=("$arg")
+        ;;
+    esac
+  done
+}
+
+preparse_plugin_filter_args "$@"
+set -- "${SETUP_FILTERED_ARGS[@]}"
+validate_selected_plugins
+if [[ "$PLUGIN_FILTER_ENABLED" == "true" ]]; then
+  info "Plugin filter enabled: $(selected_plugins_csv)"
+fi
 
 render_settings_template() {
     local tmpl="$1"
@@ -863,13 +990,18 @@ sync_third_party_source() {
 
     refresh_existing_third_party_source "$name" "$clone_url" "$target"
 }
-
 should_sync_marketplace_source() {
-    local name="$1"
-    if [[ "$name" == "ecc" ]] && ! ecc_requested; then
-        return 1
-    fi
-    return 0
+  local name="$1"
+
+  if [[ "$PLUGIN_FILTER_ENABLED" == "true" ]] && ! plugin_selected "$name"; then
+    return 1
+  fi
+
+  if [[ "$name" == "ecc" ]] && ! ecc_requested && ! plugin_selected "ecc"; then
+    return 1
+  fi
+
+  return 0
 }
 
 ensure_third_party_sources() {
@@ -888,7 +1020,11 @@ ensure_third_party_sources() {
     while IFS=$'\t' read -r name source_kind source_ref clone_url target; do
         [[ -n "$name" ]] || continue
         if ! should_sync_marketplace_source "$name"; then
-            info "未显式请求 ECC，跳过第三方 source: $name"
+            if [[ "$PLUGIN_FILTER_ENABLED" == "true" ]] && ! plugin_selected "$name"; then
+      info "未选择插件，跳过第三方 source: $name"
+    else
+      info "未显式请求 ECC，跳过第三方 source: $name"
+    fi
             continue
         fi
         info "准备第三方 source: $name -> $target"
@@ -1365,6 +1501,7 @@ run_priority_module_actions() {
     run_installer omc
     run_installer rtk
     run_installer superpowers
+    run_installer ponytail
 }
 
 run_install_flow() {

@@ -1,42 +1,50 @@
 {
-    "claude-plugins-official": {
-        "source": {
-            "source": "github",
-            "repo": "anthropics/claude-plugins-official"
-        },
-        "installLocation": "REPO_ROOT/external/claude-plugins-official",
-        "lastUpdated": "2026-05-14T00:00:00.000Z"
+  "claude-plugins-official": {
+    "source": {
+      "source": "github",
+      "repo": "anthropics/claude-plugins-official"
     },
-    "context-mode": {
-        "source": {
-            "source": "github",
-            "repo": "mksglu/context-mode"
-        },
-        "installLocation": "REPO_ROOT/external/context-mode",
-        "lastUpdated": "2026-05-14T00:00:00.000Z"
+    "installLocation": "REPO_ROOT/external/claude-plugins-official",
+    "lastUpdated": "2026-05-14T00:00:00.000Z"
+  },
+  "context-mode": {
+    "source": {
+      "source": "github",
+      "repo": "mksglu/context-mode"
     },
-    "ecc": {
-        "source": {
-            "source": "github",
-            "repo": "affaan-m/everything-claude-code"
-        },
-        "installLocation": "REPO_ROOT/external/everything-claude-code",
-        "lastUpdated": "2026-05-14T00:00:00.000Z"
+    "installLocation": "REPO_ROOT/external/context-mode",
+    "lastUpdated": "2026-05-14T00:00:00.000Z"
+  },
+  "ecc": {
+    "source": {
+      "source": "github",
+      "repo": "affaan-m/everything-claude-code"
     },
-    "omc": {
-        "source": {
-            "source": "git",
-            "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"
-        },
-        "installLocation": "REPO_ROOT/external/oh-my-claudecode",
-        "lastUpdated": "2026-05-14T00:00:00.000Z"
+    "installLocation": "REPO_ROOT/external/everything-claude-code",
+    "lastUpdated": "2026-05-14T00:00:00.000Z"
+  },
+  "omc": {
+    "source": {
+      "source": "git",
+      "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"
     },
-    "superpowers": {
-        "source": {
-            "source": "git",
-            "url": "https://github.com/obra/superpowers.git"
-        },
-        "installLocation": "REPO_ROOT/external/superpowers",
-        "lastUpdated": "2026-05-14T00:00:00.000Z"
-    }
+    "installLocation": "REPO_ROOT/external/oh-my-claudecode",
+    "lastUpdated": "2026-05-14T00:00:00.000Z"
+  },
+  "superpowers": {
+    "source": {
+      "source": "git",
+      "url": "https://github.com/obra/superpowers.git"
+    },
+    "installLocation": "REPO_ROOT/external/superpowers",
+    "lastUpdated": "2026-05-14T00:00:00.000Z"
+  },
+  "ponytail": {
+    "source": {
+      "source": "github",
+      "repo": "DietrichGebert/ponytail"
+    },
+    "installLocation": "REPO_ROOT/external/ponytail",
+    "lastUpdated": "2026-06-29T00:00:00.000Z"
+  }
 }
