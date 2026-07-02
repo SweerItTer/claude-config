@@ -11,7 +11,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# ponytail: 兼容 source — 直接执行用 $0, 被 source 时用 BASH_SOURCE 还原真实路径
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ORIGINAL_ARGS=("$@")
 SETUP_UPDATE_REEXECED="${SETUP_UPDATE_REEXECED:-false}"
 
@@ -895,8 +896,23 @@ remove_and_clone_third_party_source() {
         return 0
     fi
 
+    # ponytail: 原子替换 — 先 clone 到临时目录, 成功后再替换, 失败则原 target 原封不动
+    # 之前的 "rm -rf 再 clone" 若 clone 失败 (断网/超时) 会留下空目录, 所有引用
+    # external/.../hooks/*.mjs 的 hook 当场 MODULE_NOT_FOUND
+    local staging="${target}.staging.$$"
+    rm -rf "$staging"
+    if ! git clone --depth=1 "$clone_url" "$staging"; then
+        rm -rf "$staging"
+        err "第三方 source 克隆失败, 保留原目录: $name ($clone_url)"
+        return 1
+    fi
+
     rm -rf "$target"
-    git clone --depth=1 "$clone_url" "$target"
+    if ! mv "$staging" "$target"; then
+        rm -rf "$staging" "$target"
+        err "第三方 source 替换失败: $name ($target)"
+        return 1
+    fi
     log "第三方 source 已重新克隆: $name"
 }
 
@@ -1976,4 +1992,7 @@ main() {
     esac
 }
 
-main "$@"
+# ponytail: source guard — 允许测试 source 本文件单测各 helper, 不触发 main
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
