@@ -107,8 +107,13 @@ reset_marketplace_dst() {
         rm -f "$MARKETPLACE_DST"
     elif [[ -d "$MARKETPLACE_DST" ]]; then
         if ! marketplace_copy_is_owned; then
-            err "context-mode marketplace 是外部目录，当前 setup 不会删除: $MARKETPLACE_DST"
-            return 1
+            # ponytail: 非受管目录默认拒删以保护用户内容; --force/update 下放行
+            # 让同插件残留(通常是上次失败遗留)能被覆盖收敛, 打破"删不掉->heal 失败->永远漂移"的死锁
+            if [[ "$FORCE" != true ]]; then
+                err "context-mode marketplace 是外部目录，当前 setup 不会删除: $MARKETPLACE_DST (使用 --force 强制覆盖)"
+                return 1
+            fi
+            warn "context-mode marketplace 是非受管目录, --force 下覆盖重建: $MARKETPLACE_DST"
         fi
         rm -rf "$MARKETPLACE_DST"
     fi

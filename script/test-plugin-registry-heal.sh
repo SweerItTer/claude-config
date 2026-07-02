@@ -319,6 +319,97 @@ print("PASS: context-mode shared registry heal")
 PYEOF
 }
 
+assert_context_mode_force_converges_unmanaged_stale_marketplace() {
+    local fixture
+
+    fixture="$(mktemp -d)"
+    trap 'rm -rf "$fixture"' RETURN
+
+    mkdir -p \
+        "$fixture/repo/script" \
+        "$fixture/repo/external/context-mode/.claude-plugin" \
+        "$fixture/repo/external/context-mode/node_modules" \
+        "$fixture/repo/external/context-mode/hooks/core" \
+        "$fixture/home/plugins/marketplaces/context-mode" \
+        "$fixture/home/plugins/cache/context-mode/context-mode" \
+        "$fixture/bin"
+
+    cp "$COMMON_SH" "$fixture/repo/script/install-common.sh"
+    # repo 源: 新版本
+    cat > "$fixture/repo/external/context-mode/.claude-plugin/plugin.json" <<'JSON'
+{"name":"context-mode","version":"1.0.169"}
+JSON
+    cat > "$fixture/repo/external/context-mode/hooks/core/routing.mjs" <<'JS'
+// CTX_STRICT_BASH
+JS
+    git -C "$fixture/repo/external/context-mode" init -q
+    git -C "$fixture/repo/external/context-mode" config user.name "CI Test"
+    git -C "$fixture/repo/external/context-mode" config user.email "ci@example.invalid"
+    git -C "$fixture/repo/external/context-mode" add .
+    git -C "$fixture/repo/external/context-mode" commit -q -m "fixture context-mode 1.0.169"
+
+    # marketplace: 非受管真实目录, 内容是旧版本 1.0.162, 无 .source-rev
+    mkdir -p "$fixture/home/plugins/marketplaces/context-mode/.claude-plugin"
+    cat > "$fixture/home/plugins/marketplaces/context-mode/.claude-plugin/plugin.json" <<'JSON'
+{"name":"context-mode","version":"1.0.162"}
+JSON
+    mkdir -p "$fixture/home/plugins/marketplaces/context-mode/hooks/core"
+    cat > "$fixture/home/plugins/marketplaces/context-mode/hooks/core/routing.mjs" <<'JS'
+// CTX_STRICT_BASH
+JS
+    cat > "$fixture/home/settings.json" <<'JSON'
+{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}]}}
+JSON
+    cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
+{"context-mode":{"installLocation":"/tmp/context-mode"}}
+JSON
+    cat > "$fixture/bin/claude" <<'SH'
+#!/usr/bin/env bash
+printf 'context ok\n'
+SH
+    chmod +x "$fixture/bin/claude"
+
+    # FORCE=true: 必须收敛 (覆盖非受管残留), 不得因保护逻辑卡死
+    PATH="$fixture/bin:$PATH" \
+    DRY_RUN=false \
+    ACTION=install \
+    FORCE=true \
+    CTX_INSTALL_MODE=copy \
+    CLAUDE_CONFIG_DIR="$fixture/home" \
+        bash "$CONTEXT_MODE_SH" "$fixture/repo" false true true \
+        >/tmp/test-plugin-registry-force.out \
+        2>/tmp/test-plugin-registry-force.err
+
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "FORCE install failed (rc=$rc):" >&2
+        cat /tmp/test-plugin-registry-force.err >&2
+        return 1
+    fi
+
+    python3 - "$fixture" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+fixture = Path(sys.argv[1])
+# marketplace 已重建为新版本 (1.0.169), 带 .source-rev 标记为受管 copy
+mp_manifest = fixture / "home" / "plugins" / "marketplaces" / "context-mode" / ".claude-plugin" / "plugin.json"
+manifest_version = json.loads(mp_manifest.read_text()).get("version")
+assert manifest_version == "1.0.169", manifest_version
+assert (fixture / "home" / "plugins" / "marketplaces" / "context-mode" / ".source-rev").is_file(), \
+    "marketplace copy 未被标记为受管 (.source-rev 缺失)"
+
+registry = json.loads((fixture / "home" / "plugins" / "installed_plugins.json").read_text())
+entry = registry["plugins"]["context-mode@context-mode"][0]
+expected = fixture / "home" / "plugins" / "cache" / "context-mode" / "context-mode" / "1.0.169"
+assert entry["installPath"] == str(expected), entry
+assert entry["version"] == "1.0.169", entry
+assert registry["enabledPlugins"]["context-mode@context-mode"] is True
+print("PASS: force converges unmanaged stale marketplace copy")
+PYEOF
+}
+
 assert_context_mode_doctor_heals_registry_drift() {
     local fixture
 
@@ -397,7 +488,7 @@ assert_setup_dry_run_surfaces_registry_phase() {
     output="$(CLAUDE_CONFIG_DIR="$fixture/home" "$SETUP_SH" --dry-run --no-claude --no-verify 2>&1)"
     printf '%s\n' "$output" | grep -q "合并 known_marketplaces.json"
     printf '%s\n' "$output" | grep -q "Phase 4.5: Plugin registry 修复"
-    printf '%s\n' "$output" | grep -q "DRY-RUN.*skip plugin cache/registry oh-my-claudecode@omc"
+    printf '%s\n' "$output" | grep -q "DRY-RUN.*ensure plugin cache oh-my-claudecode@omc"
     echo "PASS: setup dry-run surfaces marketplace and registry heal phase"
 }
 
@@ -406,6 +497,7 @@ assert_dry_run_does_not_write_damaged_known_marketplaces
 assert_existing_valid_registry_entry_is_preserved
 assert_context_mode_uses_shared_registry_heal
 assert_context_mode_doctor_heals_registry_drift
+assert_context_mode_force_converges_unmanaged_stale_marketplace
 assert_setup_dry_run_surfaces_registry_phase
 
 echo "All plugin registry heal regression tests passed."

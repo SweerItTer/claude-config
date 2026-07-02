@@ -925,6 +925,19 @@ refresh_existing_third_party_source() {
         return 1
     fi
 
+    if [[ "$DRY_RUN" == true ]]; then
+        # ponytail: dry-run 只预览不修改, 跳过脏工作区检测
+        # 否则 setup 自己应用的补丁(如 context-mode routing.mjs)会让 dry-run 永远卡在 err 退出,
+        # 用户无法预览后续阶段 (Phase 4.5 registry heal 等)
+        if ! git -C "$target" diff --quiet -- || ! git -C "$target" diff --cached --quiet -- || [[ -n "$(git -C "$target" ls-files --others --exclude-standard)" ]]; then
+            warn "[DRY-RUN] 第三方 source 有本地修改, 预览忽略: $name ($target)"
+        fi
+        info "[DRY-RUN] refresh shallow checkout $name at $target from $clone_url"
+        info "[DRY-RUN] git -C $target fetch --depth=1 origin"
+        info "[DRY-RUN] checkout origin default branch or current upstream branch, then reset --hard"
+        return 0
+    fi
+
     if ! git -C "$target" diff --quiet -- || ! git -C "$target" diff --cached --quiet -- || [[ -n "$(git -C "$target" ls-files --others --exclude-standard)" ]]; then
         if [[ "$FORCE" == true ]]; then
             remove_and_clone_third_party_source "$name" "$clone_url" "$target" "dirty checkout"
@@ -932,13 +945,6 @@ refresh_existing_third_party_source() {
         fi
         err "第三方 source 有本地修改: $name ($target)。请先提交/清理，或使用 --force 删除并重新 clone。"
         return 1
-    fi
-
-    if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] refresh shallow checkout $name at $target from $clone_url"
-        info "[DRY-RUN] git -C $target fetch --depth=1 origin"
-        info "[DRY-RUN] checkout origin default branch or current upstream branch, then reset --hard"
-        return 0
     fi
 
     git -C "$target" fetch --depth=1 origin
