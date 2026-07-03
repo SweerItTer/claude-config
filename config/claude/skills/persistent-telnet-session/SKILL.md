@@ -113,9 +113,9 @@ A valid proof shows:
 
 Validated in this project session:
 
-- session: `telnet-100-persist`
-- host: `10.0.0.100`
-- login flow: `anyka login:` → `root` → `Password:` → empty password → `[root@anyka ~]$`
+- session: `telnet-persist`
+- host: `<target ip>`
+- login flow: `login:` → `<Username>` → `<Password>` → empty password → `[root@<deviceDiscription> ~]$`
 - persistence proof: `pwd` returned `/`, then `ls` also worked in the same session
 
 ## Output Contract
