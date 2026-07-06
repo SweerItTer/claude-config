@@ -447,6 +447,85 @@ PYEOF
     log "$label 已合并"
 }
 
+ensure_user_local_bin_path() {
+    local snippet tmp target shell_name
+    tmp="$(mktemp)"
+    cat > "$tmp" <<'EOF'
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+EOF
+
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) export PATH="$HOME/.local/bin:$PATH" ;;
+    esac
+
+    local targets=("$HOME/.profile")
+    shell_name="$(basename "${SHELL:-}")"
+    if [[ "$shell_name" == "bash" || -f "$HOME/.bashrc" ]]; then
+        targets+=("$HOME/.bashrc")
+    fi
+    if [[ "$shell_name" == "zsh" || -f "$HOME/.zshrc" ]]; then
+        targets+=("$HOME/.zshrc")
+    fi
+
+    local unique_targets=()
+    local existing
+    for target in "${targets[@]}"; do
+        local seen=false
+        for existing in "${unique_targets[@]:-}"; do
+            if [[ "$existing" == "$target" ]]; then
+                seen=true
+                break
+            fi
+        done
+        [[ "$seen" == true ]] || unique_targets+=("$target")
+    done
+
+    for target in "${unique_targets[@]}"; do
+        ensure_managed_block "$tmp" "$target" "Claude-Config-Path" "PATH ~/.local/bin ($(basename "$target"))"
+    done
+    rm -f "$tmp"
+}
+
+ensure_marketplace_symlink() {
+    local src="$1"
+    local dst="$2"
+    local label="$3"
+
+    if symlink_points_to "$dst" "$src"; then
+        pass "$label 已就绪"
+        return 0
+    fi
+
+    local backup_base="${dst}.backup.$(date +%s)"
+    local backup="$backup_base"
+    local backup_index=0
+    while [[ -e "$backup" || -L "$backup" ]]; do
+        backup_index=$((backup_index + 1))
+        backup="${backup_base}.${backup_index}"
+    done
+
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ -e "$dst" || -L "$dst" ]]; then
+            info "[DRY-RUN] move $dst -> $backup, then symlink to $src"
+        else
+            info "[DRY-RUN] ln -s $src -> $dst"
+        fi
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$dst")"
+    if [[ -L "$dst" || -e "$dst" ]]; then
+        mv "$dst" "$backup"
+        warn "$label 目标冲突，已备份到: $backup"
+    fi
+    ln -s "$src" "$dst"
+    log "$label 已更新"
+}
+
 ensure_symlink() {
     local src="$1"
     local dst="$2"
@@ -1094,6 +1173,8 @@ update_repository() {
 ensure_core_config() {
     mkdir -p "$CLAUDE_HOME"
 
+    ensure_user_local_bin_path
+
     ensure_symlink "$REPO_ROOT/config/claude/CLAUDE.md.ccfg" "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink"
     ensure_symlink "$REPO_ROOT/config/claude/itp.md" "$CLAUDE_HOME/itp.md" "itp.md symlink"
     ensure_symlink "$REPO_ROOT/config/claude/haiku-throttle.md" "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink"
@@ -1135,7 +1216,7 @@ ensure_core_config() {
     local cpo_src="$REPO_ROOT/external/claude-plugins-official"
     local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
     if [[ -d "$cpo_src" ]]; then
-        ensure_symlink "$cpo_src" "$cpo_dst" "claude-plugins-official marketplace"
+        ensure_marketplace_symlink "$cpo_src" "$cpo_dst" "claude-plugins-official marketplace"
     fi
 }
 
