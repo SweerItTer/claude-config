@@ -671,6 +671,14 @@ main() {
     fi
 
     if [[ "$ACTION" == "install" || "$ACTION" == "update" ]] && [[ "$CTX_INSTALL_MODE" == "auto" ]]; then
+        if [[ "$NO_PATCH" != true ]]; then
+            info "context-mode auto 模式检测到仓库补丁，默认使用 copy 安装以避免污染 third-party source"
+            CTX_INSTALL_MODE=copy
+            install
+            verify
+            return 0
+        fi
+
         CTX_INSTALL_MODE=symlink
         if install && verify; then
             return 0

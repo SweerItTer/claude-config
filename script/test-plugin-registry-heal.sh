@@ -540,6 +540,82 @@ print("PASS: context-mode install rewrites stale Stop hook")
 PYEOF
 }
 
+assert_context_mode_auto_copy_applies_patches() {
+    local fixture
+
+    fixture="$(mktemp -d)"
+    trap 'rm -rf "$fixture"' RETURN
+
+    mkdir -p \
+        "$fixture/repo/script" \
+        "$fixture/repo/config/context-mode" \
+        "$fixture/repo/external/context-mode/.claude-plugin" \
+        "$fixture/repo/external/context-mode/node_modules" \
+        "$fixture/repo/external/context-mode/hooks/core" \
+        "$fixture/home/plugins" \
+        "$fixture/bin"
+
+    cp "$COMMON_SH" "$fixture/repo/script/install-common.sh"
+    cp "$REPO_ROOT/config/context-mode/strict-bash-routing.patch" "$fixture/repo/config/context-mode/strict-bash-routing.patch"
+    cp "$REPO_ROOT/config/context-mode/cache-heal-fallback.patch" "$fixture/repo/config/context-mode/cache-heal-fallback.patch"
+    cp "$REPO_ROOT/external/context-mode/start.mjs" "$fixture/repo/external/context-mode/start.mjs"
+    cp "$REPO_ROOT/external/context-mode/hooks/core/routing.mjs" "$fixture/repo/external/context-mode/hooks/core/routing.mjs"
+    cat > "$fixture/repo/external/context-mode/.claude-plugin/plugin.json" <<'JSON'
+{"name":"context-mode","version":"1.0.169"}
+JSON
+    git -C "$fixture/repo/external/context-mode" init -q
+    git -C "$fixture/repo/external/context-mode" config user.name "CI Test"
+    git -C "$fixture/repo/external/context-mode" config user.email "ci@example.invalid"
+    git -C "$fixture/repo/external/context-mode" add .
+    git -C "$fixture/repo/external/context-mode" commit -q -m "fixture context-mode auto-copy"
+    cat > "$fixture/home/settings.json" <<'JSON'
+{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}]}}
+JSON
+    cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
+{"context-mode":{"installLocation":"/tmp/context-mode"}}
+JSON
+    cat > "$fixture/bin/claude" <<'SH'
+#!/usr/bin/env bash
+printf 'context ok\n'
+SH
+    chmod +x "$fixture/bin/claude"
+
+    PATH="$fixture/bin:$PATH" \
+    DRY_RUN=false \
+    ACTION=install \
+    CTX_INSTALL_MODE=auto \
+    CLAUDE_CONFIG_DIR="$fixture/home" \
+        bash "$CONTEXT_MODE_SH" "$fixture/repo" false false false \
+        >/tmp/test-plugin-registry-context-mode-auto.out \
+        2>/tmp/test-plugin-registry-context-mode-auto.err
+
+    python3 - "$fixture" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+fixture = Path(sys.argv[1])
+marketplace = fixture / "home" / "plugins" / "marketplaces" / "context-mode"
+source = fixture / "repo" / "external" / "context-mode"
+assert marketplace.exists(), marketplace
+assert not marketplace.is_symlink(), marketplace
+assert (marketplace / ".source-rev").is_file(), marketplace
+routing = (marketplace / "hooks" / "core" / "routing.mjs").read_text(encoding='utf-8')
+start = (marketplace / "start.mjs").read_text(encoding='utf-8')
+assert "CTX_STRICT_BASH" in routing
+assert 'marketplaces","context-mode' in start
+assert 'mkdirSync(parent,{recursive:true})' in start
+assert 'marketplaces","context-mode' not in (source / "start.mjs").read_text(encoding='utf-8')
+registry = json.loads((fixture / "home" / "plugins" / "installed_plugins.json").read_text())
+entry = registry["plugins"]["context-mode@context-mode"][0]
+expected_cache = fixture / "home" / "plugins" / "cache" / "context-mode" / "context-mode" / "1.0.169"
+assert entry["installPath"] == str(expected_cache), entry
+assert expected_cache.is_symlink(), expected_cache
+assert expected_cache.resolve() == marketplace.resolve(), (expected_cache.resolve(), marketplace.resolve())
+print("PASS: context-mode auto mode uses copy and applies patches")
+PYEOF
+}
+
 assert_setup_dry_run_surfaces_registry_phase() {
     local fixture
     local output
@@ -560,6 +636,7 @@ assert_existing_valid_registry_entry_is_preserved
 assert_context_mode_uses_shared_registry_heal
 assert_context_mode_doctor_heals_registry_drift
 assert_context_mode_install_rewrites_stale_stop_hook
+assert_context_mode_auto_copy_applies_patches
 assert_context_mode_force_converges_unmanaged_stale_marketplace
 assert_setup_dry_run_surfaces_registry_phase
 

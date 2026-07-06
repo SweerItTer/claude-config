@@ -942,7 +942,11 @@ refresh_existing_third_party_source() {
     fi
 
     local dirty_output
-    dirty_output="$(git -C "$target" status --porcelain --untracked-files=all -- . ':(exclude).omc/**' ':(exclude).in_use/**')"
+    local dirty_pathspecs=(. ':(exclude).omc/**' ':(exclude).in_use/**')
+    if [[ "$name" == "context-mode" ]]; then
+        dirty_pathspecs+=(':(exclude).claude/**' ':(exclude)openspec/**')
+    fi
+    dirty_output="$(git -C "$target" status --porcelain --untracked-files=all -- "${dirty_pathspecs[@]}")"
 
     if [[ "$DRY_RUN" == true ]]; then
         # ponytail: dry-run 只预览不修改, 跳过脏工作区检测
