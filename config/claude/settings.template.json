@@ -2,6 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "skillListingBudgetFraction": 0.01,
   "env": {
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "70",
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
     "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
@@ -15,8 +16,20 @@
     "pr": ""
   },
   "permissions": {
+    "allow": [
+      "mcp__codegraph__codegraph_explore",
+      "mcp__codegraph__codegraph_search",
+      "mcp__codegraph__codegraph_node",
+      "mcp__codegraph__codegraph_callers",
+      "mcp__codegraph__codegraph_callees",
+      "mcp__codegraph__codegraph_impact",
+      "mcp__codegraph__codegraph_files",
+      "mcp__codegraph__codegraph_status",
+      "mcp__codegraph__*"
+    ],
     "defaultMode": "bypassPermissions"
   },
+  "model": "sonnet",
   "skillOverrides": {
     "claude-code-setup:claude-automation-recommender": "name-only",
     "code-review:code-review": "name-only",
@@ -71,20 +84,20 @@
         ]
       },
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rtk-rewrite.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rules-loader.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rtk hook claude"
           }
         ]
       }
@@ -95,6 +108,16 @@
           {
             "type": "command",
             "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs && openspec init --tools claude"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codegraph prompt-hook"
           }
         ]
       }
@@ -110,6 +133,7 @@
     "context-mode@context-mode": true,
     "feature-dev@claude-plugins-official": true,
     "oh-my-claudecode@omc": true,
+    "ponytail@ponytail": true,
     "skill-creator@claude-plugins-official": true,
     "superpowers@superpowers": true
   },
@@ -138,6 +162,12 @@
         "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"
       }
     },
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
+      }
+    },
     "superpowers": {
       "source": {
         "source": "git",
@@ -149,6 +179,7 @@
   "effortLevel": "high",
   "skipDangerousModePermissionPrompt": true,
   "theme": "dark",
+  "teammateMode": "in-process",
   "disabledMcpServers": [
     "browser-use",
     "browserbase",

@@ -14,6 +14,7 @@ Read/WebFetch stay optimized by context-mode hooks; no manual redirection needed
 Expose conflicts; never merge them silently.
 Tests must verify intent, not implementation details.
 Follow project conventions.
+Automatically /compact when context reaches 70%.
 Fail loudly — missing evidence, conflicting results, or unclear scope must be reported explicitly.
 </rules>
 
