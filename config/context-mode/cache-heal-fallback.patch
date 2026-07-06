@@ -1,0 +1,37 @@
+diff --git a/start.mjs b/start.mjs
+index b7b1f6c..ad14f98 100644
+--- a/start.mjs
++++ b/start.mjs
+@@ -325,14 +325,16 @@ try {
+ // Honors CLAUDE_CONFIG_DIR (#577) — checked at this script's runtime so users
+ // who set CLAUDE_CONFIG_DIR after install still get healed correctly.
+ // Pure Node.js — no bash/shell dependency.
+-import{existsSync,readdirSync,statSync,symlinkSync,lstatSync,unlinkSync,readFileSync}from"node:fs";
++import{existsSync,readdirSync,statSync,symlinkSync,lstatSync,unlinkSync,readFileSync,mkdirSync}from"node:fs";
+ import{dirname,join,resolve,sep}from"node:path";
+ import{homedir}from"node:os";
+ function cfgDir(){const e=process.env.CLAUDE_CONFIG_DIR;if(e&&e.trim()!==""){return e.startsWith("~")?resolve(homedir(),e.replace(/^~[/\\\\]?/,"")):resolve(e)}return resolve(homedir(),".claude")}
+ try{
+-  const f=resolve(cfgDir(),"plugins","installed_plugins.json");
++  const base=cfgDir();
++  const f=resolve(base,"plugins","installed_plugins.json");
+   if(!existsSync(f))process.exit(0);
+-  const cacheRoot=resolve(cfgDir(),"plugins","cache");
++  const cacheRoot=resolve(base,"plugins","cache");
++  const marketplace=resolve(base,"plugins","marketplaces","context-mode");
+   const ip=JSON.parse(readFileSync(f,"utf-8"));
+   for(const[k,es]of Object.entries(ip.plugins||{})){
+     if(k!=="context-mode@context-mode")continue;
+@@ -358,8 +360,11 @@ try{
+         continue;
+       }
+       const parent=dirname(p);
+-      if(!existsSync(parent))continue;
++      if(!existsSync(parent))mkdirSync(parent,{recursive:true});
+       try{if(lstatSync(p).isSymbolicLink())unlinkSync(p)}catch{}
++      if(existsSync(marketplace)){
++        try{symlinkSync(marketplace,p,process.platform==="win32"?"junction":undefined);continue}catch{}
++      }
+       const dirs=readdirSync(parent).filter(d=>/^\\d+\\.\\d+/.test(d)&&statSync(join(parent,d)).isDirectory());
+       if(!dirs.length)continue;
+       dirs.sort((a,b)=>{const pa=a.split(".").map(Number),pb=b.split(".").map(Number);for(let i=0;i<3;i++){if((pa[i]||0)!==(pb[i]||0))return(pa[i]||0)-(pb[i]||0)}return 0});

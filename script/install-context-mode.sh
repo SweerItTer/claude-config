@@ -58,6 +58,11 @@ routing_patch_applied() {
     grep -q "CTX_STRICT_BASH" "$MARKETPLACE_DST/hooks/core/routing.mjs" 2>/dev/null
 }
 
+cache_heal_patch_applied() {
+    grep -q 'marketplaces","context-mode' "$MARKETPLACE_DST/start.mjs" 2>/dev/null && \
+        grep -q 'mkdirSync(parent,{recursive:true})' "$MARKETPLACE_DST/start.mjs" 2>/dev/null
+}
+
 copy_is_fresh() {
     local expected_rev
     local actual_rev
@@ -339,6 +344,7 @@ PYEOF
     PLUGIN_KEY="$PLUGIN_KEY" \
     SETTINGS_PLUGIN_KEY="$SETTINGS_PLUGIN_KEY" \
     LEGACY_SETTINGS_PLUGIN_KEY="$LEGACY_SETTINGS_PLUGIN_KEY" \
+    NODE_PATH="$(command -v node || printf 'node')" \
     python3 - <<'PYEOF'
 import json
 import os
@@ -349,6 +355,13 @@ settings_path = Path(os.environ['SETTINGS_JSON'])
 plugin_key = os.environ['PLUGIN_KEY']
 settings_plugin_key = os.environ['SETTINGS_PLUGIN_KEY']
 legacy_settings_plugin_key = os.environ['LEGACY_SETTINGS_PLUGIN_KEY']
+node_path = os.environ['NODE_PATH']
+current_install_path = ''
+
+
+def quoted(path: str) -> str:
+    return json.dumps(str(path).replace('\\', '/'))
+
 
 if registry_path.is_file():
     registry = json.loads(registry_path.read_text(encoding='utf-8'))
@@ -356,6 +369,10 @@ if registry_path.is_file():
     if enabled.get(plugin_key) is not True:
         enabled[plugin_key] = True
         registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+    entries = registry.get('plugins', {}).get(plugin_key)
+    if isinstance(entries, list) and entries:
+        entry = entries[0] if isinstance(entries[0], dict) else {}
+        current_install_path = entry.get('installPath') or ''
 
 if settings_path.is_file():
     settings = json.loads(settings_path.read_text(encoding='utf-8'))
@@ -367,6 +384,25 @@ if settings_path.is_file():
     if settings_enabled.get(settings_plugin_key) is not True:
         settings_enabled[settings_plugin_key] = True
         changed = True
+    stop_entries = ((settings.get('hooks') or {}).get('Stop') or [])
+    if current_install_path and isinstance(stop_entries, list):
+        expected_stop = f"{quoted(node_path)} {quoted(Path(current_install_path) / 'hooks' / 'stop.mjs')}"
+        for stop_entry in stop_entries:
+            if not isinstance(stop_entry, dict):
+                continue
+            hooks = stop_entry.get('hooks')
+            if not isinstance(hooks, list):
+                continue
+            for hook in hooks:
+                if not isinstance(hook, dict):
+                    continue
+                command = hook.get('command')
+                if not isinstance(command, str):
+                    continue
+                is_context_mode_stop = ('context-mode' in command and 'stop.mjs' in command) or 'context-mode hook claude-code stop' in command
+                if is_context_mode_stop and command != expected_stop:
+                    hook['command'] = expected_stop
+                    changed = True
     if changed:
         settings_path.write_text(json.dumps(settings, indent=4, ensure_ascii=False) + '\n', encoding='utf-8')
 PYEOF
@@ -478,25 +514,22 @@ install_marketplace() {
     link_marketplace
 }
 
-apply_routing_patch() {
-    local patch_file="$REPO_ROOT/config/context-mode/strict-bash-routing.patch"
-
-    if [[ "$NO_PATCH" == true ]]; then
-        info "跳过 routing.mjs 补丁 (--no-patch)"
-        return 0
-    fi
+apply_context_mode_patch() {
+    local patch_file="$1"
+    local applied_check="$2"
+    local label="$3"
 
     [[ -f "$patch_file" ]] || {
         warn "补丁文件不存在: $patch_file"
         return 0
     }
 
-    if routing_patch_applied; then
-        ok "routing.mjs 补丁已应用"
+    if eval "$applied_check"; then
+        ok "$label 已应用"
         return 0
     fi
 
-    info "应用 routing.mjs strict-bash 补丁到最终安装目标 ($CTX_INSTALL_MODE)..."
+    info "应用 $label 到最终安装目标 ($CTX_INSTALL_MODE)..."
 
     if [[ "$DRY_RUN" == true ]]; then
         info "[DRY-RUN][mode=$CTX_INSTALL_MODE] git -C $MARKETPLACE_DST apply $patch_file"
@@ -510,14 +543,36 @@ apply_routing_patch() {
 
     if git -C "$MARKETPLACE_DST" rev-parse --is-inside-work-tree >/dev/null 2>&1 && git -C "$MARKETPLACE_DST" apply --check "$patch_file" 2>/dev/null; then
         git -C "$MARKETPLACE_DST" apply "$patch_file"
-        ok "routing.mjs 补丁已应用 (git apply)"
+        ok "$label 已应用 (git apply)"
     elif patch -p1 -d "$MARKETPLACE_DST" --dry-run --silent < "$patch_file" 2>/dev/null; then
         patch -p1 -d "$MARKETPLACE_DST" --silent < "$patch_file"
-        ok "routing.mjs 补丁已应用 (patch)"
+        ok "$label 已应用 (patch)"
     else
-        err "routing.mjs 补丁应用失败，请检查补丁与源码是否匹配"
+        err "$label 应用失败，请检查补丁与源码是否匹配"
         return 1
     fi
+}
+
+apply_routing_patch() {
+    local patch_file="$REPO_ROOT/config/context-mode/strict-bash-routing.patch"
+
+    if [[ "$NO_PATCH" == true ]]; then
+        info "跳过 routing.mjs 补丁 (--no-patch)"
+        return 0
+    fi
+
+    apply_context_mode_patch "$patch_file" routing_patch_applied "routing.mjs strict-bash 补丁"
+}
+
+apply_cache_heal_patch() {
+    local patch_file="$REPO_ROOT/config/context-mode/cache-heal-fallback.patch"
+
+    if [[ "$NO_PATCH" == true ]]; then
+        info "跳过 cache-heal 补丁 (--no-patch)"
+        return 0
+    fi
+
+    apply_context_mode_patch "$patch_file" cache_heal_patch_applied "start.mjs cache-heal 补丁"
 }
 
 install() {
@@ -549,6 +604,7 @@ install() {
 
     install_marketplace
     apply_routing_patch
+    apply_cache_heal_patch
     heal_registry_drift
 }
 

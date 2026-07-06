@@ -941,11 +941,13 @@ refresh_existing_third_party_source() {
         return 1
     fi
 
+    local dirty_output
+    dirty_output="$(git -C "$target" status --porcelain --untracked-files=all -- . ':(exclude).omc/**' ':(exclude).in_use/**')"
+
     if [[ "$DRY_RUN" == true ]]; then
         # ponytail: dry-run 只预览不修改, 跳过脏工作区检测
-        # 否则 setup 自己应用的补丁(如 context-mode routing.mjs)会让 dry-run 永远卡在 err 退出,
-        # 用户无法预览后续阶段 (Phase 4.5 registry heal 等)
-        if ! git -C "$target" diff --quiet -- || ! git -C "$target" diff --cached --quiet -- || [[ -n "$(git -C "$target" ls-files --others --exclude-standard)" ]]; then
+        # 但仍提示真正的源码改动; .omc/.in_use 这类运行时目录不算源码脏状态
+        if [[ -n "$dirty_output" ]]; then
             warn "[DRY-RUN] 第三方 source 有本地修改, 预览忽略: $name ($target)"
         fi
         info "[DRY-RUN] refresh shallow checkout $name at $target from $clone_url"
@@ -954,7 +956,7 @@ refresh_existing_third_party_source() {
         return 0
     fi
 
-    if ! git -C "$target" diff --quiet -- || ! git -C "$target" diff --cached --quiet -- || [[ -n "$(git -C "$target" ls-files --others --exclude-standard)" ]]; then
+    if [[ -n "$dirty_output" ]]; then
         if [[ "$FORCE" == true ]]; then
             remove_and_clone_third_party_source "$name" "$clone_url" "$target" "dirty checkout"
             return $?

@@ -478,6 +478,68 @@ print("PASS: context-mode doctor heals registry drift")
 PYEOF
 }
 
+assert_context_mode_install_rewrites_stale_stop_hook() {
+    local fixture
+
+    fixture="$(mktemp -d)"
+    trap 'rm -rf "$fixture"' RETURN
+
+    mkdir -p \
+        "$fixture/repo/script" \
+        "$fixture/repo/external/context-mode/.claude-plugin" \
+        "$fixture/repo/external/context-mode/node_modules" \
+        "$fixture/repo/external/context-mode/hooks/core" \
+        "$fixture/home/plugins" \
+        "$fixture/bin"
+
+    cp "$COMMON_SH" "$fixture/repo/script/install-common.sh"
+    cat > "$fixture/repo/external/context-mode/.claude-plugin/plugin.json" <<'JSON'
+{"name":"context-mode","version":"1.0.162"}
+JSON
+    cat > "$fixture/repo/external/context-mode/hooks/core/routing.mjs" <<'JS'
+// CTX_STRICT_BASH
+JS
+    cat > "$fixture/home/settings.json" <<'JSON'
+{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}],"Stop":[{"hooks":[{"command":"\"/old/node\" \"/broken/cache/context-mode/context-mode/1.0.111/hooks/stop.mjs\""}]}]}}
+JSON
+    cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
+{"context-mode":{"installLocation":"/tmp/context-mode"}}
+JSON
+    cat > "$fixture/bin/claude" <<'SH'
+#!/usr/bin/env bash
+printf 'context ok\n'
+SH
+    cat > "$fixture/bin/node" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+    chmod +x "$fixture/bin/claude" "$fixture/bin/node"
+
+    PATH="$fixture/bin:$PATH" \
+    DRY_RUN=false \
+    ACTION=install \
+    CTX_INSTALL_MODE=symlink \
+    CLAUDE_CONFIG_DIR="$fixture/home" \
+        bash "$CONTEXT_MODE_SH" "$fixture/repo" false false true \
+        >/tmp/test-plugin-registry-context-mode-stop.out \
+        2>/tmp/test-plugin-registry-context-mode-stop.err
+
+    python3 - "$fixture" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+fixture = Path(sys.argv[1])
+settings = json.loads((fixture / "home" / "settings.json").read_text())
+command = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+expected_install = fixture / "home" / "plugins" / "cache" / "context-mode" / "context-mode" / "1.0.162"
+expected = f'"{(fixture / "bin" / "node").as_posix()}" "{(expected_install / "hooks" / "stop.mjs").as_posix()}"'
+assert command == expected, {"command": command, "expected": expected}
+assert "/broken/cache/" not in command, command
+print("PASS: context-mode install rewrites stale Stop hook")
+PYEOF
+}
+
 assert_setup_dry_run_surfaces_registry_phase() {
     local fixture
     local output
@@ -497,6 +559,7 @@ assert_dry_run_does_not_write_damaged_known_marketplaces
 assert_existing_valid_registry_entry_is_preserved
 assert_context_mode_uses_shared_registry_heal
 assert_context_mode_doctor_heals_registry_drift
+assert_context_mode_install_rewrites_stale_stop_hook
 assert_context_mode_force_converges_unmanaged_stale_marketplace
 assert_setup_dry_run_surfaces_registry_phase
 
