@@ -557,7 +557,6 @@ assert_context_mode_auto_copy_applies_patches() {
 
     cp "$COMMON_SH" "$fixture/repo/script/install-common.sh"
     cp "$REPO_ROOT/config/context-mode/strict-bash-routing.patch" "$fixture/repo/config/context-mode/strict-bash-routing.patch"
-    cp "$REPO_ROOT/config/context-mode/cache-heal-fallback.patch" "$fixture/repo/config/context-mode/cache-heal-fallback.patch"
     cp "$REPO_ROOT/external/context-mode/start.mjs" "$fixture/repo/external/context-mode/start.mjs"
     cp "$REPO_ROOT/external/context-mode/hooks/core/routing.mjs" "$fixture/repo/external/context-mode/hooks/core/routing.mjs"
     cat > "$fixture/repo/external/context-mode/.claude-plugin/plugin.json" <<'JSON'

@@ -58,11 +58,6 @@ routing_patch_applied() {
     grep -q "CTX_STRICT_BASH" "$MARKETPLACE_DST/hooks/core/routing.mjs" 2>/dev/null
 }
 
-cache_heal_patch_applied() {
-    grep -q 'marketplaces","context-mode' "$MARKETPLACE_DST/start.mjs" 2>/dev/null && \
-        grep -q 'mkdirSync(parent,{recursive:true})' "$MARKETPLACE_DST/start.mjs" 2>/dev/null
-}
-
 copy_is_fresh() {
     local expected_rev
     local actual_rev
@@ -564,17 +559,6 @@ apply_routing_patch() {
     apply_context_mode_patch "$patch_file" routing_patch_applied "routing.mjs strict-bash 补丁"
 }
 
-apply_cache_heal_patch() {
-    local patch_file="$REPO_ROOT/config/context-mode/cache-heal-fallback.patch"
-
-    if [[ "$NO_PATCH" == true ]]; then
-        info "跳过 cache-heal 补丁 (--no-patch)"
-        return 0
-    fi
-
-    apply_context_mode_patch "$patch_file" cache_heal_patch_applied "start.mjs cache-heal 补丁"
-}
-
 install() {
     validate_install_mode || return 1
 
@@ -604,7 +588,6 @@ install() {
 
     install_marketplace
     apply_routing_patch
-    apply_cache_heal_patch
     heal_registry_drift
 }
 
