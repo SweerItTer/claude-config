@@ -62,27 +62,7 @@
     "using-superpowers": "on"
   },
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/posttooluse.mjs"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
-      {
-        "matcher": "WebFetch|Read|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/context-mode/hooks/pretooluse.mjs"
-          }
-        ]
-      },
       {
         "matcher": "Edit|Write",
         "hooks": [
@@ -107,7 +87,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs && openspec init --tools claude"
+            "command": "\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "openspec init --tools claude"
           }
         ]
       }
