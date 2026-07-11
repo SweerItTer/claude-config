@@ -1,0 +1,23 @@
+{
+  "skill_name": "cmake-cross-build-system",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "这个 C++ 项目现在只有 Makefile。请改成 CMake + Ninja，所有构建输出进 out/，用 scripts/build_x86.sh 作为入口，并提供 building-config.template.yaml。",
+      "expected_output": "Creates a CMake-based build layout with CMakeLists.txt, common build script, x86 wrapper, YAML template, out/ output contract, and verification command.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "给这个 C 项目加一个 ak3760e 交叉编译方案。工具链路径放在 building-config-ak3760e.yaml，CMake toolchain 文件不要写死路径，默认执行 ./scripts/build_ak3760e.sh 就能构建。",
+      "expected_output": "Creates generic cmake/toolchain.cmake, AK3760E YAML config/schema, wrapper script defaulting to building-config-ak3760e.yaml, and CMake platform option mapping.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "整理一下现有 CMake 构建：现在 build/、cmake-build-debug/ 到处都是，我要统一成脚本驱动，Ninja 优先，输出全到 out/<platform>-<arch>/<build_type>/。",
+      "expected_output": "Standardizes build.sh generator policy, output path contract, compile_commands symlink, and .gitignore without unrelated application refactors.",
+      "files": []
+    }
+  ]
+}
