@@ -2,7 +2,7 @@
 # Custom Instructions
 
 <startup>
-Always load `@~/.claude/skills/three-tier-orchestration/SKILL.md` and strictly comply.
+Always load the description from @~/.claude/skills/three-tier-orchestration/SKILL.md, and be sure to use it when necessary.
 </startup>
 
 <toolchain>
