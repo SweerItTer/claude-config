@@ -60,8 +60,8 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 只同步核心配置：
 - `~/.claude/CLAUDE.md`
-- `~/.claude/itp.md`
-- `~/.claude/haiku-throttle.md`
+<!-- - `~/.claude/itp.md` -->
+<!-- - `~/.claude/haiku-throttle.md` -->
 - `~/.claude/RTK.md`
 - `rules/` / `rules-available/`
 - `settings.json`（缺失时生成，已存在时按模板补齐缺失项）
@@ -214,8 +214,8 @@ rm ~/.claude/settings.json
 ```text
 ~/.claude/
   CLAUDE.md        → config/claude/CLAUDE.md.ccfg（或由 OMC 注入后的宿主文件）
-  itp.md           → config/claude/itp.md
-  haiku-throttle.md → config/claude/haiku-throttle.md
+  <!-- itp.md           → config/claude/itp.md -->
+  <!-- haiku-throttle.md → config/claude/haiku-throttle.md -->
   RTK.md           → config/claude/RTK.md
   rules/           → config/claude/rules/
   rules-available/ → config/claude/rules-available/

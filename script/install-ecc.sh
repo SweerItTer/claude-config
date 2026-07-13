@@ -50,7 +50,7 @@ AGENTS_DST="$CLAUDE_HOME/agents"
 COMMANDS_DST="$CLAUDE_HOME/commands"
 RULES_DST="$CLAUDE_HOME/rules/ecc"
 SKILLS_DST="$CLAUDE_HOME/skills/ecc"
-REQUIRED_CUSTOM_AGENTS=(git.md progress.md rules.md validation.md)
+REQUIRED_CUSTOM_AGENTS=(rules.md validation.md)
 # rules-core 已移除 — ~/claude-config/config/claude/rules/ 已包含精心策划的规则，
 # 安装 ECC 的 rules-core 会灌入 19 种语言的 110 个文件（~228KB），造成上下文膨胀。
 FOCUSED_MODULES=(
