@@ -361,17 +361,20 @@ verify_offline_layer() {
         return 1
     fi
 
-    if [[ "$offline_output" != *"Status: ✓ Connected"* ]]; then
-        if [[ "$offline_output" == *"Status:"* ]]; then
-            set_layer_result offline_verify failure "claude 已发现 codegraph，但未显示 ✓ Connected"
-        else
-            set_layer_result offline_verify failure "claude mcp get codegraph 未显示连接状态"
-        fi
+    # Claude Code CLI 的 Status 行使用 check mark 字符，不同版本可能用
+    # ✓ (U+2713) 或 ✔ (U+2714)。匹配 "Connected" 关键词并排除否定状态。
+    local status_line
+    status_line="$(printf '%s\n' "$offline_output" | grep -E '^[[:space:]]*Status:' || true)"
+    if [[ -z "$status_line" ]]; then
+        set_layer_result offline_verify failure "claude mcp get codegraph 未显示连接状态"
         return 1
     fi
-
-    set_layer_result offline_verify success "claude mcp get codegraph 显示 ✓ Connected"
-    return 0
+    if [[ "$status_line" == *"Connected"* && "$status_line" != *"Disconnect"* && "$status_line" != *"Not Connected"* && "$status_line" != *"Error"* && "$status_line" != *"Failed"* ]]; then
+        set_layer_result offline_verify success "claude mcp get codegraph 显示已连接: ${status_line#"Status:"}"
+        return 0
+    fi
+    set_layer_result offline_verify failure "claude 已发现 codegraph，但未连接: ${status_line#"Status:"}"
+    return 1
 }
 
 verify() {
