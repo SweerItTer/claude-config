@@ -384,8 +384,15 @@ ensure_managed_block() {
     local dst="$2"
     local block_name="$3"
     local label="$4"
-    local start_marker="<!-- ${block_name}:START -->"
-    local end_marker="<!-- ${block_name}:END -->"
+    local start_marker end_marker
+    # Shell RC files need # comments; <!-- is a redirect in shell syntax.
+    if [[ "$dst" == *.md ]]; then
+        start_marker="<!-- ${block_name}:START -->"
+        end_marker="<!-- ${block_name}:END -->"
+    else
+        start_marker="# ${block_name}:START"
+        end_marker="# ${block_name}:END"
+    fi
 
     [[ -f "$src" ]] || return 0
 
@@ -405,6 +412,8 @@ ensure_managed_block() {
     MANAGED_BLOCK_NAME="$block_name" \
     MANAGED_BLOCK_START="$start_marker" \
     MANAGED_BLOCK_END="$end_marker" \
+    MANAGED_BLOCK_HASH_PREFIX="$([[ "$dst" == *.md ]] && echo '<!-- hash:' || echo '# hash:')" \
+    MANAGED_BLOCK_HASH_SUFFIX="$([[ "$dst" == *.md ]] && echo ' -->' || echo '')" \
     python3 - <<'PYEOF'
 import hashlib
 import os
@@ -417,25 +426,34 @@ dst = Path(os.environ['MANAGED_BLOCK_DST'])
 name = os.environ['MANAGED_BLOCK_NAME']
 start = os.environ['MANAGED_BLOCK_START']
 end = os.environ['MANAGED_BLOCK_END']
-start_re = rf'<!--\s*{re.escape(name)}:START\s*-->'
-end_re = rf'<!--\s*{re.escape(name)}:END\s*-->'
+hash_prefix = os.environ['MANAGED_BLOCK_HASH_PREFIX']
+hash_suffix = os.environ['MANAGED_BLOCK_HASH_SUFFIX']
+start_re = re.escape(start)
+end_re = re.escape(end)
+# Legacy HTML markers may still live in shell RC files from older installs;
+# match them so the block is migrated to the new # format.
+legacy_start_re = rf'<!--\s*{re.escape(name)}:START\s*-->'
+legacy_end_re = rf'<!--\s*{re.escape(name)}:END\s*-->'
+hash_re = rf'(?:<!--\s*hash:|#\s*hash:)([0-9a-f]+)\s*(?:-->)?'
 
 raw_source = src.read_text(encoding='utf-8').strip()
-inner_pattern = re.compile(rf'(?ms)^\s*{start_re}\s*\n(.*?)\n{end_re}\s*$')
+inner_pattern = re.compile(rf'(?ms)^\s*(?:{start_re}|{legacy_start_re})\s*\n(.*?)\n(?:{end_re}|{legacy_end_re})\s*$')
 match = inner_pattern.match(raw_source)
 inner = match.group(1).strip() if match else raw_source
-inner = re.sub(r'^<!-- hash:[0-9a-f]+ -->\s*\n', '', inner, count=1).strip()
+inner = re.sub(rf'^{hash_re}\s*\n', '', inner, count=1).strip()
 digest = hashlib.sha256(inner.encode('utf-8')).hexdigest()[:16]
-source = f'{start}\n<!-- hash:{digest} -->\n{inner}\n{end}'
+hash_line = f'{hash_prefix}{digest}{hash_suffix}'
+source = f'{start}\n{hash_line}\n{inner}\n{end}'
 
 existing = dst.read_text(encoding='utf-8') if dst.exists() else ''
-block_pattern = re.compile(rf'(?ms)^\s*{start_re}\s*\n(.*?)\n{end_re}\s*')
+block_pattern = re.compile(rf'(?ms)^\s*(?:{start_re}|{legacy_start_re})\s*\n(.*?)\n(?:{end_re}|{legacy_end_re})[ \t]*\n?')
 block_match = block_pattern.search(existing)
 if block_match:
-    current_hash = re.search(r'<!-- hash:([0-9a-f]+) -->', block_match.group(1))
-    if current_hash and current_hash.group(1) == digest:
+    current_hash = re.search(hash_re, block_match.group(1))
+    block_is_legacy = legacy_start_re and re.search(legacy_start_re, block_match.group(0))
+    if current_hash and current_hash.group(1) == digest and not block_is_legacy:
         sys.exit(0)
-    merged = block_pattern.sub(source, existing, count=1).strip() + '\n'
+    merged = block_pattern.sub(source + '\n', existing, count=1).strip() + '\n'
 elif existing.strip():
     merged = existing.rstrip() + '\n\n' + source + '\n'
 else:
