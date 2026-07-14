@@ -280,7 +280,7 @@ JSON
 // CTX_STRICT_BASH
 JS
     cat > "$fixture/home/settings.json" <<'JSON'
-{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}]}}
+{"enabledPlugins":{"context-mode@context-mode":true}}
 JSON
     cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
 {"context-mode":{"installLocation":"/tmp/context-mode"}}
@@ -358,7 +358,7 @@ JSON
 // CTX_STRICT_BASH
 JS
     cat > "$fixture/home/settings.json" <<'JSON'
-{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}]}}
+{"enabledPlugins":{"context-mode@context-mode":true}}
 JSON
     cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
 {"context-mode":{"installLocation":"/tmp/context-mode"}}
@@ -439,7 +439,7 @@ JS
     cp -a "$fixture/repo/external/context-mode" "$fixture/home/plugins/marketplaces/context-mode"
     git -C "$fixture/repo/external/context-mode" rev-parse HEAD > "$fixture/home/plugins/marketplaces/context-mode/.source-rev"
     cat > "$fixture/home/settings.json" <<'JSON'
-{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}]}}
+{"enabledPlugins":{"context-mode@context-mode":true}}
 JSON
     cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
 {"context-mode":{"installLocation":"/tmp/context-mode"}}
@@ -500,7 +500,7 @@ JSON
 // CTX_STRICT_BASH
 JS
     cat > "$fixture/home/settings.json" <<'JSON'
-{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}],"Stop":[{"hooks":[{"command":"\"/old/node\" \"/broken/cache/context-mode/context-mode/1.0.111/hooks/stop.mjs\""}]}]}}
+{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"Stop":[{"hooks":[{"command":"\"/old/node\" \"/broken/cache/context-mode/context-mode/1.0.111/hooks/stop.mjs\""}]}]}}
 JSON
     cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
 {"context-mode":{"installLocation":"/tmp/context-mode"}}
@@ -568,7 +568,7 @@ JSON
     git -C "$fixture/repo/external/context-mode" add .
     git -C "$fixture/repo/external/context-mode" commit -q -m "fixture context-mode auto-copy"
     cat > "$fixture/home/settings.json" <<'JSON'
-{"enabledPlugins":{"context-mode@context-mode":true},"hooks":{"PreToolUse":[{"hooks":[{"command":"pretooluse.mjs"}]}]}}
+{"enabledPlugins":{"context-mode@context-mode":true}}
 JSON
     cat > "$fixture/home/plugins/known_marketplaces.json" <<'JSON'
 {"context-mode":{"installLocation":"/tmp/context-mode"}}

@@ -181,8 +181,7 @@ active_install_mode() {
 
 settings_have_context_mode() {
     [[ -f "$SETTINGS_JSON" ]] || return 1
-    grep -q 'context-mode@context-mode' "$SETTINGS_JSON" 2>/dev/null || return 1
-    grep -q 'pretooluse.mjs' "$SETTINGS_JSON" 2>/dev/null
+    grep -q '"context-mode@context-mode": *true' "$SETTINGS_JSON" 2>/dev/null
 }
 
 known_marketplace_has_context_mode() {
