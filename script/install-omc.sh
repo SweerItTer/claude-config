@@ -325,6 +325,20 @@ install() {
         ok "OMC node_modules 已存在"
     fi
 
+    # bridge/claude-md-coordinator.cjs 是 build 产物（esbuild 打包，烧入
+    # docs/CLAUDE.md 的 SHA256），不在 git 中，npm install 也不生成。
+    # setup-claude-md.sh 要求该文件存在且哈希匹配，每次安装必须重新构建。
+    info "构建 OMC claude-md-coordinator..."
+    if [[ true == "$DRY_RUN" ]]; then
+        info "[DRY-RUN] (cd $OMC_DIR && npm run build:claude-md-coordinator)"
+    else
+        (
+            cd "$OMC_DIR"
+            npm run build:claude-md-coordinator
+        )
+        ok "OMC claude-md-coordinator 已构建"
+    fi
+
     if [[ true == "$DRY_RUN" ]]; then
         info "[DRY-RUN] ln -sfn $OMC_DIR -> $MARKETPLACE_DST"
         info "[DRY-RUN] 清理旧 OMC skills 残留"
