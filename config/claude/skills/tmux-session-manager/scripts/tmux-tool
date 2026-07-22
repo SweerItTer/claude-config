@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+    echo 'ERR code=PYTHON_VERSION required=">=3.11"' >&2
+    exit 2
+fi
+
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m tmux_tool.cli "$@"
