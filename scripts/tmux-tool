@@ -1,11 +1,22 @@
 #!/bin/sh
 set -eu
 
-if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
-    echo 'ERR code=PYTHON_VERSION required=">=3.11"' >&2
+PYTHON=
+for candidate in python3 python3.13 python3.12 python3.11 python3.10; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+        PYTHON=$candidate
+        break
+    fi
+done
+
+if [ -z "$PYTHON" ]; then
+    actual=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || echo unavailable)
+    echo "ERR code=PYTHON_VERSION required=\">=3.10\" actual=\"$actual\"" >&2
     exit 2
 fi
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -m tmux_tool.cli "$@"
+export PYTHONDONTWRITEBYTECODE=1
+exec "$PYTHON" -m tmux_tool.cli "$@"

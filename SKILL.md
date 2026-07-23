@@ -51,20 +51,20 @@ summary → reuse role → ensure missing topology → execute → verify
 
 ## Resolve the tool
 
-Derive `scripts/tmux-tool` from the absolute directory of this loaded `SKILL.md`. Keep that path in a local `TOOL` variable for the current task.
+Derive `scripts/tmux-tool` from the absolute directory of this loaded `SKILL.md`. Keep that path in a local `TOOL` variable for the current task. Invoke the bundled launcher as `sh "$TOOL" ...`; do not rely on executable permission bits surviving skill installation or file synchronization.
 
 Do not infer installation paths from project CWD and do not hard-code `.claude/skills`, `.agents/skills`, or similar roots.
 
 If the host does not expose the loaded skill path, search only skill-root directories explicitly supplied by the host runtime. If none are supplied or more than one matching `tmux-session-manager/SKILL.md` remains, do not mutate tmux; report `TOOL_RESOLUTION_FAILED` and the ambiguous candidates.
 
-Runtime contract: Python **3.11+** and tmux **3.2+**. The tool relies on pane-scoped options, stable native tmux IDs, format expansion, and buffer/pane capture primitives.
+Runtime contract: Python **3.10+** and tmux **3.2+**. CI pins the compatibility boundary to tmux **3.2** and the current release **3.7b**; real integration tests use isolated tmux servers. The tool relies on pane-scoped options, stable native tmux IDs, format expansion, and buffer/pane capture primitives.
 
 ## Active workflow
 
 At the beginning of one bounded topology-mutation sequence, run:
 
 ```bash
-$TOOL summary
+sh "$TOOL" summary
 ```
 
 Do not repeat `summary` between every `ensure`. Repeat it when another actor may have changed tmux, an operation reports ambiguity/conflict, or the task resumes after context loss.
@@ -110,11 +110,11 @@ Automatic shell writes use an allow-list, not a BUSY-only blacklist.
 ## Inventory: recover world state cheaply
 
 ```bash
-$TOOL summary
-$TOOL tree                              # only when topology shape matters
-$TOOL inspect role:board-shell
-$TOOL find --role board-shell --kind pane
-$TOOL capture role:board-shell --lines 40
+sh "$TOOL" summary
+sh "$TOOL" tree                              # only when topology shape matters
+sh "$TOOL" inspect role:board-shell
+sh "$TOOL" find --role board-shell --kind pane
+sh "$TOOL" capture role:board-shell --lines 40
 ```
 
 Use bounded capture only when metadata is insufficient. Do not use `capture --all` by default.
@@ -130,33 +130,33 @@ A new managed session/window already has a seed shell pane; `pane ensure` may cl
 ## Minimal topology
 
 ```bash
-$TOOL session ensure board-debug --role board-debug --note "Board debugging"
-$TOOL window ensure role:board-debug --name main --role board-main
-$TOOL pane ensure role:board-main --role board-shell --note "Primary board shell"
+sh "$TOOL" session ensure board-debug --role board-debug --note "Board debugging"
+sh "$TOOL" window ensure role:board-debug --name main --role board-main
+sh "$TOOL" pane ensure role:board-main --role board-shell --note "Primary board shell"
 ```
 
-Use `--help` from the actual executable when syntax is uncertain; do not invent flags from memory.
+Use `sh "$TOOL" --help` or the relevant subcommand help when syntax is uncertain; do not invent flags from memory.
 
 ## Process lifetime
 
 Finite:
 
 ```bash
-$TOOL exec role:board-shell 'ls'
+sh "$TOOL" exec role:board-shell 'ls'
 ```
 
 Long-running / interactive:
 
 ```bash
-$TOOL start role:board-top 'top'
-$TOOL start role:claude-cli 'claude -p "你好"'
-$TOOL wait-output role:claude-cli --match '.' --timeout 30
+sh "$TOOL" start role:board-top 'top'
+sh "$TOOL" start role:claude-cli 'claude -p "你好"'
+sh "$TOOL" wait-output role:claude-cli --match '.' --timeout 30
 ```
 
 A managed `BUSY` pane remains unavailable until the tool **verifies** return to a shell:
 
 ```bash
-$TOOL interrupt role:board-top
+sh "$TOOL" interrupt role:board-top
 ```
 
 Finite `exec` also owns the pane while it is running. `EXEC_TIMEOUT` retains that ownership as `BUSY`/`job_state=TIMED_OUT`; never retry another `exec` into that pane.
@@ -164,8 +164,8 @@ Finite `exec` also owns the pane while it is running. `EXEC_TIMEOUT` retains tha
 Use the managed job lifecycle instead:
 
 ```bash
-$TOOL job status role:board-shell
-$TOOL job reconcile role:board-shell
+sh "$TOOL" job status role:board-shell
+sh "$TOOL" job reconcile role:board-shell
 ```
 
 `job reconcile` releases ownership only after the exact token-specific completion marker and real return code are observed. It also safely recovers a `start` job that has naturally returned to the shell. If the job is still running, preserve it or use a verified `interrupt`.
@@ -188,7 +188,7 @@ Use this section only when Telnet is explicit or already established by project 
 4. Require a finite proof before treating the remote shell as healthy. The Telnet helper performs this proof inside the same pane-ownership transaction and publishes `REMOTE` only after it succeeds.
 
 ```bash
-$TOOL telnet connect role:board-shell --host 10.128.0.1 --user root --password ''
+sh "$TOOL" telnet connect role:board-shell --host 10.128.0.1 --user root --password ''
 ```
 
 A successful `telnet connect` already proves the shell; do not issue a second reassurance command unless the user actually requested it. During connection, `VERIFYING` is not writable by ordinary `exec/start`.
@@ -200,8 +200,8 @@ If `PASSWORD_REQUIRED`, timeout, or verification failure is reported, rely on th
 State views:
 
 ```bash
-$TOOL telnet status role:board-shell
-$TOOL inspect role:board-shell
+sh "$TOOL" telnet status role:board-shell
+sh "$TOOL" inspect role:board-shell
 ```
 
 `telnet status` reports current protocol/runtime metadata; it is **not an active health probe**. A finite `exec` is the health proof. Runtime state outranks stale protocol history.
@@ -241,13 +241,13 @@ A depth-independent wrapper may locate the anchor by walking upward. Once found,
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-while [ "$ROOT" != "/" ] && [ ! -x "$ROOT/.agent-tools/tmux-tool" ]; do
+while [ "$ROOT" != "/" ] && [ ! -r "$ROOT/.agent-tools/tmux-tool" ]; do
     ROOT=$(dirname -- "$ROOT")
 done
 TOOL="$ROOT/.agent-tools/tmux-tool"
-[ -x "$TOOL" ] || { echo "tmux-tool anchor missing" >&2; exit 127; }
+[ -r "$TOOL" ] || { echo "tmux-tool anchor missing or unreadable" >&2; exit 127; }
 cd "$ROOT"
-exec "$TOOL" exec role:board-shell 'ls'
+exec sh "$TOOL" exec role:board-shell 'ls'
 ```
 
 Keep wrappers thin. They must not reimplement role uniqueness, topology limits, pane locks, completion markers, BUSY detection, Telnet prompt parsing, or recovery.

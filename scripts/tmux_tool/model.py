@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
+
+
+class StrEnum(str, Enum):
+    """Python 3.10-compatible subset of enum.StrEnum used by this tool."""
+
+    def __str__(self) -> str:
+        return self.value
+
 
 
 class ResourceKind(StrEnum):

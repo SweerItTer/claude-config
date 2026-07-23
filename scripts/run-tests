@@ -1,6 +1,0 @@
-#!/bin/sh
-set -eu
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-export PYTHONPATH="$HERE/scripts${PYTHONPATH:+:$PYTHONPATH}"
-export PYTHONDONTWRITEBYTECODE=1
-exec python3 -m unittest discover -s "$HERE/tests" -p 'test_*.py' -v
