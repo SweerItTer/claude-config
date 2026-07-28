@@ -2,7 +2,7 @@
 # Custom Instructions
 
 <startup>
-Always load the description from @~/.claude/skills/three-tier-orchestration/SKILL.md, and be sure to use it when necessary.
+Load the description from @~/.claude/skills/three-tier-orchestration/SKILL.md only when the user explicitly mentions multi-agent or subagent collaboration; do not load it by default.
 </startup>
 
 <toolchain>
