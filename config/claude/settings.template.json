@@ -1,33 +1,149 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "skillListingBudgetFraction": 0.01,
-  "env": {
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "70",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_NEW_INIT": "1",
-    "CTX_STRICT_BASH": "0",
-    "DISABLE_AUTOUPDATER": "1",
-    "ENABLE_TOOL_SEARCH": "true"
-  },
   "attribution": {
     "commit": "",
     "pr": ""
   },
-  "permissions": {
-    "allow": [
-      "mcp__codegraph__codegraph_explore",
-      "mcp__codegraph__codegraph_search",
-      "mcp__codegraph__codegraph_node",
-      "mcp__codegraph__codegraph_callers",
-      "mcp__codegraph__codegraph_callees",
-      "mcp__codegraph__codegraph_impact",
-      "mcp__codegraph__codegraph_files",
-      "mcp__codegraph__codegraph_status",
-      "mcp__codegraph__*"
+  "disabledMcpServers": [
+    "browser-use",
+    "browserbase",
+    "clickhouse",
+    "cloudflare-docs",
+    "cloudflare-observability",
+    "cloudflare-workers-bindings",
+    "cloudflare-workers-builds",
+    "confluence",
+    "devfleet",
+    "evalview",
+    "fal-ai",
+    "jira",
+    "laraplugins",
+    "longhand",
+    "magic",
+    "omega-memory",
+    "railway",
+    "supabase",
+    "token-optimizer",
+    "vercel"
+  ],
+  "effortLevel": "xhigh",
+  "enabledPlugins": {
+    "claude-code-setup@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true,
+    "context-mode@context-mode": true,
+    "feature-dev@claude-plugins-official": true,
+    "oh-my-claudecode@omc": true,
+    "ponytail@ponytail": true,
+    "skill-creator@claude-plugins-official": true,
+    "superpowers@superpowers": true
+  },
+  "env": {
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "900000",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_NEW_INIT": "1",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY":"1",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS":"1",
+    "CTX_STRICT_BASH": "0",
+    "DISABLE_AUTOUPDATER": "1",
+    "ENABLE_TOOL_SEARCH": "true"
+  },
+  "extraKnownMarketplaces": {
+    "claude-plugins-official": {
+      "source": {
+        "repo": "anthropics/claude-plugins-official",
+        "source": "github"
+      }
+    },
+    "context-mode": {
+      "source": {
+        "repo": "mksglu/context-mode",
+        "source": "github"
+      }
+    },
+    "ecc": {
+      "source": {
+        "repo": "affaan-m/everything-claude-code",
+        "source": "github"
+      }
+    },
+    "omc": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"
+      }
+    },
+    "ponytail": {
+      "source": {
+        "repo": "DietrichGebert/ponytail",
+        "source": "github"
+      }
+    },
+    "superpowers": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/obra/superpowers.git"
+      }
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rules-loader.sh",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write"
+      },
+      {
+        "hooks": [
+          {
+            "command": "rtk hook claude",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
     ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "openspec init --tools claude",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "codegraph prompt-hook",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  },
+  "language": "简体中文",
+  "maxSkillDescriptionChars": 64,
+  "model": "sonnet",
+  "permissions": {
     "defaultMode": "bypassPermissions"
   },
+  "skillListingBudgetFraction": 0.01,
   "skillOverrides": {
     "claude-code-setup:claude-automation-recommender": "name-only",
     "code-review:code-review": "name-only",
@@ -59,135 +175,12 @@
     "update-config": "on",
     "using-superpowers": "on"
   },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/rules-loader.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "rtk hook claude"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/context-mode-cache-heal.mjs\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "openspec init --tools claude"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "codegraph prompt-hook"
-          }
-        ]
-      }
-    ]
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud.mjs"
-  },
-  "enabledPlugins": {
-    "claude-code-setup@claude-plugins-official": true,
-    "code-review@claude-plugins-official": true,
-    "context-mode@context-mode": true,
-    "feature-dev@claude-plugins-official": true,
-    "oh-my-claudecode@omc": true,
-    "ponytail@ponytail": true,
-    "skill-creator@claude-plugins-official": true,
-    "superpowers@superpowers": true
-  },
-  "extraKnownMarketplaces": {
-    "claude-plugins-official": {
-      "source": {
-        "source": "github",
-        "repo": "anthropics/claude-plugins-official"
-      }
-    },
-    "context-mode": {
-      "source": {
-        "source": "github",
-        "repo": "mksglu/context-mode"
-      }
-    },
-    "ecc": {
-      "source": {
-        "source": "github",
-        "repo": "affaan-m/everything-claude-code"
-      }
-    },
-    "omc": {
-      "source": {
-        "source": "git",
-        "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"
-      }
-    },
-    "ponytail": {
-      "source": {
-        "source": "github",
-        "repo": "DietrichGebert/ponytail"
-      }
-    },
-    "superpowers": {
-      "source": {
-        "source": "git",
-        "url": "https://github.com/obra/superpowers.git"
-      }
-    }
-  },
-  "language": "简体中文",
-  "effortLevel": "high",
   "skipDangerousModePermissionPrompt": true,
-  "theme": "dark",
+  "statusLine": {
+    "command": "node ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud.mjs",
+    "type": "command"
+  },
   "teammateMode": "in-process",
-  "disabledMcpServers": [
-    "browser-use",
-    "browserbase",
-    "clickhouse",
-    "cloudflare-docs",
-    "cloudflare-observability",
-    "cloudflare-workers-bindings",
-    "cloudflare-workers-builds",
-    "confluence",
-    "devfleet",
-    "evalview",
-    "fal-ai",
-    "jira",
-    "laraplugins",
-    "longhand",
-    "magic",
-    "omega-memory",
-    "railway",
-    "supabase",
-    "token-optimizer",
-    "vercel"
-  ],
-  "maxSkillDescriptionChars": 64,
+  "theme": "dark",
   "think": false
 }
