@@ -1,6 +1,6 @@
 ---
 name: git-workflow
-description: Git workflow patterns including branching strategies, commit conventions, merge vs rebase, conflict resolution, and collaborative development best practices for teams of all sizes.
+description: Use when planning branches, splitting implementation changes, preparing commits, writing commit messages, or deciding when a change is ready to commit.
 metadata:
   origin: ECC
 ---
@@ -89,6 +89,17 @@ main (production releases)
 | Trunk-Based | 5+ experienced | Multiple/day | High-velocity teams, feature flags |
 | GitFlow | 10+ | Scheduled | Enterprise, regulated industries |
 
+### Branch and Workspace Safety
+
+Before creating, switching, rebasing, or merging a branch, run `git status --short --branch` and identify the current worktree, branch, and every uncommitted path. Do not assume a dirty worktree belongs to the current task.
+
+- Preserve unrelated or user-owned changes; never overwrite, reset, clean, stash, or absorb them silently.
+- If changes belong to the current task, commit a complete boundary before switching. If they are intentionally incomplete, use a uniquely named temporary WIP commit or an explicitly identified stash entry, then verify restoration before continuing.
+- If ownership or intended disposition is unclear, stop before changing branches or worktrees and surface the conflict.
+- Prefer an isolated worktree for parallel or risky work, and verify its branch, path, and base commit before editing.
+- After switching or creating a worktree, rerun `git status --short --branch` and confirm the expected baseline before making changes.
+- Never use `git add .` or a broad cleanup command as a substitute for deciding which work belongs to the task.
+
 ## Commit Messages
 
 ### Conventional Commits Format
@@ -163,6 +174,54 @@ Atomic commits keep history readable, reviewable, and easy to revert. Each commi
 - Each commit should preferably compile and pass relevant tests
 - Split large commits before pushing or opening a PR
 - Use `git add -p` to stage only related hunks
+- Do not commit a compile-breaking intermediate state merely to make the diff smaller; split at a complete, independently reviewable boundary.
+
+### Minimal Diff and Boundary Gate
+
+Before staging, describe the change in one sentence: **what behavior changes, which module owns it, and what evidence proves the slice**. Then classify every changed path:
+
+| Boundary | Typical contents | Separate when |
+|---|---|---|
+| Contract | public types, API docs, compatibility notes | API meaning changes before implementation |
+| Implementation | one module's production code | ownership or rollback boundary differs |
+| Integration | wiring between modules | callers become buildable as a complete slice |
+| Verification | tests, fixtures, probes | test intent or execution lifecycle is distinct |
+| Fix | review/test correction | it repairs a previously committed behavior |
+
+Rules:
+
+1. **Smallest coherent diff wins.** Minimize files and hunks only after tracing the full call path; do not hide a required caller, contract, or test just to reduce line count.
+2. **One responsibility per commit.** A commit may span several files when they form one inseparable module boundary, but it must not mix unrelated modules, documentation cleanup, refactors, or speculative future work.
+3. **Complete the boundary before committing.** A signature change must include its required callers; a new runtime path must include the smallest proof that it is reachable. If the boundary cannot build or pass its relevant check, keep it uncommitted or finish the missing companion changes.
+4. **Commit at the evidence checkpoint.** After self-review, relevant build/test/static checks, and any required human review, commit the verified slice immediately. Do not accumulate several verified slices into one commit.
+5. **Fixes stay separate.** A defect found after a feature commit becomes a new `fix` commit with its own evidence; do not silently amend or mix it into the next feature unless the history is explicitly private and the fix has not been reviewed.
+6. **Stage deliberately.** Inspect `git status --short`, `git diff`, and `git diff --cached` before every commit. Prefer explicit paths or `git add -p`; never use `git add .` when unrelated work may exist.
+
+### Scope and Commit Message Quality
+
+Use the narrowest stable module scope that a maintainer would search for in history. Prefer `auth-session`, `network-backend`, `parser`, or `cli-api` over `core`, `system`, `misc`, or a broad product name. The scope should describe the owning module, not merely the issue category or repository.
+
+A non-trivial commit needs a body. Keep the subject concise but specific (usually 50–72 characters, imperative, no trailing period), then explain:
+
+- **Why:** the user-visible problem or invariant being addressed;
+- **What changed:** the owned behavior and important boundary decisions;
+- **Evidence:** tests/build/static checks run, plus environment limitations;
+- **Follow-up:** intentionally deferred behavior, if any.
+
+```text
+<type>(<owning-module>): <specific behavior in imperative form>
+
+Why: <problem or invariant>
+What: <implementation boundary and notable decision>
+Evidence: <checks run; known environment limitation>
+Follow-up: <deferred work, or "None">
+```
+
+Never use a generic scope or a one-line subject for a change whose rationale, verification, or limitation would be lost without a body. A short trivial change may omit the body only when the subject fully explains the change and no caveat affects future maintainers.
+
+### Comment Discipline at Commit Boundaries
+
+Before committing code that introduces a non-obvious constraint, verify that the code explains it locally: ownership transfer, lock ordering, resource cleanup, error normalization, truncation, ABI/platform workaround, or a deliberate simplification. Write a short comment at the decision point when names and structure cannot carry that constraint. Do not add line-by-line narration, comments that restate the next statement, or long design essays in source files; put broader rationale in the appropriate documentation.
 
 ### Good Examples
 
@@ -452,21 +511,18 @@ git push origin --delete feature/user-auth
 
 ### Stash Workflow
 
+Use stashes only when a commit or isolated worktree is not practical. Give the entry a unique tag, capture its SHA immediately, restore by SHA rather than position, verify the restored paths, and drop only that entry after successful restoration.
+
 ```bash
-# Save work in progress
-git stash push -m "WIP: user authentication"
+# Save work in progress with a unique tag
+git stash push -u -m "WIP: user authentication <task-id>"
+git stash list --format='%H %gs'  # capture the SHA matching the unique tag
 
-# List stashes
-git stash list
-
-# Apply most recent stash
-git stash pop
-
-# Apply specific stash
-git stash apply stash@{2}
-
-# Drop stash
-git stash drop stash@{0}
+# Restore the identified entry, then verify before dropping it
+git stash apply <captured-sha>
+git status --short
+# Confirm the expected paths and diff are restored
+git stash drop <current-stash-ref-for-captured-sha>
 ```
 
 ## Release Management
@@ -622,7 +678,7 @@ git pull origin main
 git checkout -b feature/user-auth
 
 # 3. Make changes and commit
-git add .
+git add src/auth/login.ts tests/auth/login.test.ts
 git commit -m "feat(auth): implement OAuth2 login"
 
 # 4. Push to remote
@@ -635,7 +691,7 @@ git push -u origin feature/user-auth
 
 ```bash
 # 1. Make additional changes
-git add .
+git add src/auth/login.ts tests/auth/login.test.ts
 git commit -m "feat(auth): add error handling"
 
 # 2. Push updates
@@ -771,10 +827,10 @@ git add node_modules/
 | Rebase branch | `git rebase main` |
 | View history | `git log --oneline --graph` |
 | View changes | `git diff` |
-| Stage changes | `git add .` or `git add -p` |
+| Stage changes | `git add <explicit-paths>` or `git add -p` |
 | Commit | `git commit -m "message"` |
 | Push | `git push origin branch-name` |
 | Pull | `git pull origin branch-name` |
-| Stash | `git stash push -m "message"` |
+| Stash | `git stash push -u -m "WIP: <task-id>"`; apply captured SHA, verify, then drop |
 | Undo last commit | `git reset --soft HEAD~1` |
 | Revert commit | `git revert HEAD` |
