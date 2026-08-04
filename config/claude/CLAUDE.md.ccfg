@@ -6,7 +6,6 @@ Load the description from @~/.claude/skills/three-tier-orchestration/SKILL.md on
 </startup>
 
 <toolchain>
-Prefer `rtk` for explicit shell workflows; use `rtk gain` to check savings before and after context-heavy operations.
 Read/WebFetch stay optimized by context-mode hooks; no manual redirection needed.
 </toolchain>
 

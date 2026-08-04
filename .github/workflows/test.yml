@@ -210,22 +210,6 @@ jobs:
           printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 失败: claude 已发现 codegraph，但未显示 ✓ Connected'
           printf '%s\n' "$output" | grep -q 'CodeGraph overall: CLI 与配置已通过，但离线发现失败'
 
-      - name: Verify user ECC default skips install
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          trap 'rm -r "$tmp"' EXIT
-
-          output=$(CLAUDE_CONFIG_DIR="$tmp" ./setup.sh --dry-run --no-claude --no-verify 2>&1)
-          echo "$output"
-
-          printf '%s\n' "$output" | grep -q '未显式请求 ECC，跳过第三方 source: ecc'
-          printf '%s\n' "$output" | grep -q '未显式请求 ECC，跳过 ECC 安装'
-          if printf '%s\n' "$output" | grep -q -- 'ECC 默认安装范围\|npm install ECC\|--modules rules-core,agents-core\|--profile full'; then
-            echo "FAIL: 用户默认路径不应自动安装或选择 ECC 安装范围"
-            exit 1
-          fi
-
       - name: Verify setup dependency bootstrap regression script
         run: |
           chmod +x ./script/test-setup-dependencies.sh

@@ -15,14 +15,6 @@
     "installLocation": "REPO_ROOT/external/context-mode",
     "lastUpdated": "2026-05-14T00:00:00.000Z"
   },
-  "ecc": {
-    "source": {
-      "source": "github",
-      "repo": "affaan-m/everything-claude-code"
-    },
-    "installLocation": "REPO_ROOT/external/everything-claude-code",
-    "lastUpdated": "2026-05-14T00:00:00.000Z"
-  },
   "omc": {
     "source": {
       "source": "git",

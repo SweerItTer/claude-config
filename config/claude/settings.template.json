@@ -62,12 +62,6 @@
         "source": "github"
       }
     },
-    "ecc": {
-      "source": {
-        "repo": "affaan-m/everything-claude-code",
-        "source": "github"
-      }
-    },
     "omc": {
       "source": {
         "source": "git",
@@ -97,15 +91,6 @@
           }
         ],
         "matcher": "Edit|Write"
-      },
-      {
-        "hooks": [
-          {
-            "command": "rtk hook claude",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
       }
     ],
     "SessionStart": [

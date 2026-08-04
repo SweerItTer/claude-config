@@ -23,7 +23,6 @@ mkdir -p \
   "$fixture/home/.claude/plugins/marketplaces"
 
 echo '# cpo source' > "$fixture/repo/external/claude-plugins-official/README.md"
-echo '# rtk doc' > "$fixture/repo/config/claude/RTK.md"
 
 test_path_block_is_idempotent() {
   local profile="$fixture/home/.profile"

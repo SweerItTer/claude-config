@@ -24,7 +24,11 @@ from pathlib import Path
 src = Path(sys.argv[1]).read_text(encoding='utf-8')
 start = src.index("RED='\\033[0;31m'")
 end = src.index('\nsymlink_points_to() {')
-print(src[start:end])
+chunk = src[start:end].replace(
+    '# shellcheck source=script/install-common.sh\nsource "$SCRIPT_DIR/install-common.sh"\n',
+    '',
+)
+print(chunk)
 PYEOF
 
 cat >> "$TEST_FILE" <<'BASHEOF'

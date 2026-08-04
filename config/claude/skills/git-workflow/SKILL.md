@@ -1,8 +1,6 @@
 ---
 name: git-workflow
 description: Use when planning branches, splitting implementation changes, preparing commits, writing commit messages, or deciding when a change is ready to commit.
-metadata:
-  origin: ECC
 ---
 
 # Git Workflow Patterns

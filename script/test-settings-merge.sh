@@ -144,7 +144,6 @@ def test_full_e2e():
             "plugin-a": True,
             "playwright@claude-plugins-official": True,
             "obra/superpowers@superpowers": True,
-            "ecc@ecc": True,
         },
         "extraKnownMarketplaces": {},
         "hooks": {"PreToolUse": [{"command": "user-hook.sh"}]},
@@ -222,8 +221,6 @@ def test_full_e2e():
               current["enabledPlugins"]["playwright@claude-plugins-official"])
     assert_eq("T8w: existing legacy superpowers plugin not removed", True,
               current["enabledPlugins"]["obra/superpowers@superpowers"])
-    assert_eq("T8x: existing legacy ecc plugin not removed", True,
-              current["enabledPlugins"]["ecc@ecc"])
 
     os.unlink(target)
 

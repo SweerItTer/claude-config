@@ -7,7 +7,6 @@
 | 编辑文件类型 | 加载规则集 |
 |-------------|-----------|
 | `.java` | `java/` |
-| `.cpp` `.c` `.h` `.hpp` | `ecc/cpp/` `ecc/c/` |
 | `.vue` `.html` | `web/` |
 | `.js` `.jsx` | `typescript/` + `web/` |
 
@@ -19,14 +18,6 @@
 | `java/` | coding-style, hooks, patterns, security, testing |
 | `typescript/` | coding-style, hooks, patterns, security, testing |
 | `web/` | coding-style, design-quality, hooks, patterns, performance, security, testing |
-
-### ECC 官方规则 (来自 everything-claude-code)
-| 目录 | 覆盖领域 |
-|------|---------|
-| `ecc/c/` `ecc/cpp/` | C/C++ 语言规则 |
-| `ecc/java/` | Java 补充规则 |
-| `ecc/javascript/` `ecc/typescript/` | JS/TS 补充规则 |
-| `ecc/web/` | Web 补充规则 |
 
 ## 使用协议
 

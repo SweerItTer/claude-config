@@ -20,7 +20,7 @@ echo "$input"
 ext="${file_path##*.}"
 case "$ext" in
     java) hint="java" ;;
-    cpp|c|h|hpp) hint="ecc/cpp/ + ecc/c/" ;;
+    cpp|c|h|hpp) hint="common" ;;
     vue|html) hint="web" ;;
     js|jsx) hint="typescript + web" ;;
     *) exit 0 ;;

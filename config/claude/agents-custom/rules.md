@@ -18,7 +18,7 @@
 
 **MUST** — Include verbatim in every Task prompt:
 
-> Tool rules: (1) prefix every shell command with `rtk`. (2) use hook-backed ctx tools for Read/Grep/WebFetch. (3) decompose further only if sub-subtasks are independently parallelisable. (4) run `rtk gain` at end and include savings summary.
+> Tool rules: (1) use hook-backed ctx tools for Read/Grep/WebFetch. (2) decompose further only if sub-subtasks are independently parallelisable.
 
 **MUST** — Pass minimum context only. Summarise relevant state; never copy conversation history.
 
@@ -32,7 +32,6 @@
 STATUS: done | failed | blocked
 CHANGED: <file list or "none">
 TESTS: passed | failed | skipped | n/a
-RTK_GAIN: <rtk gain output>
 ISSUES: <open issues or "none">
 ```
 
