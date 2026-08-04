@@ -1204,6 +1204,7 @@ ensure_core_config() {
     mkdir -p "$CLAUDE_HOME"
 
     remove_legacy_rtk_link "$CLAUDE_HOME/RTK.md" "$REPO_ROOT/config/claude/RTK.md"
+    remove_legacy_tmux_skill_link
     remove_legacy_marketplace_entries "$CLAUDE_HOME/plugins/known_marketplaces.json"
     remove_legacy_installed_plugins_entries "$CLAUDE_HOME/plugins/installed_plugins.json"
 
@@ -1703,6 +1704,13 @@ remove_symlink_if_ours() {
     log "已移除: $label"
 }
 
+remove_legacy_tmux_skill_link() {
+    remove_symlink_if_ours \
+        "$CLAUDE_HOME/skills/tmux-session-manager" \
+        "已删除的 tmux-session-manager skill" \
+        "$REPO_ROOT/config/claude/skills/tmux-session-manager"
+}
+
 remove_managed_block() {
     local path="$1"
     local block_name="$2"
@@ -1760,6 +1768,7 @@ uninstall_core() {
     # remove_symlink_if_ours "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink" "$repo/haiku-throttle.md"
 
     remove_legacy_rtk_link "$CLAUDE_HOME/RTK.md" "$repo/RTK.md"
+    remove_legacy_tmux_skill_link
     remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md" "$repo/AGENTS.md"
     remove_symlink_if_ours "$CLAUDE_HOME/rules" "rules/" "$repo/rules"
     remove_symlink_if_ours "$CLAUDE_HOME/rules-available" "rules-available/" "$repo/rules-available"

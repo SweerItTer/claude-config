@@ -134,8 +134,41 @@ print('PASS: marketplace repair survives backup name collision')
 PYEOF
 }
 
+test_removed_tmux_skill_symlink_is_cleaned() {
+  local stale_link="$fixture/home/.claude/skills/tmux-session-manager"
+  local deleted_source="$fixture/repo/config/claude/skills/tmux-session-manager"
+  local unrelated_source="$fixture/unrelated-tmux-session-manager"
+  mkdir -p "$(dirname "$stale_link")" "$fixture/repo/config/claude/skills"
+  ln -s "$deleted_source" "$stale_link"
+
+  (
+    export HOME="$fixture/home"
+    export CLAUDE_CONFIG_DIR="$fixture/home/.claude"
+    export SHELL="/bin/bash"
+    cd "$fixture/repo"
+    # shellcheck source=/dev/null
+    source "$fixture/repo/setup.sh"
+    remove_legacy_tmux_skill_link
+  )
+  [[ ! -L "$stale_link" ]]
+
+  ln -s "$unrelated_source" "$stale_link"
+  (
+    export HOME="$fixture/home"
+    export CLAUDE_CONFIG_DIR="$fixture/home/.claude"
+    export SHELL="/bin/bash"
+    cd "$fixture/repo"
+    # shellcheck source=/dev/null
+    source "$fixture/repo/setup.sh"
+    remove_legacy_tmux_skill_link
+  )
+  [[ -L "$stale_link" ]]
+  echo 'PASS: deleted tmux skill symlink is cleaned without touching unrelated links'
+}
+
 test_path_block_is_idempotent
 test_marketplace_conflict_is_backed_up_and_replaced
 test_marketplace_backup_name_collision_still_repairs_target
+test_removed_tmux_skill_symlink_is_cleaned
 
 echo 'All setup PATH/marketplace regression tests passed.'
