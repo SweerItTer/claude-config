@@ -1141,10 +1141,9 @@ run_context_smoke_test() {
         return 1
     fi
 
-    local timeout_seconds="${CLAUDE_CONTEXT_TIMEOUT:-10}"
-    if [[ "$timeout_seconds" =~ ^[0-9]+$ ]] && (( timeout_seconds > 10 )); then
-        timeout_seconds=10
-    fi
+    # 默认 15s；CI 冷启动（首次 claude 启动 + 代理握手）需要更长，可用
+    # CLAUDE_CONTEXT_TIMEOUT 放宽，不做硬性上限钳制。
+    local timeout_seconds="${CLAUDE_CONTEXT_TIMEOUT:-15}"
     local tmp
     tmp="$(mktemp)"
     set +e
@@ -1205,10 +1204,8 @@ run_final_doctor() {
         return 0
     fi
 
-    local doctor_timeout_seconds="${CLAUDE_DOCTOR_TIMEOUT:-10}"
-    if [[ "$doctor_timeout_seconds" =~ ^[0-9]+$ ]] && (( doctor_timeout_seconds > 10 )); then
-        doctor_timeout_seconds=10
-    fi
+    # 默认 15s；CI 冷启动需要更长，可用 CLAUDE_DOCTOR_TIMEOUT 放宽，不做硬性上限钳制。
+    local doctor_timeout_seconds="${CLAUDE_DOCTOR_TIMEOUT:-15}"
 
     info "运行最终 Claude doctor..."
     if timeout "$doctor_timeout_seconds" "$REPO_ROOT/script/check-claude-doctor.sh"; then

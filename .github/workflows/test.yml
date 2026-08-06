@@ -229,6 +229,9 @@ jobs:
           CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
           CLAUDE_MODEL: deepseek-v4-flash
+          # CI 冷环境（首次 claude 启动 + 代理握手）需要比本机更长的超时
+          CLAUDE_CONTEXT_TIMEOUT: 60
+          CLAUDE_DOCTOR_TIMEOUT: 30
 
       - name: Verify idempotency with second run
         run: |
@@ -269,3 +272,5 @@ jobs:
           CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
           CLAUDE_MODEL: deepseek-v4-flash
+          CLAUDE_CONTEXT_TIMEOUT: 60
+          CLAUDE_DOCTOR_TIMEOUT: 30
