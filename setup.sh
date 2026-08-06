@@ -39,6 +39,8 @@ UPDATE_THIRD_PARTY_REMOTE=false
 NO_PATCH=false
 PLUGIN_FILTER_ENABLED=false
 SELECTED_PLUGINS=()
+SELECTED_SKILL=""
+SELECTED_PLUGIN=""
 KNOWN_PLUGIN_MODULES=(openspec codegraph context-mode omc superpowers ponytail)
 ACTION="install"
 ACTION_EXPLICIT=false
@@ -1200,45 +1202,135 @@ update_repository() {
     exec "$REPO_ROOT/setup.sh" "${ORIGINAL_ARGS[@]}"
 }
 
+# --- 清单驱动安装（npx skills + claude plugin） ---
+
+SKILLS_CONFIG="$REPO_ROOT/configs/skills.toml"
+PLUGINS_CONFIG="$REPO_ROOT/configs/plugins.toml"
+
+# 解析 TOML 清单中的 [[sources]] 段（skills.toml）
+# 输出: name<TAB>repo<TAB>skill<TAB>agent<TAB>scope<TAB>note（每行一个 source）
+parse_skills_toml() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    awk -F'=' '
+        function clean(v) { sub(/^[[:space:]]+/, "", v); gsub(/^"|"$/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+        /^\[\[sources\]\]/ { if (NR>1 && have) print name "\t" repo "\t" skill "\t" agent "\t" scope "\t" note; name=""; repo=""; skill="*"; agent="claude-code"; scope="global"; note=""; have=1; next }
+        /^name[[:space:]]*=/ { name=clean($2); next }
+        /^repo[[:space:]]*=/  { repo=clean($2); next }
+        /^skill[[:space:]]*=/ { skill=clean($2); next }
+        /^agent[[:space:]]*=/ { agent=clean($2); next }
+        /^scope[[:space:]]*=/ { scope=clean($2); next }
+        /^note[[:space:]]*=/  { note=clean($2); next }
+        END { if (have) print name "\t" repo "\t" skill "\t" agent "\t" scope "\t" note }
+    ' "$file"
+}
+
+# 解析 TOML 清单中的 [[plugins]] 段（plugins.toml）
+# 输出: name<TAB>repo<TAB>method<TAB>marketplace<TAB>command<TAB>note（每行一个 plugin）
+parse_plugins_toml() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    awk -F'=' '
+        function clean(v) { sub(/^[[:space:]]+/, "", v); gsub(/^"|"$/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+        /^\[\[plugins\]\]/ { if (NR>1 && have) print name "\t" repo "\t" method "\t" marketplace "\t" command "\t" note; name=""; repo=""; method="claude-plugin"; marketplace=""; command=""; note=""; have=1; next }
+        /^name[[:space:]]*=/         { name=clean($2); next }
+        /^repo[[:space:]]*=/         { repo=clean($2); next }
+        /^method[[:space:]]*=/       { method=clean($2); next }
+        /^marketplace[[:space:]]*=/  { marketplace=clean($2); next }
+        /^command[[:space:]]*=/      { command=clean($2); next }
+        /^note[[:space:]]*=/         { note=clean($2); next }
+        END { if (have) print name "\t" repo "\t" method "\t" marketplace "\t" command "\t" note }
+    ' "$file"
+}
+
+# 安装外部 skills（读 skills.toml → npx skills add）
+install_external_skills() {
+    local filter="${1:-}"   # 可选：只装指定 name 的 source
+    [[ -f "$SKILLS_CONFIG" ]] || { info "无 skills.toml，跳过外部 skill"; return 0; }
+
+    local line name repo skill agent scope
+    while IFS=$'\t' read -r name repo skill agent scope note; do
+        [[ -n "$name" ]] || continue
+        if [[ -n "$filter" ]] && [[ "$name" != "$filter" ]]; then
+            continue
+        fi
+
+        local scope_flag=""
+        [[ "$scope" == "global" ]] && scope_flag="-g"
+
+        info "安装外部 skill: $name ($repo, skill=$skill)"
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] npx -y skills@latest add $repo -s $skill -a ${agent:-claude-code} $scope_flag"
+            continue
+        fi
+
+        if ! npx -y skills@latest add "$repo" -s "$skill" -a "${agent:-claude-code}" $scope_flag; then
+            err "安装 skill '$name' 失败: $repo"
+            return 1
+        fi
+        log "skill '$name' 已安装"
+    done <<< "$(parse_skills_toml "$SKILLS_CONFIG")"
+}
+
+# 安装第三方 plugins（读 plugins.toml → claude plugin install）
+install_third_party_plugins() {
+    local filter="${1:-}"   # 可选：只装指定 name 的 plugin
+    [[ -f "$PLUGINS_CONFIG" ]] || { info "无 plugins.toml，跳过第三方 plugin"; return 0; }
+
+    local line name repo method marketplace command note
+    while IFS=$'\t' read -r name repo method marketplace command note; do
+        [[ -n "$name" ]] || continue
+        if [[ -n "$filter" ]] && [[ "$name" != "$filter" ]]; then
+            continue
+        fi
+
+        case "$method" in
+            claude-plugin)
+                info "安装 plugin: $name (marketplace: $marketplace)"
+                if [[ "$DRY_RUN" == true ]]; then
+                    info "[DRY-RUN] claude plugin marketplace add $repo --scope user && claude plugin install ${name}@${marketplace} -s user"
+                    continue
+                fi
+                claude plugin marketplace add "$repo" --scope user 2>/dev/null || \
+                    warn "marketplace 添加失败（可能已存在）: $name"
+                if ! claude plugin install "${name}@${marketplace}" -s user; then
+                    err "安装 plugin '$name' 失败"
+                    return 1
+                fi
+                log "plugin '$name' 已安装"
+                ;;
+            npx)
+                warn "需手动安装 plugin '$name': $command"
+                ;;
+            *)
+                warn "未知安装方式 '$method'，跳过 plugin '$name'"
+                ;;
+        esac
+    done <<< "$(parse_plugins_toml "$PLUGINS_CONFIG")"
+}
+
 ensure_core_config() {
     mkdir -p "$CLAUDE_HOME"
 
-    remove_legacy_rtk_link "$CLAUDE_HOME/RTK.md" "$REPO_ROOT/config/claude/RTK.md"
+    remove_legacy_rtk_link "$CLAUDE_HOME/RTK.md" "$REPO_ROOT/claude/RTK.md"
     remove_legacy_marketplace_entries "$CLAUDE_HOME/plugins/known_marketplaces.json"
     remove_legacy_installed_plugins_entries "$CLAUDE_HOME/plugins/installed_plugins.json"
 
     ensure_user_local_bin_path
 
-    ensure_symlink "$REPO_ROOT/config/claude/CLAUDE.md.ccfg" "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink"
-    # ensure_symlink "$REPO_ROOT/config/claude/itp.md" "$CLAUDE_HOME/itp.md" "itp.md symlink"
-    # ensure_symlink "$REPO_ROOT/config/claude/haiku-throttle.md" "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink"
-    remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md 旧 symlink" "$REPO_ROOT/config/claude/AGENTS.md"
+    ensure_symlink "$REPO_ROOT/claude/CLAUDE.md.ccfg" "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink"
+    # ensure_symlink "$REPO_ROOT/claude/itp.md" "$CLAUDE_HOME/itp.md" "itp.md symlink"
+    # ensure_symlink "$REPO_ROOT/claude/haiku-throttle.md" "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink"
+    remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md 旧 symlink" "$REPO_ROOT/claude/AGENTS.md"
 
-    ensure_symlink "$REPO_ROOT/config/claude/rules" "$CLAUDE_HOME/rules" "rules symlink"
-    ensure_symlink "$REPO_ROOT/config/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink"
-    ensure_symlink "$REPO_ROOT/config/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook"
+    ensure_symlink "$REPO_ROOT/claude/rules" "$CLAUDE_HOME/rules" "rules symlink"
+    ensure_symlink "$REPO_ROOT/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink"
+    ensure_symlink "$REPO_ROOT/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook"
 
-    local repo_skills_dir="$REPO_ROOT/config/claude/skills"
-    if [[ -d "$repo_skills_dir" ]]; then
-        mkdir -p "$CLAUDE_HOME/skills"
-
-        local skill_src skill_name skill_dst
-        for skill_src in "$repo_skills_dir"/*; do
-            [[ -e "$skill_src" ]] || continue
-            skill_name="$(basename "$skill_src")"
-            skill_dst="$CLAUDE_HOME/skills/$skill_name"
-
-            if [[ -e "$skill_dst" || -L "$skill_dst" ]] && ! symlink_points_to "$skill_dst" "$skill_src"; then
-                if [[ "$DRY_RUN" == true ]]; then
-                    info "[DRY-RUN] 重建已有 skill 目标: $skill_dst"
-                else
-                    rm -rf "$skill_dst"
-                fi
-            fi
-
-            ensure_symlink "$skill_src" "$skill_dst" "skill symlink '$skill_name'"
-        done
-    fi
+    # 自有 skill 位于顶层 skills/（npx skills 通用 agent 约定目录）。
+    # 仓库内安装由 npx skills 从 GitHub 远程拉取到 ~/.claude/skills/；
+    # 开发时也可直接从本地 skills/ 读取。外部 skill 由
+    # install_external_skills() 通过 npx skills 安装。
 
     local cpo_src="$REPO_ROOT/external/claude-plugins-official"
     local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
@@ -1248,7 +1340,7 @@ ensure_core_config() {
 }
 
 ensure_settings_json() {
-    local template="$REPO_ROOT/config/claude/settings.template.json"
+    local template="$REPO_ROOT/claude/settings.template.json"
     local target="$CLAUDE_HOME/settings.json"
 
     if [[ ! -f "$template" ]]; then
@@ -1284,7 +1376,7 @@ ensure_settings_json() {
 }
 
 build_plugin_registration_entries() {
-    SETTINGS_TEMPLATE_JSON="$REPO_ROOT/config/claude/settings.template.json" \
+    SETTINGS_TEMPLATE_JSON="$REPO_ROOT/claude/settings.template.json" \
     EXTERNAL_DIR="$EXTERNAL_DIR" \
     python3 - <<'PYEOF'
 import json
@@ -1361,7 +1453,7 @@ verify_repository_cleanliness() {
         "package.json"
         "package-lock.json"
         "config/omc/wiki/log.md"
-        "config/claude/AGENTS.md"
+        "claude/AGENTS.md"
     )
 
     local path
@@ -1407,8 +1499,8 @@ verify_core_config() {
     fi
 
     local failed=0
-    if is_valid_claude_md "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/config/claude/CLAUDE.md.ccfg"; then
-        if symlink_points_to "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/config/claude/CLAUDE.md.ccfg"; then
+    if is_valid_claude_md "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/claude/CLAUDE.md.ccfg"; then
+        if symlink_points_to "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/claude/CLAUDE.md.ccfg"; then
             pass "CLAUDE.md symlink"
         else
             pass "CLAUDE.md injected file (OMC + Claude-Config)"
@@ -1422,8 +1514,8 @@ verify_core_config() {
         failed=1
     fi
 
-    # if symlink_points_to "$CLAUDE_HOME/itp.md" "$REPO_ROOT/config/claude/itp.md" \
-    #     && symlink_points_to "$CLAUDE_HOME/haiku-throttle.md" "$REPO_ROOT/config/claude/haiku-throttle.md"; then
+    # if symlink_points_to "$CLAUDE_HOME/itp.md" "$REPO_ROOT/claude/itp.md" \
+    #     && symlink_points_to "$CLAUDE_HOME/haiku-throttle.md" "$REPO_ROOT/claude/haiku-throttle.md"; then
     #     pass "ITP/throttle symlink"
     # else
     #     err "ITP/throttle symlink 缺失"
@@ -1436,7 +1528,7 @@ verify_core_config() {
     elif [[ -L "$agents_path" ]]; then
         local agents_target
         agents_target="$(readlink -f "$agents_path" 2>/dev/null || true)"
-        if [[ "$agents_target" == "$REPO_ROOT/config/claude/AGENTS.md" ]]; then
+        if [[ "$agents_target" == "$REPO_ROOT/claude/AGENTS.md" ]]; then
             err "AGENTS.md 不应再链接到仓库内第三方内容"
             failed=1
         else
@@ -1448,47 +1540,32 @@ verify_core_config() {
         warn "AGENTS.md 存在但类型不常见，核心 setup 不接管: $agents_path"
     fi
 
-    if symlink_points_to "$CLAUDE_HOME/rules" "$REPO_ROOT/config/claude/rules"; then
+    if symlink_points_to "$CLAUDE_HOME/rules" "$REPO_ROOT/claude/rules"; then
         pass "rules symlink"
     else
         err "rules symlink 缺失"
         failed=1
     fi
 
-    if symlink_points_to "$CLAUDE_HOME/rules-available" "$REPO_ROOT/config/claude/rules-available"; then
+    if symlink_points_to "$CLAUDE_HOME/rules-available" "$REPO_ROOT/claude/rules-available"; then
         pass "rules-available symlink"
     else
         err "rules-available symlink 缺失"
         failed=1
     fi
 
-    if symlink_points_to "$CLAUDE_HOME/hooks/rules-loader.sh" "$REPO_ROOT/config/claude/hooks/rules-loader.sh"; then
+    if symlink_points_to "$CLAUDE_HOME/hooks/rules-loader.sh" "$REPO_ROOT/claude/hooks/rules-loader.sh"; then
         pass "rules-loader hook"
     else
         err "rules-loader hook 缺失"
         failed=1
     fi
 
-    local repo_skills_dir="$REPO_ROOT/config/claude/skills"
-    local repo_skills_ok=0
-    if [[ -d "$repo_skills_dir" ]]; then
-        repo_skills_ok=1
-        local skill_src skill_name skill_dst
-        for skill_src in "$repo_skills_dir"/*; do
-            [[ -e "$skill_src" ]] || continue
-            skill_name="$(basename "$skill_src")"
-            skill_dst="$CLAUDE_HOME/skills/$skill_name"
-            if ! symlink_points_to "$skill_dst" "$skill_src"; then
-                repo_skills_ok=0
-                break
-            fi
-        done
-    fi
-
-    if [[ $repo_skills_ok -eq 1 ]]; then
-        pass "repo skills symlink"
+    local repo_skills_dir="$REPO_ROOT/skills"
+    if [[ -d "$repo_skills_dir" ]] && [[ -n "$(ls -A "$repo_skills_dir")" ]]; then
+        pass "自有 skills 就绪 ($repo_skills_dir)"
     else
-        err "repo skills symlink 缺失"
+        err "自有 skills 目录缺失或为空: $repo_skills_dir"
         failed=1
     fi
 
@@ -1608,44 +1685,25 @@ run_final_doctor() {
 }
 
 run_priority_module_actions() {
-    run_installer context-mode "$NO_PATCH"
-    run_installer omc
-    run_installer superpowers
-    run_installer ponytail
+    # 清单驱动的生命周期操作：install_external_skills + install_third_party_plugins
+    install_external_skills
+    install_third_party_plugins
 }
 
 run_install_flow() {
     phase "Phase 1: Claude Code"
     ensure_claude_code
 
-    phase "Phase 2: 第三方源码 + 核心配置"
-    ensure_third_party_sources
+    phase "Phase 2: 核心配置"
     ensure_core_config
     ensure_settings_json
     merge_known_marketplaces
 
-    if [[ "$UPDATE" == true && "$FORCE" == false ]]; then
-        phase "Phase 3: CodeGraph + context-mode + OpenSpec 同步"
-        run_installer codegraph true
-        run_installer context-mode "$NO_PATCH"
-        run_installer openspec
-        phase "Phase 5: 最终验证"
-        verify_core_config
-        run_final_doctor
-        return 0
-    fi
+    phase "Phase 3: 外部 skills（npx skills）"
+    install_external_skills "${SELECTED_SKILL:-}"
 
-    phase "Phase 3: 安装器编排"
-    run_installer codegraph "$UPDATE"
-    run_installer context-mode "$NO_PATCH"
-    run_installer openspec
-
-    phase "Phase 4: 后置安装器"
-    run_installer omc
-    run_installer superpowers
-
-    phase "Phase 4.5: Plugin registry 修复"
-    register_repository_plugins
+    phase "Phase 4: 第三方 plugins（claude plugin）"
+    install_third_party_plugins "${SELECTED_PLUGIN:-}"
 
     phase "Phase 5: 最终验证"
     verify_core_config
@@ -1749,7 +1807,7 @@ PYEOF
 
 uninstall_core() {
     phase "Uninstall: 核心配置"
-    local repo="$REPO_ROOT/config/claude"
+    local repo="$REPO_ROOT/claude"
 
     if [[ -L "$CLAUDE_HOME/CLAUDE.md" ]]; then
         remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink" "$repo/CLAUDE.md.ccfg"
@@ -1823,6 +1881,20 @@ while [[ $# -gt 0 ]]; do
         --update-third-party) UPDATE=true; UPDATE_THIRD_PARTY_REMOTE=true; shift ;;
         --no-patch) NO_PATCH=true; shift ;;
         --smoke-test) SMOKE_TEST=true; shift ;;
+        --skill)
+            SELECTED_SKILL="${2:-}"
+            [[ -n "$SELECTED_SKILL" ]] || { err "--skill 需要参数"; exit 1; }
+            shift 2 ;;
+        --skill=*)
+            SELECTED_SKILL="${1#*=}"
+            shift ;;
+        --plugin)
+            SELECTED_PLUGIN="${2:-}"
+            [[ -n "$SELECTED_PLUGIN" ]] || { err "--plugin 需要参数"; exit 1; }
+            shift 2 ;;
+        --plugin=*)
+            SELECTED_PLUGIN="${1#*=}"
+            shift ;;
         --uninstall)
             UNINSTALL="${2:-core}"
             [[ "$UNINSTALL" =~ ^(core|all)$ ]] || { err "--uninstall 参数无效: $UNINSTALL (有效值: core, all)"; exit 1; }
@@ -1844,6 +1916,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-patch      跳过 context-mode routing.mjs strict-bash 补丁"
             echo "  环境变量        CTX_INSTALL_MODE=auto|symlink|copy 控制 context-mode 安装方式 (默认 auto: symlink 失败自动 copy)"
             echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 扩展冒烟检查"
+            echo "  --skill <name>  只安装指定外部 skill（读 configs/skills.toml）"
+            echo "  --plugin <name> 只安装指定第三方 plugin（读 configs/plugins.toml）"
             echo "  --uninstall [M] 兼容旧卸载模式 (core=核心配置, all=全部)"
             exit 0 ;;
         install|update|reinstall|core|uninstall|verify|status|doctor)
