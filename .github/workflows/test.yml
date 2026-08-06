@@ -86,7 +86,7 @@ jobs:
           printf '%s\n' "$output" | grep -q '\[PASS\] CodeGraph 已就绪，跳过'
           printf '%s\n' "$output" | grep -q 'CodeGraph install 通过: codegraph v0.9.9'
           printf '%s\n' "$output" | grep -q 'CodeGraph configure 通过: .*/.claude.json 已包含期望的 mcpServers.codegraph 配置'
-          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 通过: claude mcp get codegraph 显示 ✓ Connected'
+          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 通过: claude mcp get codegraph 显示已连接:  ✓ Connected'
           printf '%s\n' "$output" | grep -q 'CodeGraph overall 通过: CLI、配置与离线发现均通过'
 
       - name: Verify install-codegraph.sh repairs missing Claude config
@@ -207,7 +207,7 @@ jobs:
 
           printf '%s\n' "$output" | grep -q 'CodeGraph install 通过: codegraph v0.9.9'
           printf '%s\n' "$output" | grep -q 'CodeGraph configure 通过: .*/.claude.json 已包含期望的 mcpServers.codegraph 配置'
-          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 失败: claude 已发现 codegraph，但未显示 ✓ Connected'
+          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 失败: claude 已发现 codegraph，但未连接'
           printf '%s\n' "$output" | grep -q 'CodeGraph overall: CLI 与配置已通过，但离线发现失败'
 
       - name: Verify setup dependency bootstrap regression script
