@@ -1,0 +1,59 @@
+# configs/plugins.toml — 第三方 plugin 清单
+#
+# 本文件声明第三方 plugin 的来源和安装方式，由 setup.sh 驱动：
+#   method = "claude-plugin"   → claude plugin marketplace add <repo> --scope user && claude plugin install <name>@<marketplace> -s user
+#   method = "npx"             → 手动安装，仅备注安装命令
+#
+# 对应 claude/settings.template.json 的 extraKnownMarketplaces + enabledPlugins。
+
+# ===== claude-plugin 自动安装 =====
+
+# anthropics/claude-plugins-official — 官方插件市场（25 个 plugin）
+[[plugins]]
+name = "claude-plugins-official"
+repo = "anthropics/claude-plugins-official"
+method = "claude-plugin"
+marketplace = "claude-plugins-official"
+note = "官方插件市场。settings 默认启用：claude-code-setup、code-review、feature-dev、skill-creator"
+
+# oh-my-claudecode — OMC 插件（含 team 编排）
+[[plugins]]
+name = "oh-my-claudecode"
+repo = "Yeachan-Heo/oh-my-claudecode"
+method = "claude-plugin"
+marketplace = "omc"
+note = "OMC 插件，提供 team/autopilot 等编排命令"
+
+# context-mode — 上下文管理插件
+[[plugins]]
+name = "context-mode"
+repo = "mksglu/context-mode"
+method = "claude-plugin"
+marketplace = "context-mode"
+note = "上下文模式插件"
+
+# ponytail — 懒人开发风格插件
+[[plugins]]
+name = "ponytail"
+repo = "DietrichGebert/ponytail"
+method = "claude-plugin"
+marketplace = "ponytail"
+note = "Ponytail 开发风格插件"
+
+# superpowers — 超能力插件
+[[plugins]]
+name = "superpowers"
+repo = "obra/superpowers"
+method = "claude-plugin"
+marketplace = "superpowers"
+note = "superpowers 插件"
+
+# ===== npx 手动安装（仅备注命令） =====
+
+# 示例：某些需要手动 npx 安装的插件
+# [[plugins]]
+# name = "some-manual-plugin"
+# repo = "owner/some-repo"
+# method = "npx"
+# command = "npx -y skills@latest add owner/some-repo -s * -a claude-code -g"
+# note = "手动安装：先装这个插件"

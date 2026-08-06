@@ -1,0 +1,51 @@
+# configs/skills.toml — 外部 skill 清单
+#
+# 本文件声明"从外部仓库安装的 skill"，由 setup.sh 用 npx skills 驱动：
+#   npx -y skills@latest add <repo> -s <skill> -a claude-code -g
+#
+# 自有 skill 不在这里——它们直接放在 .claude/skills/（仓库源码，即改即生效）。
+# 注意：npx skills 装出来是 copy 到 ~/..claude/skills/，改源码后需 `npx skills update` 同步。
+
+# context-mode — 上下文压缩/统计类 skill 集合（8 个）
+[[sources]]
+name = "context-mode"
+repo = "mksglu/context-mode"
+skill = "*"
+agent = "claude-code"
+scope = "global"
+note = "上下文管理工具集，自动安装全部"
+
+# oh-my-claudecode — OMC 多智能体编排 skill 集合（41 个）
+[[sources]]
+name = "oh-my-claudecode"
+repo = "Yeachan-Heo/oh-my-claudecode"
+skill = "*"
+agent = "claude-code"
+scope = "global"
+note = "OMC 编排全套 skill"
+
+# ponytail — 懒人开发风格 skill 集合（6 个）
+[[sources]]
+name = "ponytail"
+repo = "DietrichGebert/ponytail"
+skill = "*"
+agent = "claude-code"
+scope = "global"
+note = "Ponytail 开发风格"
+
+# superpowers — 超能力 skill 集合（14 个）
+[[sources]]
+name = "superpowers"
+repo = "obra/superpowers"
+skill = "*"
+agent = "claude-code"
+scope = "global"
+note = "superpowers 全家桶"
+
+# 可选：vercel 官方 skill（示例，按需取消注释）
+# [[sources]]
+# name = "vercel-agent-skills"
+# repo = "vercel-labs/agent-skills"
+# skill = "*"
+# agent = "claude-code"
+# scope = "global"
