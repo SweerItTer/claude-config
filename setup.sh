@@ -813,13 +813,21 @@ install_external_skills() {
         local scope_flag=""
         [[ "$scope" == "global" ]] && scope_flag="-g"
 
+        # 兜底：外部 skill 只装到 Claude Code。npx skills 不带 -a 时会检测环境
+        # 装到 ~/.agents/skills/（不加载），-a '*' 会扩散到 codex/gemini 等所有
+        # agent。因此 agent 字段被改动或漏写时强制回退 claude-code，绝不装他处。
+        if [[ "${agent:-claude-code}" != "claude-code" ]]; then
+            warn "source '$name' 的 agent='${agent:-}' 非 claude-code，已强制改为 claude-code"
+            agent="claude-code"
+        fi
+
         info "安装外部 skill: $name ($repo, skill=$skill)"
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] npx -y skills@latest add $repo -s $skill -a ${agent:-claude-code} $scope_flag"
+            info "[DRY-RUN] npx -y skills@latest add $repo -s $skill -a $agent $scope_flag"
             continue
         fi
 
-        if ! npx -y skills@latest add "$repo" -s "$skill" -a "${agent:-claude-code}" $scope_flag; then
+        if ! npx -y skills@latest add "$repo" -s "$skill" -a "$agent" $scope_flag; then
             err "安装 skill '$name' 失败: $repo"
             return 1
         fi
