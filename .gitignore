@@ -11,7 +11,7 @@ config/claude/settings.json
 /config/omc/wiki/session-log-*.md
 /config/omc/wiki/index.md
 /config/omc/wiki/environment.md
-/config/claude/AGENTS.md
+/claude/AGENTS.md
 
 # OS files
 .DS_Store
