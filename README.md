@@ -18,10 +18,10 @@ cd ~/claude-config
 ### 2) 选择一种搭建路径
 
 ```bash
-# 最小路径：只同步核心配置（CLAUDE.md / rules / settings / marketplaces；已存在的 settings.json 会保留并补齐缺失项）
+# 最小路径：只同步核心配置（CLAUDE.md / rules / settings；已存在的 settings.json 会保留并补齐缺失项）
 ./setup.sh core
 
-# 推荐路径：完整安装核心配置与常用插件
+# 推荐路径：完整安装核心配置、外部 skills 与第三方 plugins
 ./setup.sh --force
 
 # 只做检查，不改动已有配置
@@ -63,11 +63,8 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 只同步核心配置：
 - `~/.claude/CLAUDE.md`
-<!-- - `~/.claude/itp.md` -->
-<!-- - `~/.claude/haiku-throttle.md` -->
 - `rules/` / `rules-available/`
 - `settings.json`（缺失时生成，已存在时按模板补齐缺失项）
-- `known_marketplaces.json`
 
 适合先把 Claude 环境搭起来，再按需装插件。
 
@@ -79,30 +76,20 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 这条路径会：
 - 安装或收敛核心配置
-- 执行已配置的常用安装器并完成 setup 级验证，如 `codegraph`、`context-mode`、`openspec`、`omc` 和 `superpowers`
-- 同步 `known_marketplaces.json` 声明的第三方 source（包括 `external/ponytail`）；普通 `run_install_flow` 不执行 Ponytail installer，也不会自动启用或验证 `ponytail@ponytail`
-
-Ponytail 目前需单独调用其 installer（在仓库根目录执行）：
-
-```bash
-# 安装并注册 Ponytail
-./script/install-ponytail.sh "$(pwd)" false true
-
-# 检查 Ponytail 状态与注册结果
-ACTION=verify ./script/install-ponytail.sh "$(pwd)" false false
-```
+- 安装 `configs/skills.toml` 声明的外部 skills（用 `npx skills add` 装到 `~/.claude/skills/`）
+- 安装 `configs/plugins.toml` 声明的第三方 plugins（用 `claude plugin marketplace add` + `claude plugin install`）
 
 ### 日常更新
 
 ```bash
-git -C ~/claude-config pull --recurse-submodules
+git -C ~/claude-config pull --ff-only
 ~/claude-config/setup.sh
 ```
 
-默认更新只收敛差异，不会强制刷新第三方到上游最新。若你明确要推进第三方仓库版本：
+默认更新只收敛差异。若要推进外部 skills 与 plugins 到上游最新：
 
 ```bash
-~/claude-config/setup.sh --update --update-third-party
+~/claude-config/setup.sh --update-all
 ```
 
 ### 验证 / 状态 / 诊断
@@ -118,6 +105,13 @@ git -C ~/claude-config pull --recurse-submodules
 - `doctor`：走诊断路径，适合排查安装异常
 
 ### 按需扩展
+
+#### 只装某个 skill / plugin
+
+```bash
+./setup.sh --skill tmux-session-manager
+./setup.sh --plugin context-mode
+```
 
 #### 启用 MCP 服务器
 
@@ -165,9 +159,17 @@ git -C ~/claude-config pull --recurse-submodules
 ## 卸载
 
 ```bash
-~/claude-config/setup.sh --uninstall core
+# 卸载单个目标（skill 或 plugin，用清单中的名字）
+~/claude-config/setup.sh --uninstall context-mode
+
+# 卸载多个目标（有界并发，默认同时 3 个）
+~/claude-config/setup.sh --uninstall context-mode --uninstall superpowers
+
+# 卸载全部
 ~/claude-config/setup.sh --uninstall all
 ```
+
+> 卸载只移除 `~/.claude/skills/` 下由 `npx skills` 安装的副本，不触碰本仓库源文件。
 
 `settings.json` 默认保留，避免误删你的自定义配置。若你要彻底重置：
 
@@ -182,30 +184,42 @@ rm ~/.claude/settings.json
 | `--force` | 强制重跑安装流程 |
 | `--dry-run` | 预览，不实际修改 |
 | `--no-claude` | 跳过 Claude Code CLI 安装 |
+| `--no-verify` | 跳过验证 |
 | `--smoke-test` | 运行 doctor 与上下文注入检查 |
-| `--update` | 执行更新流程 |
-| `--update-third-party` | 刷新第三方仓库到上游最新 |
+| `--update` | 兼容旧 flag：等价于 `action=update` |
+| `--update-all` | 更新全部外部 skills + plugins |
+| `--update-skill <name>` | 更新指定 skill（`core` = 全部） |
+| `--skill <name>` | 只安装指定外部 skill |
+| `--plugin <name>` | 只安装指定第三方 plugin |
+| `--uninstall <target>` | 卸载（可重复出现，列表并发） |
 | `--ci` | CI 模式 |
+
+## 清单配置
+
+外部 skills 与 plugins 声明在 `configs/` 下，用 Python `parse-manifests.py` 解析（纯标准库，Python 3.10 无 tomllib 时自动回退）：
+
+```text
+configs/skills.toml    → 每个 [[sources]] 声明一个外部 skill 源
+configs/plugins.toml   → 每个 [[plugins]] 声明一个第三方 plugin
+```
+
+- `skills.toml`：`npx -y skills@latest add <repo> -s <skill> -a claude-code -g`
+- `plugins.toml`：`method = "claude-plugin"` → `claude plugin marketplace add + install`；`method = "npx"` → 手动安装，仅备注命令
+  - 官方市场（anthropics/claude-plugins-official）需**为每个 plugin 单独声明 `[[plugins]]` 条目**（如 skill-creator、code-review），只声明 marketplace 不会安装任何 plugin；marketplace add 由各条目在 install 前幂等执行
+
+测试：`bash script/test-manifest-parsing.sh`
 
 ## 架构概要
 
 ```text
 ~/.claude/
-  CLAUDE.md        → config/claude/CLAUDE.md.ccfg（或由 OMC 注入后的宿主文件）
-  <!-- itp.md           → config/claude/itp.md -->
-  <!-- haiku-throttle.md → config/claude/haiku-throttle.md -->
-  rules/           → config/claude/rules/
-  rules-available/ → config/claude/rules-available/
-  skills/          → config/claude/skills/
-  settings.json    ← 从 settings.template.json 渲染并合并
+  CLAUDE.md        → claude/CLAUDE.md.ccfg（或由 OMC 注入后的宿主文件）
+  rules/           → claude/rules/
+  rules-available/ → claude/rules-available/
+  skills/          → 自有 skill 由 npx skills 安装，外部 skill 也装到这里
+  settings.json    ← 从 claude/settings.template.json 渲染并合并
   plugins/
     marketplaces/{omc,superpowers,context-mode,ponytail,claude-plugins-official}
-    known_marketplaces.json
 ```
 
-| Submodule | 来源 | 用途 |
-|-----------|------|------|
-| oh-my-claudecode | Yeachan-Heo/oh-my-claudecode | 多 Agent 编排 |
-| superpowers | obra/superpowers | 开发 skills + SessionStart |
-| context-mode | mksglu/context-mode | 上下文压缩 |
-| claude-plugins-official | anthropics/claude-plugins-official | 官方插件市场 |
+外部 skills 与 plugins 的来源声明在 `configs/`（见上文清单配置），不由仓库直接管理。

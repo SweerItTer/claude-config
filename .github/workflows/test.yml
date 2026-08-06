@@ -2,7 +2,7 @@ name: Test setup.sh
 
 on:
   push:
-    branches: [main, feat/abstract-plugin-registry-heal]
+    branches: [main, refactor/phase2]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -220,18 +220,12 @@ jobs:
           chmod +x ./script/test-settings-merge.sh
           ./script/test-settings-merge.sh
 
-      - name: Verify plugin registry heal regression script
-        run: |
-          chmod +x ./script/test-plugin-registry-heal.sh
-          ./script/test-plugin-registry-heal.sh
-
       - name: Run setup.sh smoke test
         run: |
           chmod +x ./setup.sh
           ./setup.sh --ci --smoke-test
         env:
           REPO_ROOT: ${{ github.workspace }}
-          CTX_INSTALL_MODE: copy
           CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
           CLAUDE_MODEL: deepseek-v4-flash
@@ -248,16 +242,6 @@ jobs:
             rc=$?
             set -e
             echo "$output"
-            if [[ "$rc" -ne 0 ]]; then
-              echo "=== 第三方 source 状态诊断 ==="
-              for repo in external/claude-plugins-official external/context-mode external/oh-my-claudecode external/superpowers; do
-                if [[ -d "$repo/.git" || -f "$repo/.git" ]]; then
-                  echo "--- $repo ---"
-                  git -C "$repo" status --short || true
-                fi
-              done
-            fi
-
             if printf '%s\n' "$output" | grep -q 'CLAUDE_HOME 未初始化，已后台启动 Claude Code' && [[ "$attempt" -lt 3 ]]; then
               echo "检测到 Claude 首次初始化，等待后重试..."
               sleep 5

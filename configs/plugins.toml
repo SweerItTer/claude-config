@@ -8,13 +8,38 @@
 
 # ===== claude-plugin 自动安装 =====
 
-# anthropics/claude-plugins-official — 官方插件市场（25 个 plugin）
+# anthropics/claude-plugins-official — 官方插件市场。
+# 注意：marketplace add 由各 plugin 条目在 install 前幂等执行，
+# 无需单独声明 marketplace 条目。要启用官方 plugin，为每个 plugin
+# 声明 [[plugins]] 条目（name = plugin 名，repo 指向市场仓库，
+# marketplace 指市场的注册名）。
 [[plugins]]
-name = "claude-plugins-official"
+name = "claude-code-setup"
 repo = "anthropics/claude-plugins-official"
 method = "claude-plugin"
 marketplace = "claude-plugins-official"
-note = "官方插件市场。settings 默认启用：claude-code-setup、code-review、feature-dev、skill-creator"
+note = "官方 plugin：Claude Code 环境自检与推荐"
+
+[[plugins]]
+name = "code-review"
+repo = "anthropics/claude-plugins-official"
+method = "claude-plugin"
+marketplace = "claude-plugins-official"
+note = "官方 plugin：代码审查"
+
+[[plugins]]
+name = "feature-dev"
+repo = "anthropics/claude-plugins-official"
+method = "claude-plugin"
+marketplace = "claude-plugins-official"
+note = "官方 plugin：功能开发流程"
+
+[[plugins]]
+name = "skill-creator"
+repo = "anthropics/claude-plugins-official"
+method = "claude-plugin"
+marketplace = "claude-plugins-official"
+note = "官方 plugin：创建/优化 skill"
 
 # oh-my-claudecode — OMC 插件（含 team 编排）
 [[plugins]]
@@ -41,19 +66,22 @@ marketplace = "ponytail"
 note = "Ponytail 开发风格插件"
 
 # superpowers — 超能力插件
+# 注意：obra/superpowers 仓库自带 marketplace 名是 superpowers-dev，
+# 若改用官方 superpowers marketplace（superpowers-marketplace）需同步调整。
 [[plugins]]
 name = "superpowers"
 repo = "obra/superpowers"
 method = "claude-plugin"
-marketplace = "superpowers"
-note = "superpowers 插件"
+marketplace = "superpowers-dev"
+note = "superpowers 插件（自带 marketplace 名 superpowers-dev）"
 
-# ===== npx 手动安装（仅备注命令） =====
-
-# 示例：某些需要手动 npx 安装的插件
+# ===== npx/npm 手动安装（仅备注命令） =====
+# 若某个 plugin 没有 .claude-plugin/marketplace.json，无法用 claude plugin 装，
+# 用 method = "npx" 声明，并在 command 里写完整安装命令。
+# 示例：
 # [[plugins]]
 # name = "some-manual-plugin"
 # repo = "owner/some-repo"
 # method = "npx"
-# command = "npx -y skills@latest add owner/some-repo -s * -a claude-code -g"
+# command = "npm i -g some-manual-plugin && some-plugin setup"
 # note = "手动安装：先装这个插件"

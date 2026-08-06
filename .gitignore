@@ -9,6 +9,8 @@ config/claude/settings.json
 /package-lock.json
 /config/omc/wiki/log.md
 /config/omc/wiki/session-log-*.md
+/config/omc/wiki/index.md
+/config/omc/wiki/environment.md
 /config/claude/AGENTS.md
 
 # OS files
@@ -30,6 +32,10 @@ external/
 
 # Cache
 cache/
+
+# Python bytecode (script/test-manifest-parsing.sh 用 py_compile 校验)
+__pycache__/
+*.pyc
 
 # Logs
 *.log
