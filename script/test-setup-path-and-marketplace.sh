@@ -18,7 +18,7 @@ mkdir -p "$fixture/repo/script"
 cp "$REPO_ROOT/script/install-common.sh" "$fixture/repo/script/install-common.sh"
 
 mkdir -p \
-  "$fixture/repo/config/claude" \
+  "$fixture/repo/claude" \
   "$fixture/repo/external/claude-plugins-official" \
   "$fixture/home/.claude/plugins/marketplaces"
 
