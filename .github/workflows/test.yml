@@ -2,7 +2,7 @@ name: Test setup.sh
 
 on:
   push:
-    branches: [main, refactor/phase2]
+    branches: [main, refactor/phase2, refactor/phase3-tui]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -209,6 +209,24 @@ jobs:
           printf '%s\n' "$output" | grep -q 'CodeGraph configure 通过: .*/.claude.json 已包含期望的 mcpServers.codegraph 配置'
           printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 失败: claude 已发现 codegraph，但未连接'
           printf '%s\n' "$output" | grep -q 'CodeGraph overall: CLI 与配置已通过，但离线发现失败'
+
+      - name: Build and test installer-tui with FTXUI 7.0.2
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y screen
+          ftxui_src="$RUNNER_TEMP/ftxui"
+          ftxui_prefix="$RUNNER_TEMP/ftxui-prefix"
+          git clone --branch v7.0.2 --depth 1 https://github.com/ArthurSonzogni/FTXUI.git "$ftxui_src"
+          cmake -S "$ftxui_src" -B "$ftxui_src/build" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$ftxui_src/build" --parallel
+          cmake --install "$ftxui_src/build" --prefix "$ftxui_prefix"
+          cmake -S ./tools/installer-tui -B ./build/installer-tui \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$ftxui_prefix"
+          cmake --build ./build/installer-tui --parallel
+          chmod +x ./script/test-installer-tui.sh
+          ./script/test-installer-tui.sh
 
       - name: Verify setup dependency bootstrap regression script
         run: |
