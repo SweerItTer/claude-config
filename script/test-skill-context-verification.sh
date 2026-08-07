@@ -15,7 +15,7 @@ cat >"$fixture/home/.agents/.skill-lock.json" <<'EOF'
       "source": "mksglu/context-mode",
       "sourceType": "github",
       "sourceUrl": "https://github.com/mksglu/context-mode.git",
-      "skillPath": ".claude/skills/context-mode-ops/SKILL.md"
+      "skillPath": "skills/context-mode-ops/SKILL.md"
     }
   }
 }
