@@ -128,6 +128,56 @@ pass "--print-selection 不触发 setup.sh"
 timeout 5 "$BIN" --repo-root "$fixture/repo" --print-selection >/dev/null 2>&1 || fail "fixture 清单解析失败"
 pass "fixture 清单可解析"
 
+# 新增用例的隔离输出目录与 session 记录（cleanup 统一清理）
+SCENARIO_DIR="$fixture/scenarios"
+mkdir -p "$SCENARIO_DIR"
+SCENARIO_SESSIONS=()
+
+# ---- 通用 screen 场景运行器 ----
+# 用法：run_tui_case <case名> <期望退出码> <期望argv子串|-> <期望stdout模式|-> <按键...>
+# 每个 case 用唯一命名 screen 会话与隔离日志；只清理本次创建的 session。
+run_tui_case() {
+    local case_name="$1" expect_rc="$2" expect_argv="$3" expect_stdout="$4"; shift 4
+    local base="$SCENARIO_DIR/$case_name"
+    local stdout="$base-stdout.log" stderr="$base-stderr.log" exitf="$base-exit.log"
+    local sname="installer-tui-$case_name-$$-$RANDOM"
+    : > "$MOCK_LOGFILE"
+    screen -dmS "$sname" bash -c '"$1" --repo-root "$2" >"$3" 2>"$4"; rc=$?; printf "%s\\n" "$rc" >"$5"; exit "$rc"' _ \
+        "$BIN" "$fixture/repo" "$stdout" "$stderr" "$exitf" || fail "启动 screen 失败: $case_name"
+    SCENARIO_SESSIONS+=("$sname")
+    sleep 1
+    local k
+    for k in "$@"; do
+        screen -S "$sname" -X stuff "$k" || fail "$case_name: 发送按键 '$k' 失败"
+        sleep 0.1
+    done
+    for _ in {1..100}; do
+        [[ -s "$MOCK_LOGFILE" ]] && break
+        sleep 0.1
+    done
+    [[ -s "$MOCK_LOGFILE" ]] || fail "$case_name: 等待 mock argv 超时"
+    if [[ "$expect_argv" != "-" ]]; then
+        grep -qF -- "$expect_argv" "$MOCK_LOGFILE" || fail "$case_name: argv 未按预期: $(<"$MOCK_LOGFILE")"
+    fi
+    if [[ "$expect_stdout" != "-" ]]; then
+        grep -q -- "$expect_stdout" "$stdout" || fail "$case_name: stdout 机器可读记录缺失: $(<"$stdout")"
+    fi
+    screen -S "$sname" -X stuff 'q' || fail "$case_name: 无法发送 q"
+    for _ in {1..100}; do
+        [[ -s "$exitf" ]] && break
+        sleep 0.1
+    done
+    [[ "$(<"$exitf")" == "$expect_rc" ]] || fail "$case_name: 退出码应 $expect_rc，实际 $(<"$exitf" 2>/dev/null || true)"
+    for _ in {1..100}; do
+        screen -ls 2>/dev/null | grep -q "\.${sname}[[:space:]]" || break
+        sleep 0.1
+    done
+    screen -ls 2>/dev/null | grep -q "\.${sname}[[:space:]]" && fail "$case_name: TUI shell 进程未结束"
+    screen -S "$sname" -X quit >/dev/null 2>&1 || true
+    SCENARIO_SESSIONS=("${SCENARIO_SESSIONS[@]/$sname}")
+    pass "TUI case: $case_name"
+}
+
 # ---- 6) GNU screen 真实交互：勾选首个 skill → modal 确认 → setup argv ----
 command -v screen >/dev/null 2>&1 || fail "需要 GNU screen"
 TUI_STDOUT="$fixture/tui-stdout.log"
@@ -147,6 +197,10 @@ HANG_STDERR="$fixture/hang-stderr.log"
 HANG_EXIT="$fixture/hang-exit.log"
 HANG_PIDFILE="$fixture/hang.pid"
 cleanup() {
+    local s
+    for s in "${SCENARIO_SESSIONS[@]:-}"; do
+        [[ -n "$s" ]] && screen -S "$s" -X quit >/dev/null 2>&1 || true
+    done
     if [[ "$session_created" -eq 1 ]]; then
         screen -S "$session" -X quit >/dev/null 2>&1 || true
     fi
@@ -268,6 +322,27 @@ grep -q '^setup.sh|install --ci --skill context-mode --skip-plugins$' "$MOCK_LOG
 screen -S "$failure_session" -X quit >/dev/null 2>&1 || true
 failure_session_created=0
 pass "GNU screen 真实 TUI 透传 setup.sh 退出码 7 与 argv"
+
+# ---- 9) Update/Uninstall 场景：GNU screen 端到端，覆盖 Radiobox 模式导航 ----
+export MOCK_EXIT=0
+
+# update all：切 Update 页（mode 0=全部，默认），确认
+run_tui_case update-all 0 "--update-all --ci" "update	all" '2' 'e' $'\r'
+
+# update selected：Install 页勾选首个 skill → 切 Update → 下箭头 + 空格选中「选中的项目」
+#（Radiobox 的 ArrowDown 只移高亮，需空格才把 selected 设为高亮项）→ 确认
+run_tui_case update-selected 0 "--ci --update-skill context-mode" "update	skill:context-mode" \
+    ' ' '2' $'\x1b[B' ' ' 'e' $'\r'
+
+# uninstall all：切 Uninstall 页（mode 0=完全卸载，默认），确认
+run_tui_case uninstall-all 0 "--uninstall all --ci" "uninstall	all" '3' 'e' $'\r'
+
+# uninstall core：切 Uninstall 页，下箭头 + 空格选中「仅 core」，确认
+run_tui_case uninstall-core 0 "--uninstall core --ci" "uninstall	core" '3' $'\x1b[B' ' ' 'e' $'\r'
+
+# uninstall selected：切 Uninstall 页，全选（a），下箭头×2 + 空格选中「选中的项目」，确认
+run_tui_case uninstall-selected 0 "--ci --uninstall-skill context-mode" "uninstall	skill:context-mode" \
+    '3' 'a' $'\x1b[B' $'\x1b[B' ' ' 'e' $'\r'
 
 echo "ALL TESTS PASSED"
 

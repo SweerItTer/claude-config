@@ -1241,6 +1241,243 @@ verify_core_config() {
     [[ $failed -eq 0 ]]
 }
 
+verify_installed_skills_context() {
+    local context_file="$1"
+    local list_file list_err plugin_file plugin_err
+    list_file="$(mktemp)"
+    list_err="$(mktemp)"
+    plugin_file="$(mktemp)"
+    plugin_err="$(mktemp)"
+
+    if ! npx -y skills@latest list -g --json >"$list_file" 2>"$list_err"; then
+        err "无法读取全局 skill 清单 (npx skills list)"
+        sed -n '1,20p' "$list_err" >&2
+        rm -f "$list_file" "$list_err" "$plugin_file" "$plugin_err"
+        return 1
+    fi
+    if ! claude plugin list --json >"$plugin_file" 2>"$plugin_err"; then
+        err "无法读取 plugin skill 的注册清单 (claude plugin list)"
+        sed -n '1,20p' "$plugin_err" >&2
+        rm -f "$list_file" "$list_err" "$plugin_file" "$plugin_err"
+        return 1
+    fi
+
+    local failed=0
+    local name repo skill agent scope note
+    while IFS=$'\t' read -r name repo skill agent scope note; do
+        [[ -n "$name" ]] || continue
+        local matched source_kind="npx" plugin_id plugin_path
+        matched="$(SKILLS_LIST_JSON="$list_file" EXPECTED_REPO="$repo" python3 - <<'PY'
+import json
+import os
+
+with open(os.environ["SKILLS_LIST_JSON"], encoding="utf-8") as fp:
+    items = json.load(fp)
+repo = os.environ["EXPECTED_REPO"]
+expected_url = "https://github.com/" + repo.removesuffix(".git")
+for item in items:
+    source = item.get("source") or ""
+    source_url = (item.get("sourceUrl") or "").removesuffix(".git")
+    if source == repo or source_url == expected_url:
+        path = item.get("path") or ""
+        skill_name = item.get("name") or ""
+        if skill_name and path:
+            print(skill_name + "\t" + path)
+PY
+)"
+
+        if [[ -z "$matched" ]]; then
+            source_kind="plugin"
+            plugin_id="$(parse_plugins_toml "$PLUGINS_CONFIG" | awk -F '\t' -v expected_repo="$repo" '$2 == expected_repo && $3 == "claude-plugin" { print $1 "@" $4; exit }')"
+            if [[ -z "$plugin_id" ]]; then
+                err "skill source '$name' 既不在 npx 清单中，也没有对应 plugin: $repo"
+                failed=1
+                continue
+            fi
+            plugin_path="$(PLUGIN_LIST_JSON="$plugin_file" EXPECTED_PLUGIN_ID="$plugin_id" python3 - <<'PY'
+import json
+import os
+
+with open(os.environ["PLUGIN_LIST_JSON"], encoding="utf-8") as fp:
+    items = json.load(fp)
+expected = os.environ["EXPECTED_PLUGIN_ID"]
+for item in items:
+    if item.get("id") == expected and item.get("scope") == "user":
+        path = item.get("installPath") or ""
+        if path:
+            print(path)
+            break
+PY
+)"
+            if [[ -z "$plugin_path" || ! -d "$plugin_path" ]]; then
+                err "skill source '$name' 对应 plugin '$plugin_id' 缺少有效 installPath"
+                failed=1
+                continue
+            fi
+            matched="$(PLUGIN_SKILLS_ROOT="$plugin_path" python3 - <<'PY'
+import os
+from pathlib import Path
+
+root = Path(os.environ["PLUGIN_SKILLS_ROOT"])
+for skill_file in sorted(root.rglob("SKILL.md")):
+    name = ""
+    for line in skill_file.read_text(encoding="utf-8", errors="replace").splitlines()[:40]:
+        if line.startswith("name:"):
+            name = line[5:].strip()
+            break
+    if name:
+        print(name + "\t" + str(skill_file.parent))
+PY
+)"
+            if [[ -z "$matched" ]]; then
+                err "skill source '$name' 的 plugin '$plugin_id' 未找到有效 SKILL.md"
+                failed=1
+                continue
+            fi
+        fi
+
+        while IFS=$'\t' read -r actual_name actual_path; do
+            [[ -n "$actual_name" ]] || continue
+            if [[ ! -f "$actual_path/SKILL.md" ]]; then
+                err "skill '$actual_name' 缺少 SKILL.md: $actual_path"
+                failed=1
+                continue
+            fi
+            if ! awk -v expected="$actual_name" '
+                NR <= 40 && $0 ~ /^name:[[:space:]]*/ {
+                    value=$0
+                    sub(/^name:[[:space:]]*/, "", value)
+                    gsub(/[[:space:]]+$/, "", value)
+                    found=(value == expected)
+                }
+                END { exit(found ? 0 : 1) }
+            ' "$actual_path/SKILL.md"; then
+                err "skill '$actual_name' 的 SKILL.md frontmatter name 不匹配: $actual_path"
+                failed=1
+                continue
+            fi
+            if ! grep -Fq "| $actual_name |" "$context_file"; then
+                err "skill '$actual_name' 未出现在 Claude -p /context 的 Skills 表"
+                failed=1
+                continue
+            fi
+            pass "skill '$actual_name' 已安装且在 Claude /context 中可见 (source=$name, via=$source_kind)"
+        done <<< "$matched"
+    done < <(parse_skills_toml "$SKILLS_CONFIG")
+
+    rm -f "$list_file" "$list_err" "$plugin_file" "$plugin_err"
+    return "$failed"
+}
+
+verify_settings_template_keys() {
+    local template="$REPO_ROOT/claude/settings.template.json"
+    local target="$CLAUDE_HOME/settings.json"
+    [[ -f "$template" ]] || { err "settings 模板不存在: $template"; return 1; }
+    [[ -f "$target" ]] || { err "settings.json 不存在: $target"; return 1; }
+
+    if ! TEMPLATE_SETTINGS="$template" TARGET_SETTINGS="$target" python3 - <<'PY'
+import json
+import os
+import sys
+
+with open(os.environ["TEMPLATE_SETTINGS"], encoding="utf-8") as fp:
+    template = json.load(fp)
+with open(os.environ["TARGET_SETTINGS"], encoding="utf-8") as fp:
+    target = json.load(fp)
+
+missing = []
+type_errors = []
+
+def check(template_value, target_value, path):
+    if template_value == "":
+        return
+    if isinstance(template_value, dict):
+        if not isinstance(target_value, dict):
+            type_errors.append(path + " (应为 object)")
+            return
+        # Claude may normalize a git marketplace source to the equivalent
+        # github/repo form after registration; both retain the marketplace.
+        if path.endswith(".source") and "url" in template_value and "repo" in target_value:
+            if target_value.get("source") == "github" and isinstance(target_value["repo"], str):
+                return
+        for key, value in template_value.items():
+            child = path + "." + key if path else key
+            if key not in target_value:
+                missing.append(child)
+            else:
+                check(value, target_value[key], child)
+    elif isinstance(template_value, list):
+        if not isinstance(target_value, list):
+            type_errors.append(path + " (应为 array)")
+    elif target_value is not None and type(template_value) is not type(target_value):
+        type_errors.append(path + " (类型不匹配)")
+
+check(template, target, "")
+if missing or type_errors:
+    if missing:
+        print("missing=" + ",".join(missing), file=sys.stderr)
+    if type_errors:
+        print("type_errors=" + ",".join(type_errors), file=sys.stderr)
+    sys.exit(1)
+PY
+    then
+        err "settings.json 未完整补齐模板中的非空键"
+        return 1
+    fi
+
+    local plugin_count
+    plugin_count="$(python3 - "$target" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as fp:
+    data = json.load(fp)
+plugins = data.get("enabledPlugins", {})
+print(sum(1 for key, value in plugins.items() if isinstance(key, str) and isinstance(value, bool)))
+PY
+)"
+    pass "settings.json 已补齐模板键并保留用户值 (enabledPlugins=$plugin_count)"
+}
+
+verify_registered_plugins() {
+    local list_file
+    list_file="$(mktemp)"
+    if ! claude plugin list --json >"$list_file" 2>&1; then
+        err "读取 claude plugin list --json 失败"
+        sed -n '1,30p' "$list_file" >&2
+        rm -f "$list_file"
+        return 1
+    fi
+
+    local failed=0
+    local name repo method marketplace command note
+    while IFS=$'\t' read -r name repo method marketplace command note; do
+        [[ -n "$name" ]] || continue
+        [[ "$method" == "claude-plugin" ]] || continue
+        local plugin_id="${name}@${marketplace}"
+        if PLUGIN_LIST_JSON="$list_file" EXPECTED_PLUGIN_ID="$plugin_id" python3 - <<'PY'
+import json
+import os
+import sys
+with open(os.environ["PLUGIN_LIST_JSON"], encoding="utf-8") as fp:
+    items = json.load(fp)
+expected = os.environ["EXPECTED_PLUGIN_ID"]
+for item in items:
+    if item.get("id") == expected and item.get("scope") == "user":
+        sys.exit(0)
+sys.exit(1)
+PY
+        then
+            pass "plugin '$plugin_id' 已注册 (scope=user)"
+        else
+            err "plugin '$plugin_id' 未注册或 scope 不是 user"
+            failed=1
+        fi
+    done < <(parse_plugins_toml "$PLUGINS_CONFIG")
+
+    rm -f "$list_file"
+    return "$failed"
+}
+
 run_context_smoke_test() {
     if ! command -v claude >/dev/null 2>&1; then
         err "Claude -p /context 检查失败: claude 命令不存在"
@@ -1287,8 +1524,16 @@ run_context_smoke_test() {
         return 1
     fi
 
-    log "Claude -p /context 上下文注入检查通过"
+    local skills_rc=0
+    if ! verify_installed_skills_context "$tmp"; then
+        skills_rc=1
+    fi
     rm -f "$tmp"
+    if [[ $skills_rc -ne 0 ]]; then
+        return 1
+    fi
+
+    log "Claude -p /context 上下文注入检查通过"
 }
 
 run_final_doctor() {
@@ -1327,8 +1572,22 @@ run_final_doctor() {
     fi
 
     info "运行 Claude -p /context 上下文注入检查..."
-    run_context_smoke_test
-    log "安装后冒烟测试通过: Claude doctor + Claude -p /context"
+    if ! run_context_smoke_test; then
+        err "Claude -p /context 逐项 skill 检查失败"
+        return 1
+    fi
+
+    info "运行 settings.json 模板键检查..."
+    if ! verify_settings_template_keys; then
+        return 1
+    fi
+
+    info "运行 claude plugin list 注册检查..."
+    if ! verify_registered_plugins; then
+        return 1
+    fi
+
+    log "安装后冒烟测试通过: Claude doctor + skills/context + settings + plugins"
     return 0
 }
 

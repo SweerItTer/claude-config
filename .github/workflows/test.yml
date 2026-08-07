@@ -259,7 +259,7 @@ jobs:
           while true; do
             echo "=== 第 ${attempt} 次幂等性检查 ==="
             set +e
-            output=$(./setup.sh --ci --force 2>&1)
+            output=$(./setup.sh --ci --force --smoke-test 2>&1)
             rc=$?
             set -e
             echo "$output"
@@ -275,13 +275,24 @@ jobs:
               exit "$rc"
             fi
 
-            pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
-            echo "检测到 $pass_count 个 [PASS] 标记"
-            if [[ "$pass_count" -ge 4 ]]; then
+            required_checks=(
+              "安装后冒烟测试通过: Claude doctor + skills/context + settings + plugins"
+              "settings.json 已补齐模板键并保留用户值"
+              "plugin 'claude-code-setup@claude-plugins-official' 已注册 (scope=user)"
+              "skill 'context-mode' 已安装且在 Claude /context 中可见"
+            )
+            missing_checks=0
+            for check in "${required_checks[@]}"; do
+              if ! printf '%s\n' "$output" | grep -Fq -- "$check"; then
+                echo "FAIL: 第二次运行缺少验证证据: $check"
+                missing_checks=1
+              fi
+            done
+            if [[ "$missing_checks" -eq 0 ]]; then
               break
             fi
 
-            echo "FAIL: 第二次运行没有体现足够的幂等性"
+            echo "FAIL: 第二次运行未完成逐项安装后验证"
             exit 1
           done
         env:
