@@ -1,0 +1,12 @@
+{
+  "system": "demo",
+  "states": "READY",
+  "claims": [
+    {
+      "id": "C1",
+      "statement": "x",
+      "impact": 4,
+      "probability": 3
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:misuse-driven-robustness-testing:evidence-schema:v0.2.4",
+  "title": "Misuse-driven robustness testing evidence manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "generated_at",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "artifact",
+          "sha256",
+          "captured_at",
+          "collector",
+          "source",
+          "parents",
+          "sensitivity"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^EV-[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "type": {
+            "enum": [
+              "oracle-output",
+              "perturbation-landing",
+              "reproduction",
+              "recovery",
+              "trace",
+              "log",
+              "snapshot",
+              "capture",
+              "other"
+            ]
+          },
+          "artifact": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[A-Fa-f0-9]{64}$"
+          },
+          "captured_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "collector": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parents": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^EV-[A-Za-z0-9][A-Za-z0-9_.-]*$"
+            }
+          },
+          "sensitivity": {
+            "enum": [
+              "PUBLIC",
+              "INTERNAL",
+              "CONFIDENTIAL",
+              "RESTRICTED"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

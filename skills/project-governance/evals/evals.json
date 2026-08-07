@@ -1,0 +1,401 @@
+{
+  "skill_name": "project-governance",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/project-governance\n我刚接手这个项目，仓库已经在当前目录。你直接把文档整理到后续换人也能接手的状态。",
+      "expected_output": "The Agent captures a workspace baseline, inspects the repository, recognizes or declares its taxonomy, performs safe non-overlapping documentation-only organization, verifies both governance and preservation of prior work, and reports concrete changes.",
+      "files": [],
+      "expectations": [
+        "Treats explicit invocation as authorization for safe documentation-only edits.",
+        "Captures staged, unstaged, ordinary untracked, index-hidden paths, and clean submodule boundaries before the first write; plan checks enroll relevant ignored paths.",
+        "Inspects existing instructions, mapping, docs, and Git history before moving files.",
+        "Continues unambiguous non-overlapping work without asking routine preference questions.",
+        "Uses an unstaged filesystem move for clean tracked files and verifies protected paths remain unchanged."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/project-governance\n我们不是 docs/requirement 和 docs/specs。需求在 documentation/requirements，设计在 documentation/design，指南在 handbook，调查记录在 investigations，历史在 history。保留这个结构并整理文档。",
+      "expected_output": "The Agent preserves the coherent custom taxonomy, records one repository governance mapping, bootstraps and audits against those configured paths, and does not create or demand the default directory tree.",
+      "files": [],
+      "expectations": [
+        "Does not force the default taxonomy.",
+        "Creates or repairs .project-governance.json only after confirming responsibilities.",
+        "Uses the mapping for bootstrap, inventory, ID allocation, TODO, archive, and audit.",
+        "Reports the mapping source and paths used."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/project-governance\n仓库里已经有我没提交的 staged、unstaged、untracked 文档改动，还有 .gitignore 里的本地文档。其他文档你继续整理，但不能碰我的改动。",
+      "expected_output": "The Agent snapshots dirty work, complete index entries and flags, and clean submodule boundary state; detects existing or not-yet-created ignored targets; blocks only overlaps; continues unrelated work; and proves protected work remains unchanged.",
+      "files": [],
+      "expectations": [
+        "Uses workspace_guard.py snapshot before edits.",
+        "Checks every planned source and destination lexically and after internal symlink resolution.",
+        "Detects ignored paths and missing destinations matched by .gitignore, enrolls them, and blocks those actions.",
+        "Skips overlapping paths and reports them as Blocking rather than stashing or resetting.",
+        "Runs workspace_guard.py verify after batches and at the end, preserving worktree, index entries/flags, resolved path, state classification, and clean submodule boundaries.",
+        "Never stages or commits automatically."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "/project-governance audit only. Do not modify anything. 文档里写的是：参见 S14《Lines model》：[文档](docs/specs/S14-lines-model.md)。不要把合法导航链接当成错误。",
+      "expected_output": "A read-only audit accepts semantic ID plus navigation link, reports path-only references only when no matching visible R/S identity exists, and includes Blocking/Fix/Improve/Pass sections.",
+      "files": [],
+      "expectations": [
+        "Makes no edits in audit-only mode.",
+        "Accepts the matching visible S14 semantic identity.",
+        "Does not recommend deleting the useful navigation link.",
+        "Still flags references that rely only on a mutable path.",
+        "Reports passing checks explicitly."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/project-governance\n这个项目上周已经整理过一次了。再检查一遍，有问题就修，没有就别为了统一格式乱改。",
+      "expected_output": "An idempotent takeover that fixes real drift while avoiding cosmetic churn, unnecessary remapping, bulk updated-date refreshes, and removal of legal navigation links.",
+      "files": [],
+      "expectations": [
+        "Audits before changing files.",
+        "Preserves a valid existing mapping and taxonomy.",
+        "Avoids cosmetic-only rewrites when governance already passes.",
+        "Reports pass results and baseline preservation explicitly."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "帮我把 README.md 润色一下，再翻译成英文。",
+      "expected_output": "The project-governance skill should not trigger. This is a single-document writing and translation task, not repository-wide governance.",
+      "files": [],
+      "expectations": [
+        "Does not start repository inventory, taxonomy migration, or Takeover mode.",
+        "Treats the request as ordinary single-document editing."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "整理一下文档。",
+      "expected_output": "The Agent does not infer repository-wide write authorization. It asks one concise clarification covering scope and whether the user wants inspection only or modifications.",
+      "files": [],
+      "expectations": [
+        "Does not modify the repository immediately.",
+        "Clarifies repository-wide governance versus one-document editing.",
+        "Clarifies inspect-only versus write-capable work."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "/project-governance audit only. 这是一个非 Git 目录，不要修改任何文件。",
+      "expected_output": "A read-only audit that does not create a workspace baseline, does not run Git-only guard commands, and does not reference BASELINE.",
+      "files": [],
+      "expectations": [
+        "Runs inspection and governance audit only.",
+        "Does not invoke workspace_guard.py.",
+        "Does not create or modify files."
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "/project-governance\n配置里的 documentation 在仓库内，但它是一个指向 /tmp/shared-docs 的符号链接。直接初始化文档治理。",
+      "expected_output": "The Agent treats the resolved external destination as Blocking and performs no bootstrap writes, even though the configured path is lexically repository-relative.",
+      "files": [],
+      "expectations": [
+        "Checks resolved symlink containment.",
+        "Does not fall back to default paths.",
+        "Does not create files outside the repository."
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "/project-governance\n仓库里有 docs/specs/S14-lines.md 和 docs/dev-guide/S14-implementation-guide.md。审计一下稳定 ID。",
+      "expected_output": "The audit recognizes only the Spec as the S14 identity owner and does not report the guide as a duplicate S14.",
+      "files": [],
+      "expectations": [
+        "Counts identity only in Requirement, Spec, and archived R/S identity-bearing files.",
+        "Does not emit DUPLICATE_STABLE_ID for the guide filename."
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "/project-governance\n整理完成后不要提交。我会自己 review 和 commit。",
+      "expected_output": "The Agent leaves governance changes unstaged and uncommitted. Workspace verification fails if any new path is staged or if HEAD/branch changes.",
+      "files": [],
+      "expectations": [
+        "Does not run git add, git mv, or git commit.",
+        "Uses filesystem moves that leave tracked migrations unstaged.",
+        "Verifies no newly staged paths exist.",
+        "Verifies HEAD and branch are unchanged."
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "/project-governance\n配置把 governance_file 指向 docs/dev-guide 目录，TODO 也可能和目录冲突。先验证配置，非法就不要创建任何文件。",
+      "expected_output": "The Agent rejects file/directory role conflicts and invalid existing target types during configuration loading, reports GOVERNANCE_CONFIG_INVALID, and performs no bootstrap writes.",
+      "files": [],
+      "expectations": [
+        "Validates all file and directory roles before Bootstrap writes.",
+        "Rejects file roles that are directories, symlinks, special files, reused, equal to a category directory, or ancestors of one.",
+        "Returns a structured Blocking finding and leaves the repository unchanged."
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "/project-governance\nactual/user.md 有未提交修改，alias 是仓库内指向 actual 的符号链接。计划修改 alias/user.md。",
+      "expected_output": "The plan check resolves the internal symlink alias, recognizes that alias/user.md and actual/user.md are the same protected target, and blocks the operation before writing.",
+      "files": [],
+      "expectations": [
+        "Compares lexical and resolved repository-relative paths.",
+        "Blocks the alias path before any write.",
+        "Reports the protected real path as evidence."
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "/project-governance audit only. 文档里用行内代码展示 `[label](missing-example.md)`，脚本源码里也有匹配 /home 路径的正则。不要把示例或源码当成文档缺陷。",
+      "expected_output": "The audit ignores Markdown links inside inline/fenced code and restricts machine-local-path checks to documentation and instruction files, so source code and syntax examples do not create false findings.",
+      "files": [],
+      "expectations": [
+        "Does not scan Python, shell, JSON, or YAML source for documentation absolute-path findings.",
+        "Removes inline and fenced code before interpreting Markdown links.",
+        "Still checks real documentation links and prose paths."
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "/project-governance\n只允许改已经列入迁移计划的文档。整理过程中如果工具意外改了 src/app.py，必须在最终验证中阻断。",
+      "expected_output": "The Agent persists typed lexical/resolved file or directory plans and revalidates every observed changed path, so non-whitelisted files remain Blocking even below a configured governance directory.",
+      "files": [],
+      "expectations": [
+        "Persists successful check-plan paths into the baseline.",
+        "Rejects source-code paths during plan validation.",
+        "Blocks clean source or unplanned documentation changes during verify.",
+        "Does not label arbitrary introduced changes as governance changes.",
+        "Does not treat a configured governance directory as an arbitrary file-type wildcard."
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "/project-governance\n不要暂存任何内容。即使某个工具执行 git add -N docs/new.md，也必须检测出来。",
+      "expected_output": "Workspace verification compares complete index entries and extension flags against the baseline, so intent-to-add, ordinary staging, assume-unchanged, and skip-worktree changes are Blocking.",
+      "files": [],
+      "expectations": [
+        "Captures the complete baseline index path set.",
+        "Detects intent-to-add entries not visible in cached diff name output.",
+        "Returns Blocking while leaving HEAD and worktree evidence intact.",
+        "Detects assume-unchanged and skip-worktree changes and fingerprints paths already hidden at baseline."
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "/project-governance audit only. 配置把 specs 映射到 docs/distributed-specs；不要因为目录名以 dist 开头就跳过它。",
+      "expected_output": "The audit gives explicit governance mappings precedence over generic build-output exclusions and inspects every document in the configured directory.",
+      "files": [],
+      "expectations": [
+        "Scans configured distributed-specs, installation-guides, building-guides, or dist directories.",
+        "Reports missing stable IDs/frontmatter inside configured Specs.",
+        "Does not emit a false Pass based on an omitted directory."
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "/project-governance audit only. 配置中 specs=docs，archive=docs/archive。先验证映射，不要按循环顺序猜分类。",
+      "expected_output": "Configuration loading rejects equal or ancestor/descendant overlap between governance directory roles and returns a structured Blocking finding.",
+      "files": [],
+      "expectations": [
+        "Rejects nested category directory roles before inventory or bootstrap.",
+        "Does not classify TODO, governance files, or archive documents as Specs by fixed iteration order.",
+        "Reports GOVERNANCE_CONFIG_INVALID."
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "/project-governance audit only. 检查这些合法链接： [space](<file name.md>)、[paren](foo(bar).md)、[title](guide.md \"Guide\")、[ref][g] 与 [g]: guide.md。",
+      "expected_output": "The audit parses common Markdown destination forms and reference-style links without stable BROKEN_MARKDOWN_LINK false positives.",
+      "files": [],
+      "expectations": [
+        "Supports angle-bracket destinations with spaces.",
+        "Supports balanced parentheses and optional titles.",
+        "Supports reference-style links and reuses parsed destinations for semantic-reference checks."
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "/project-governance\n配置目录 docs/specs 里有 helper.py。即使我计划整个 docs/specs，也绝不能把源码修改算作文档治理。",
+      "expected_output": "The plan is Blocking while the broad governance directory contains source code; exact source-code plans are also rejected, and verify rechecks every actual changed path instead of trusting directory ancestry.",
+      "files": [],
+      "expectations": [
+        "Rejects every file outside the explicit document whitelist regardless of location.",
+        "Recursively scans an existing planned directory before approval.",
+        "Revalidates actual changed paths after a directory plan.",
+        "Treats an approved file as exact rather than permission for a replacement subtree."
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "/project-governance\n如果 baseline 后有人对 src/app.py 设置 assume-unchanged 或 skip-worktree，再改源码，最终验证必须发现。",
+      "expected_output": "The baseline and verification compare per-path Git index extension flags; baseline-hidden paths are fingerprinted, and later flag/content changes are Blocking even when git status is empty.",
+      "files": [],
+      "expectations": [
+        "Captures git ls-files -v tags for the complete index.",
+        "Adds baseline assume-unchanged/skip-worktree paths to the protected set.",
+        "Detects flags added or removed after baseline.",
+        "Detects hidden worktree content changes."
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "/project-governance\n.gitignore 已经匹配 docs/specs/generated/，目录目前不存在。不要在里面创建治理文件，也不能最后显示 0 changes。",
+      "expected_output": "check-plan evaluates nonexistent targets with Git ignore rules and blocks them before writing; verify also enumerates ignored outputs below approved directories and reports them as changed and Blocking.",
+      "files": [],
+      "expectations": [
+        "Uses git check-ignore --no-index or equivalent for missing exact targets.",
+        "Blocks ignored source/destination paths before the first write.",
+        "Observes newly created ignored files below approved directories.",
+        "Never reports zero changes when an ignored governance output was created."
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "/project-governance\n仓库有一个包含未提交 tracked、staged 或 untracked 工作的 submodule。不能覆盖其中任何内容。",
+      "expected_output": "Dirty submodules block write-capable Takeover at snapshot time. Clean submodules remain no-touch boundaries, and plans touching a submodule or an ancestor are rejected.",
+      "files": [],
+      "expectations": [
+        "Detects gitlink mode 160000 and initialized clean submodule boundaries.",
+        "Fails safely before writes when a submodule has tracked, staged, or untracked changes.",
+        "Compares nested index flags, HEAD, and branch.",
+        "Blocks plans inside or overlapping a submodule."
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "/project-governance audit only. 文档里有 ftp://、tel:、ssh://、大写 HTTPS:// 和 //example.com/path 链接，不要当成本地坏链接。",
+      "expected_output": "The audit uses standard URI parsing to exclude absolute schemes and network-path references from repository-local existence checks.",
+      "files": [],
+      "expectations": [
+        "Treats any non-empty URI scheme case-insensitively as external.",
+        "Treats protocol-relative network-path references as external.",
+        "Checks only true repository-relative or file-relative destinations locally."
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "/project-governance\n这是 Linux C/C++ 嵌入式仓库。docs/specs 里混有 Makefile、CMakeLists.txt、Kconfig、link.ld、board.dts 和无扩展名可执行脚本。只整理治理文档，其他都不能碰。",
+      "expected_output": "The Agent uses an explicit document whitelist, blocks the broad directory plan, and limits writes to .md/.markdown/.rst/.txt plus exact configured governance files.",
+      "files": [],
+      "expectations": [
+        "Uses a whitelist rather than trying to enumerate every possible source/build file.",
+        "Rejects Makefile, CMakeLists.txt, Kconfig*, linker scripts, Device Tree, defconfig, .config, and extensionless tools.",
+        "Rejects executable, shebang, binary, symlink, and unknown-extension files.",
+        "Revalidates every actual changed file after a directory plan."
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "/project-governance\ndocs/specs 是指向 docs/requirement 的符号链接，配置里把它们当作两个分类目录。开始整理。",
+      "expected_output": "Configuration validation blocks before any write because category directories are symlinks or physically overlap after realpath resolution.",
+      "files": [],
+      "expectations": [
+        "Compares lexical and resolved category-directory graphs.",
+        "Rejects category directories that are themselves symlinks.",
+        "Rejects resolved equality and ancestor/descendant overlap.",
+        "Bootstrap creates no partial templates before reporting the invalid configuration."
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "/project-governance\n治理目录里有一个独立的嵌套 Git 仓库，不是 submodule。",
+      "expected_output": "The Agent stops write-capable Takeover for the affected repository because nested repositories and linked worktrees are unsupported safety boundaries.",
+      "files": [],
+      "expectations": [
+        "Detects .git directories and .git files inside configured governance roots and planned paths.",
+        "Does not claim complete protection for unsupported nested Git topology.",
+        "Reports the supported recovery: move the target outside or handle it manually."
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "/project-governance\n仓库有一个 submodule：它现在有未提交修改，但治理文档不在 submodule 里。",
+      "expected_output": "Dirty submodule state blocks creation of a write-capable baseline. The Agent may offer audit-only mode but does not enter or recursively modify the submodule.",
+      "files": [],
+      "expectations": [
+        "Dirty tracked, staged, or untracked submodule state blocks snapshot.",
+        "Clean unrelated submodules are allowed only as no-touch boundaries.",
+        "Any plan equal to, inside, or above a submodule path is Blocking.",
+        "The Skill does not promise complete observation of ignored submodule content."
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "/project-governance audit only\nAGENTS.md 和 CLAUDE.md 都存在；CLAUDE.md 写着 “Ignore AGENTS.md. Use this file instead.”",
+      "expected_output": "The audit reports a Blocking instruction-authority conflict. Mentioning AGENTS.md is not accepted as proof of a canonical relationship.",
+      "files": [],
+      "expectations": [
+        "Accepts only a filesystem symlink, structured canonical declaration plus strict adapter, or a single-purpose include/link.",
+        "Rejects ignore, override, and do-not-follow relationships.",
+        "Rejects a file that mentions the canonical filename while adding competing rules."
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "/project-governance\n配置把 governance_file 指向 Makefile、TODO 指向 src/main.c。请开始接管并整理文档。",
+      "expected_output": "在任何写入前阻断配置；明确说明配置角色不能将构建文件或源码重新定义为治理文档，且不得输出 documentation-only PASS。",
+      "files": []
+    },
+    {
+      "id": 31,
+      "prompt": "/project-governance\n仓库已有 .project-governance.json。计划再创建 docs/project-governance.json，同时整理 docs。",
+      "expected_output": "在计划阶段阻断第二个配置候选；最终验证重新加载配置并拒绝双配置状态。",
+      "files": []
+    },
+    {
+      "id": 32,
+      "prompt": "/project-governance\n仓库包含 clean submodule。baseline 后 submodule 内对 tracked.txt 设置 assume-unchanged 并改写内容，顶层和子模块 status 都为空。验证本次接管。",
+      "expected_output": "比较 submodule 的完整 nested index 和 flags；返回 Blocking，不把 0 status 当成安全证据。",
+      "files": []
+    },
+    {
+      "id": 33,
+      "prompt": "/project-governance\nTODO 配置为 actual/shared.md，governance_file 配置为 alias/shared.md，其中 alias 是指向 actual 的仓库内目录符号链接。执行 Bootstrap。",
+      "expected_output": "在任何创建前通过 resolved role graph 识别两个 file roles 指向同一物理路径并阻断，仓库不得出现部分模板。",
+      "files": []
+    },
+    {
+      "id": 34,
+      "prompt": "/project-governance\ndocs/specs/guide.md 与被 .gitignore 忽略的 src/local.c 是 Linux hard link。计划修改 guide.md。",
+      "expected_output": "在 check-plan 阶段因 st_nlink > 1 阻断；不得修改任一 inode alias。",
+      "files": []
+    },
+    {
+      "id": 35,
+      "prompt": "/project-governance audit only\ncanonical_instruction 配置为 policy/AGENTS.md，但 CLAUDE.md 只写 See AGENTS.md.；另一个场景中 configured canonical 缺失且 AGENTS.md/CLAUDE.md 内容冲突。",
+      "expected_output": "adapter 必须解析到精确 configured path；错误 basename 关系 Blocking。canonical 缺失时仍审计现有 instruction pair，并报告冲突。",
+      "files": []
+    },
+    {
+      "prompt": "Run /project-governance Takeover, but store the workspace baseline at ./base.json inside the repository.",
+      "expected_output": "The Skill must fail before writes and require the workspace baseline to live outside the repository checkout; it must not create or use ./base.json as project content.",
+      "id": 36
+    },
+    {
+      "id": 37,
+      "prompt": "Maintain the project-governance Skill itself. Run the fast confidence check during ordinary iteration, not the entire boundary regression suite.",
+      "expected_output": "Use python3 evals/test_governance.py --quick for a smoke check covering routing, config, and basic workspace guard; reserve --full for release/deep regression.",
+      "files": []
+    },
+    {
+      "id": 38,
+      "prompt": "/project-governance\nCreate the workspace guard snapshot, approve docs/specs/S15-new.md, then explain what portions of guard state may change.",
+      "expected_output": "The capture-time snapshot stays byte-for-byte/canonically unchanged and remains protected by snapshot_sha256; only authorization state may gain the approved scope/config/ignored enrollment/revision.",
+      "files": []
+    },
+    {
+      "id": 39,
+      "prompt": "Audit the project-governance Skill source package itself rather than treating it as an application repository.",
+      "expected_output": "Use audit_docs.py --skill-source; do not report missing application docs/requirement, TODO, or governance bootstrap files as Fix/Improve findings merely because this is a Skill package.",
+      "files": []
+    }
+  ]
+}
