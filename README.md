@@ -58,7 +58,7 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 带 `--smoke-test` 的安装会执行清单驱动的安装后验证：
 
-- **skills**：`skills.toml` 中的 `name` 是 source 别名，`skill = "*"` 表示该仓库的全部 skills，不是单个实际 skill 名。setup 会用 `npx -y skills@latest list -g --json` 按 `source` 找到实际安装项，检查每个 `SKILL.md`，再逐项确认名称出现在 `claude -p /context` 的 Skills 表中。
+- **skills**：`skills.toml` 中的 `name` 是 source 别名，`skill = "*"` 表示该仓库的全部 skills，不是单个实际 skill 名。setup 会用 `npx -y skills@latest list -g --json` 按 `source` 找到实际安装项，检查每个 `SKILL.md`，再逐项确认名称出现在 `claude -p /context` 的 Skills 表中。若当前 `skills` CLI 的 list 输出漏掉已安装 agent，验证器会使用该 CLI 自己维护的 `~/.agents/.skill-lock.json` 精确恢复 source/path，不会退化为模糊目录匹配。
 - **plugins**：从 `plugins.toml` 逐项检查精确的 `<name>@<marketplace>`，并要求 `claude plugin list --json` 返回 `scope = "user"`；缓存目录存在不等于已注册。
 - **settings**：检查 `settings.template.json` 的非空键已存在于目标 `settings.json`。增量合并的“保留已有值、补齐缺失键、二次运行稳定”由 `script/test-settings-merge.sh` 在隔离 fixture 中验证。
 

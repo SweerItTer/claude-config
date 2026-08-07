@@ -238,6 +238,11 @@ jobs:
           chmod +x ./script/test-settings-merge.sh
           ./script/test-settings-merge.sh
 
+      - name: Verify skill context source fallback regression script
+        run: |
+          chmod +x ./script/test-skill-context-verification.sh
+          ./script/test-skill-context-verification.sh
+
       - name: Run setup.sh smoke test
         run: |
           chmod +x ./setup.sh

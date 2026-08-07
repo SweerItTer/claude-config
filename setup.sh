@@ -1267,14 +1267,24 @@ verify_installed_skills_context() {
     while IFS=$'\t' read -r name repo skill agent scope note; do
         [[ -n "$name" ]] || continue
         local matched source_kind="npx" plugin_id plugin_path
-        matched="$(SKILLS_LIST_JSON="$list_file" EXPECTED_REPO="$repo" python3 - <<'PY'
+        matched="$(SKILLS_LIST_JSON="$list_file" SKILLS_LOCK_FILE="$HOME/.agents/.skill-lock.json" EXPECTED_REPO="$repo" python3 - <<'PY'
 import json
 import os
+from pathlib import Path
+
+repo = os.environ["EXPECTED_REPO"]
+expected_url = "https://github.com/" + repo.removesuffix(".git")
+seen = set()
+
+def emit(name, path):
+    path = Path(path)
+    key = (name, str(path))
+    if name and path.is_file() and key not in seen:
+        seen.add(key)
+        print(name + "\t" + str(path.parent))
 
 with open(os.environ["SKILLS_LIST_JSON"], encoding="utf-8") as fp:
     items = json.load(fp)
-repo = os.environ["EXPECTED_REPO"]
-expected_url = "https://github.com/" + repo.removesuffix(".git")
 for item in items:
     source = item.get("source") or ""
     source_url = (item.get("sourceUrl") or "").removesuffix(".git")
@@ -1282,7 +1292,20 @@ for item in items:
         path = item.get("path") or ""
         skill_name = item.get("name") or ""
         if skill_name and path:
-            print(skill_name + "\t" + path)
+            emit(skill_name, Path(path) / "SKILL.md")
+
+# skills CLI versions can omit an installed agent from `list -g --json`.
+# Its global lock remains the source-of-truth for the installed path.
+lock_path = Path(os.environ["SKILLS_LOCK_FILE"])
+if lock_path.is_file():
+    with lock_path.open(encoding="utf-8") as fp:
+        lock = json.load(fp)
+    for skill_name, item in (lock.get("skills") or {}).items():
+        source = item.get("source") or ""
+        source_url = (item.get("sourceUrl") or "").removesuffix(".git")
+        skill_path = item.get("skillPath") or ""
+        if (source == repo or source_url == expected_url) and skill_path:
+            emit(skill_name, lock_path.parent / skill_path)
 PY
 )"
 
