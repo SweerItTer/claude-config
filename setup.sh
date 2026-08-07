@@ -1520,6 +1520,8 @@ run_context_smoke_test() {
     skill_rows="$(sed -n '/^### Skills$/,/^### /p' "$tmp" | grep -c '^| ' || true)"
     if (( skill_rows < 2 )); then
         err "Claude -p /context 的 Skills 段为空，skill 未被加载"
+        info "/context Skills 段诊断（最多 40 行）:"
+        sed -n '/^### Skills$/,/^### /p' "$tmp" | sed -n '1,40p' >&2
         rm -f "$tmp"
         return 1
     fi
@@ -1527,6 +1529,8 @@ run_context_smoke_test() {
     local skills_rc=0
     if ! verify_installed_skills_context "$tmp"; then
         skills_rc=1
+        info "/context Skills 段诊断（最多 40 行）:"
+        sed -n '/^### Skills$/,/^### /p' "$tmp" | sed -n '1,40p' >&2
     fi
     rm -f "$tmp"
     if [[ $skills_rc -ne 0 ]]; then
