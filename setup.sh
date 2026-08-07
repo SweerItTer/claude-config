@@ -25,6 +25,28 @@ else
 fi
 
 SCRIPT_DIR="$REPO_ROOT/script"
+
+# --tui fast-path：启动交互式 TUI 安装器。在 source install-common / 参数预解析前
+# 拦截，避免触发顶层 engine 初始化。TUI 是独立可执行文件，本脚本只负责定位与 exec。
+TUI_REQUESTED=false
+TUI_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--tui" ]]; then
+        TUI_REQUESTED=true
+    else
+        TUI_ARGS+=("$arg")
+    fi
+done
+if [[ "$TUI_REQUESTED" == true ]]; then
+    TUI_BIN="$REPO_ROOT/build/installer-tui/installer-tui"
+    if [[ ! -x "$TUI_BIN" ]]; then
+        echo "installer-tui 未构建，请先构建:" >&2
+        echo "  cmake -S tools/installer-tui -B build/installer-tui -DCMAKE_BUILD_TYPE=Release && cmake --build build/installer-tui --parallel" >&2
+        exit 2
+    fi
+    exec "$TUI_BIN" --repo-root "$REPO_ROOT" "${TUI_ARGS[@]}"
+fi
+
 # shellcheck source=script/install-common.sh
 source "$SCRIPT_DIR/install-common.sh"
 
@@ -36,9 +58,21 @@ FORCE=false
 SMOKE_TEST=false
 UPDATE=false
 UPDATE_SKILL=""
+UPDATE_PLUGIN=""
 UPDATE_ALL=false
 SELECTED_SKILL=""
 SELECTED_PLUGIN=""
+# 多选：--skill/--plugin 支持重复出现，逐个追加；--skip-* 显式跳过整类。
+# 空数组 ≠ 全量（全量 = 无 --skip 且无显式选择时默认装该类别全部）
+SELECTED_SKILLS=()
+SELECTED_PLUGINS=()
+SKIP_SKILLS=false
+SKIP_PLUGINS=false
+# typed 卸载：--uninstall-skill/--uninstall-plugin 追加 skill:NAME / plugin:NAME，
+# 规避同名 skill/plugin 被 uninstall_one 按 skill-first 误分派
+UNINSTALL_TYPED_LIST=()
+UPDATE_SKILLS=()
+UPDATE_PLUGINS=()
 ACTION="install"
 ACTION_EXPLICIT=false
 
@@ -798,15 +832,32 @@ manifest_has_plugin() {
     [[ -n "$(parse_plugins_toml "$PLUGINS_CONFIG" | awk -F'\t' -v n="$name" '$1 == n { print $1 }')" ]]
 }
 
+# 判断名字是否命中一组 filters（空 filters 视为命中全部）
+filter_matches() {
+    local needle="$1"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
 # 安装外部 skills（读 skills.toml → npx skills add）
+# 参数：0 个或多个 name 过滤。无参 = 装全部；有参 = 只装命中的 name。
 install_external_skills() {
-    local filter="${1:-}"   # 可选：只装指定 name 的 source
+    local -a filters=("$@")
     [[ -f "$SKILLS_CONFIG" ]] || { info "无 skills.toml，跳过外部 skill"; return 0; }
 
+    local parsed
+    parsed="$(parse_skills_toml "$SKILLS_CONFIG")" || {
+        err "解析 skills.toml 失败"
+        return 1
+    }
     local line name repo skill agent scope
     while IFS=$'\t' read -r name repo skill agent scope note; do
         [[ -n "$name" ]] || continue
-        if [[ -n "$filter" ]] && [[ "$name" != "$filter" ]]; then
+        if [[ ${#filters[@]} -gt 0 ]] && ! filter_matches "$name" "${filters[@]}"; then
             continue
         fi
 
@@ -832,18 +883,24 @@ install_external_skills() {
             return 1
         fi
         log "skill '$name' 已安装"
-    done <<< "$(parse_skills_toml "$SKILLS_CONFIG")"
+    done <<< "$parsed"
 }
 
 # 安装第三方 plugins（读 plugins.toml → claude plugin install）
+# 参数：0 个或多个 name 过滤。无参 = 装全部；有参 = 只装命中的 name。
 install_third_party_plugins() {
-    local filter="${1:-}"   # 可选：只装指定 name 的 plugin
+    local -a filters=("$@")
     [[ -f "$PLUGINS_CONFIG" ]] || { info "无 plugins.toml，跳过第三方 plugin"; return 0; }
 
+    local parsed
+    parsed="$(parse_plugins_toml "$PLUGINS_CONFIG")" || {
+        err "解析 plugins.toml 失败"
+        return 1
+    }
     local line name repo method marketplace command note
     while IFS=$'\t' read -r name repo method marketplace command note; do
         [[ -n "$name" ]] || continue
-        if [[ -n "$filter" ]] && [[ "$name" != "$filter" ]]; then
+        if [[ ${#filters[@]} -gt 0 ]] && ! filter_matches "$name" "${filters[@]}"; then
             continue
         fi
 
@@ -869,12 +926,18 @@ install_third_party_plugins() {
                 warn "未知安装方式 '$method'，跳过 plugin '$name'"
                 ;;
         esac
-    done <<< "$(parse_plugins_toml "$PLUGINS_CONFIG")"
+    done <<< "$parsed"
 }
 
 # 更新所有外部 skills（npx skills update）
 update_all_skills() {
     [[ -f "$SKILLS_CONFIG" ]] || { info "无 skills.toml，跳过外部 skill 更新"; return 0; }
+    local parsed
+    parsed="$(parse_skills_toml "$SKILLS_CONFIG")" || {
+        err "解析 skills.toml 失败"
+        return 1
+    }
+    : "$parsed"
     info "更新所有外部 skills..."
     if [[ "$DRY_RUN" == true ]]; then
         info "[DRY-RUN] npx -y skills@latest update -g -y"
@@ -887,28 +950,58 @@ update_all_skills() {
     log "外部 skills 已更新"
 }
 
-# 更新所有第三方 plugins（claude plugin update）
+# 更新单个 plugin（claude plugin update），找不到返回失败
+update_plugin() {
+    local name="${1:?缺少 plugin 名}"
+    [[ -f "$PLUGINS_CONFIG" ]] || { err "无 plugins.toml，无法更新 plugin '$name'"; return 1; }
+
+    local parsed
+    parsed="$(parse_plugins_toml "$PLUGINS_CONFIG")" || {
+        err "解析 plugins.toml 失败"
+        return 1
+    }
+    local line repo method marketplace command note
+    while IFS=$'\t' read -r line repo method marketplace command note; do
+        [[ "$line" == "$name" ]] || continue
+        if [[ "$method" == "npx" ]]; then
+            warn "plugin '$name' 是 npx 手动安装，需手动更新: $command"
+            return 0
+        fi
+        info "更新 plugin: $name"
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] claude plugin update ${name}@${marketplace} -s user"
+            return 0
+        fi
+        if ! claude plugin update "${name}@${marketplace}" -s user; then
+            err "更新 plugin '$name' 失败"
+            return 1
+        fi
+        log "plugin '$name' 已更新"
+        return 0
+    done <<< "$parsed"
+
+    err "plugins.toml 中找不到 plugin: $name"
+    return 1
+}
+
+# 更新所有第三方 plugins（claude plugin update），任一项失败最终非零
 update_all_plugins() {
     [[ -f "$PLUGINS_CONFIG" ]] || { info "无 plugins.toml，跳过第三方 plugin 更新"; return 0; }
 
+    local parsed
+    parsed="$(parse_plugins_toml "$PLUGINS_CONFIG")" || {
+        err "解析 plugins.toml 失败"
+        return 1
+    }
     local line repo method marketplace command note
+    local rc=0
     while IFS=$'\t' read -r line repo method marketplace command note; do
         [[ -n "$line" ]] || continue
-        if [[ "$method" == "npx" ]]; then
-            warn "plugin '$line' 是 npx 手动安装，需手动更新: $command"
-            continue
+        if ! update_plugin "$line"; then
+            rc=1
         fi
-        info "更新 plugin: $line"
-        if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] claude plugin update ${line}@${marketplace} -s user"
-            continue
-        fi
-        if ! claude plugin update "${line}@${marketplace}" -s user; then
-            err "更新 plugin '$line' 失败"
-            return 1
-        fi
-        log "plugin '$line' 已更新"
-    done <<< "$(parse_plugins_toml "$PLUGINS_CONFIG")"
+    done <<< "$parsed"
+    return "$rc"
 }
 
 # 更新单个 skill（npx skills update <name>）
@@ -916,6 +1009,11 @@ update_skill() {
     local name="${1:?缺少 skill 名}"
     [[ -f "$SKILLS_CONFIG" ]] || { err "无 skills.toml，无法更新 skill '$name'"; return 1; }
 
+    local parsed
+    parsed="$(parse_skills_toml "$SKILLS_CONFIG")" || {
+        err "解析 skills.toml 失败"
+        return 1
+    }
     local line repo skill agent scope note
     while IFS=$'\t' read -r line repo skill agent scope note; do
         [[ "$line" == "$name" ]] || continue
@@ -932,7 +1030,7 @@ update_skill() {
         fi
         log "skill '$name' 已更新"
         return 0
-    done <<< "$(parse_skills_toml "$SKILLS_CONFIG")"
+    done <<< "$parsed"
 
     err "skills.toml 中找不到 skill: $name"
     return 1
@@ -1249,10 +1347,22 @@ run_install_flow() {
     ensure_settings_json
 
     phase "Phase 3: 外部 skills（npx skills）"
-    install_external_skills "${SELECTED_SKILL:-}"
+    if [[ "$SKIP_SKILLS" == true ]]; then
+        info "已跳过外部 skills 安装（--skip-skills）"
+    elif [[ ${#SELECTED_SKILLS[@]} -gt 0 ]]; then
+        install_external_skills "${SELECTED_SKILLS[@]}"
+    else
+        install_external_skills
+    fi
 
     phase "Phase 4: 第三方 plugins（claude plugin）"
-    install_third_party_plugins "${SELECTED_PLUGIN:-}"
+    if [[ "$SKIP_PLUGINS" == true ]]; then
+        info "已跳过第三方 plugins 安装（--skip-plugins）"
+    elif [[ ${#SELECTED_PLUGINS[@]} -gt 0 ]]; then
+        install_third_party_plugins "${SELECTED_PLUGINS[@]}"
+    else
+        install_third_party_plugins
+    fi
 
     phase "Phase 5: 最终验证"
     verify_core_config
@@ -1358,6 +1468,11 @@ uninstall_skill() {
     local name="${1:?缺少 skill 名}"
     [[ -f "$SKILLS_CONFIG" ]] || { err "无 skills.toml，无法卸载 skill '$name'"; return 1; }
 
+    local parsed
+    parsed="$(parse_skills_toml "$SKILLS_CONFIG")" || {
+        err "解析 skills.toml 失败"
+        return 1
+    }
     local line repo skill agent scope note
     while IFS=$'\t' read -r line repo skill agent scope note; do
         [[ "$line" == "$name" ]] || continue
@@ -1374,7 +1489,7 @@ uninstall_skill() {
         fi
         log "skill '$name' 已卸载"
         return 0
-    done <<< "$(parse_skills_toml "$SKILLS_CONFIG")"
+    done <<< "$parsed"
 
     err "skills.toml 中找不到 skill: $name"
     return 1
@@ -1384,6 +1499,11 @@ uninstall_plugin() {
     local name="${1:?缺少 plugin 名}"
     [[ -f "$PLUGINS_CONFIG" ]] || { err "无 plugins.toml，无法卸载 plugin '$name'"; return 1; }
 
+    local parsed
+    parsed="$(parse_plugins_toml "$PLUGINS_CONFIG")" || {
+        err "解析 plugins.toml 失败"
+        return 1
+    }
     local line repo method marketplace command note
     while IFS=$'\t' read -r line repo method marketplace command note; do
         [[ "$line" == "$name" ]] || continue
@@ -1402,7 +1522,7 @@ uninstall_plugin() {
         fi
         log "plugin '$name' 已卸载"
         return 0
-    done <<< "$(parse_plugins_toml "$PLUGINS_CONFIG")"
+    done <<< "$parsed"
 
     err "plugins.toml 中找不到 plugin: $name"
     return 1
@@ -1503,8 +1623,21 @@ uninstall_multi() {
 }
 
 # 单个清单项卸载：根据它是 skill 还是 plugin 分发到对应函数
+# 支持 typed 目标 skill:NAME / plugin:NAME（由 --uninstall-skill/--uninstall-plugin 产生），
+# 规避同名 skill/plugin 被 skill-first 误分派；未带类型时保持旧 skill-first 兼容。
 uninstall_one() {
     local name="${1:?缺少目标名}"
+    case "$name" in
+        skill:*)
+            uninstall_skill "${name#skill:}"
+            return ;;
+        plugin:*)
+            uninstall_plugin "${name#plugin:}"
+            return ;;
+        core|all)
+            err "uninstall_one: core/all 应串行处理，不应进入并发队列"
+            return 1 ;;
+    esac
     if manifest_has_skill "$name"; then
         uninstall_skill "$name"
     elif manifest_has_plugin "$name"; then
@@ -1543,16 +1676,28 @@ while [[ $# -gt 0 ]]; do
         --skill)
             SELECTED_SKILL="${2:-}"
             [[ -n "$SELECTED_SKILL" ]] || { err "--skill 需要参数"; exit 1; }
+            SELECTED_SKILLS+=("$SELECTED_SKILL")
             shift 2 ;;
         --skill=*)
             SELECTED_SKILL="${1#*=}"
+            [[ -n "$SELECTED_SKILL" ]] || { err "--skill 需要参数"; exit 1; }
+            SELECTED_SKILLS+=("$SELECTED_SKILL")
             shift ;;
         --plugin)
             SELECTED_PLUGIN="${2:-}"
             [[ -n "$SELECTED_PLUGIN" ]] || { err "--plugin 需要参数"; exit 1; }
+            SELECTED_PLUGINS+=("$SELECTED_PLUGIN")
             shift 2 ;;
         --plugin=*)
             SELECTED_PLUGIN="${1#*=}"
+            [[ -n "$SELECTED_PLUGIN" ]] || { err "--plugin 需要参数"; exit 1; }
+            SELECTED_PLUGINS+=("$SELECTED_PLUGIN")
+            shift ;;
+        --skip-skills)
+            SKIP_SKILLS=true
+            shift ;;
+        --skip-plugins)
+            SKIP_PLUGINS=true
             shift ;;
         --uninstall)
             _uninstall_target="${2:-}"
@@ -1572,14 +1717,51 @@ while [[ $# -gt 0 ]]; do
                 err "--uninstall 参数无效: $_uninstall_target (有效值: core, all, 或清单中的 skill/plugin 名)"; exit 1
             fi
             shift ;;
+        --uninstall-skill)
+            _uninstall_target="${2:-}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall-skill 需要参数"; exit 1; }
+            manifest_has_skill "$_uninstall_target" || { err "--uninstall-skill 参数无效: $_uninstall_target (不在 skills.toml 中)"; exit 1; }
+            UNINSTALL_TYPED_LIST+=("skill:$_uninstall_target")
+            shift 2 ;;
+        --uninstall-skill=*)
+            _uninstall_target="${1#*=}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall-skill 需要参数"; exit 1; }
+            manifest_has_skill "$_uninstall_target" || { err "--uninstall-skill 参数无效: $_uninstall_target (不在 skills.toml 中)"; exit 1; }
+            UNINSTALL_TYPED_LIST+=("skill:$_uninstall_target")
+            shift ;;
+        --uninstall-plugin)
+            _uninstall_target="${2:-}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall-plugin 需要参数"; exit 1; }
+            manifest_has_plugin "$_uninstall_target" || { err "--uninstall-plugin 参数无效: $_uninstall_target (不在 plugins.toml 中)"; exit 1; }
+            UNINSTALL_TYPED_LIST+=("plugin:$_uninstall_target")
+            shift 2 ;;
+        --uninstall-plugin=*)
+            _uninstall_target="${1#*=}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall-plugin 需要参数"; exit 1; }
+            manifest_has_plugin "$_uninstall_target" || { err "--uninstall-plugin 参数无效: $_uninstall_target (不在 plugins.toml 中)"; exit 1; }
+            UNINSTALL_TYPED_LIST+=("plugin:$_uninstall_target")
+            shift ;;
         --update-skill)
             UPDATE_SKILL="${2:-}"
             [[ -n "$UPDATE_SKILL" ]] || { err "--update-skill 需要参数"; exit 1; }
             [[ "$UPDATE_SKILL" =~ ^(core|all)$ ]] || manifest_has_skill "$UPDATE_SKILL" || { err "--update-skill 参数无效: $UPDATE_SKILL (有效值: core, all, 或 skills.toml 中的 skill 名)"; exit 1; }
+            UPDATE_SKILLS+=("$UPDATE_SKILL")
             shift 2 ;;
         --update-skill=*)
             UPDATE_SKILL="${1#*=}"
             [[ "$UPDATE_SKILL" =~ ^(core|all)$ ]] || manifest_has_skill "$UPDATE_SKILL" || { err "--update-skill 参数无效: $UPDATE_SKILL (有效值: core, all, 或 skills.toml 中的 skill 名)"; exit 1; }
+            UPDATE_SKILLS+=("$UPDATE_SKILL")
+            shift ;;
+        --update-plugin)
+            UPDATE_PLUGIN="${2:-}"
+            [[ -n "$UPDATE_PLUGIN" ]] || { err "--update-plugin 需要参数"; exit 1; }
+            [[ "$UPDATE_PLUGIN" =~ ^(core|all)$ ]] || manifest_has_plugin "$UPDATE_PLUGIN" || { err "--update-plugin 参数无效: $UPDATE_PLUGIN (有效值: core, all, 或 plugins.toml 中的 plugin 名)"; exit 1; }
+            UPDATE_PLUGINS+=("$UPDATE_PLUGIN")
+            shift 2 ;;
+        --update-plugin=*)
+            UPDATE_PLUGIN="${1#*=}"
+            [[ "$UPDATE_PLUGIN" =~ ^(core|all)$ ]] || manifest_has_plugin "$UPDATE_PLUGIN" || { err "--update-plugin 参数无效: $UPDATE_PLUGIN (有效值: core, all, 或 plugins.toml 中的 plugin 名)"; exit 1; }
+            UPDATE_PLUGINS+=("$UPDATE_PLUGIN")
             shift ;;
         --update-all)
             UPDATE_ALL=true
@@ -1594,11 +1776,17 @@ while [[ $# -gt 0 ]]; do
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
             echo "  --update        兼容旧 flag：等价于 action=update"
             echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 扩展冒烟检查"
-            echo "  --skill <name>  只安装指定外部 skill（读 configs/skills.toml）"
-            echo "  --plugin <name> 只安装指定第三方 plugin（读 configs/plugins.toml）"
+            echo "  --skill <name>  只安装指定外部 skill（可重复，读 configs/skills.toml）"
+            echo "  --plugin <name> 只安装指定第三方 plugin（可重复，读 configs/plugins.toml）"
+            echo "  --skip-skills   跳过外部 skills 安装"
+            echo "  --skip-plugins  跳过第三方 plugins 安装"
             echo "  --uninstall T   卸载单个/多个目标 (core|all|清单中的 skill/plugin 名，可重复出现，列表并发卸载)"
+            echo "  --uninstall-skill N  卸载指定 skill（typed，规避同名 plugin）"
+            echo "  --uninstall-plugin N 卸载指定 plugin（typed，规避同名 skill）"
             echo "  --update-all    更新全部外部 skills + plugins (npx skills update + claude plugin update)"
-            echo "  --update-skill N 更新指定 skill (core=全部, 或 skills.toml 中的 skill 名)"
+            echo "  --update-skill N 更新指定 skill（可重复；core/all=全部）"
+            echo "  --update-plugin N 更新指定 plugin（可重复；core/all=全部）"
+            echo "  --tui           启动交互式 TUI 安装器（需先构建 tools/installer-tui）"
             exit 0 ;;
         install|update|reinstall|core|uninstall|verify|status|doctor)
             ACTION="$1"
@@ -1612,6 +1800,17 @@ if [[ "$UPDATE" == true && "$ACTION_EXPLICIT" == false ]]; then
     ACTION="update"
 fi
 
+# 互斥校验：显式选择与整类跳过冲突；update-all 与单项更新冲突
+if [[ "$SKIP_SKILLS" == true && ${#SELECTED_SKILLS[@]} -gt 0 ]]; then
+    err "--skip-skills 与 --skill 不能同时使用"; exit 1
+fi
+if [[ "$SKIP_PLUGINS" == true && ${#SELECTED_PLUGINS[@]} -gt 0 ]]; then
+    err "--skip-plugins 与 --plugin 不能同时使用"; exit 1
+fi
+if [[ "$UPDATE_ALL" == true && (${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0) ]]; then
+    err "--update-all 与 --update-skill/--update-plugin 不能同时使用"; exit 1
+fi
+
 main() {
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -1620,10 +1819,12 @@ main() {
     echo ""
 
     # --uninstall: 单个/多个目标卸载（core/all 串行，清单项有限并发）
-    if [[ ${#UNINSTALL_LIST[@]} -gt 0 ]]; then
-        uninstall_multi "${UNINSTALL_LIST[@]}" || { err "卸载未全部完成"; return 1; }
+    # typed 目标（skill:NAME / plugin:NAME）并入同一列表，复用并发/去重/限流
+    local -a uninstall_targets=("${UNINSTALL_LIST[@]}" "${UNINSTALL_TYPED_LIST[@]}")
+    if [[ ${#uninstall_targets[@]} -gt 0 ]]; then
+        uninstall_multi "${uninstall_targets[@]}" || { err "卸载未全部完成"; return 1; }
         echo ""
-        log "卸载完成 (${UNINSTALL_LIST[*]})"
+        log "卸载完成 (${uninstall_targets[*]})"
         [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 未实际修改文件"
         return 0
     fi
@@ -1633,25 +1834,45 @@ main() {
     [[ "$ACTION" == "update" && "$FORCE" == true ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库，并强制重跑安装器"
     [[ "$ACTION" == "update" && "$FORCE" == false ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库；不会重跑第三方安装器"
 
-    # --update-all / --update-skill: 单独入口，跑完即退出
+    # --update-all / --update-skill / --update-plugin: 单独入口，跑完即退出。
+    # 任一项失败最终非零（失败聚合），不能后续项成功覆盖 rc。
+    local update_failed=0
     if [[ "$UPDATE_ALL" == true ]]; then
         phase "Phase 0: 更新全部"
-        update_all_skills
-        update_all_plugins
+        update_all_skills || update_failed=1
+        update_all_plugins || update_failed=1
         echo ""
-        log "全部外部 skills + plugins 已更新"
-        return 0
-    fi
-    if [[ -n "$UPDATE_SKILL" ]]; then
-        phase "Phase 0: 更新 skill"
-        if [[ "$UPDATE_SKILL" == core || "$UPDATE_SKILL" == all ]]; then
-            update_all_skills
+        if [[ "$update_failed" == 0 ]]; then
+            log "全部外部 skills + plugins 已更新"
         else
-            update_skill "$UPDATE_SKILL"
+            err "部分更新失败，请检查上方日志"
         fi
+        return "$update_failed"
+    fi
+    if [[ ${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0 ]]; then
+        phase "Phase 0: 更新指定项"
+        local s p
+        for s in "${UPDATE_SKILLS[@]}"; do
+            if [[ "$s" == core || "$s" == all ]]; then
+                update_all_skills || update_failed=1
+            else
+                update_skill "$s" || update_failed=1
+            fi
+        done
+        for p in "${UPDATE_PLUGINS[@]}"; do
+            if [[ "$p" == core || "$p" == all ]]; then
+                update_all_plugins || update_failed=1
+            else
+                update_plugin "$p" || update_failed=1
+            fi
+        done
         echo ""
-        log "skill 更新完成 ($UPDATE_SKILL)"
-        return 0
+        if [[ "$update_failed" == 0 ]]; then
+            log "指定项更新完成 (skills: ${UPDATE_SKILLS[*]:-无} / plugins: ${UPDATE_PLUGINS[*]:-无})"
+        else
+            err "部分指定项更新失败，请检查上方日志"
+        fi
+        return "$update_failed"
     fi
 
     if [[ "$ACTION" == "update" ]]; then
