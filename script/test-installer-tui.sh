@@ -5,7 +5,7 @@
 #   - --help works without TTY
 #   - no-TTY stdin exits 2 without blocking
 #   - --print-selection prints machine-readable record
-#   - real manifest parses to 4 skills / 8 plugins
+#   - real manifest parses to 3 skills / 8 plugins
 #   - fixture/mock setup.sh: verify argv protocol (install/update/uninstall,
 #     typed flags, skip-* categories, --ci) and exit-code propagation
 set -euo pipefail
@@ -60,17 +60,17 @@ set -e
 [[ "$missing_root_rc" -ne 0 ]] || fail "--repo-root 缺值应失败"
 pass "未知参数与 --repo-root 缺值失败"
 
-# ---- 4) 真实清单解析：4 skills / 8 plugins（走 parser + LoadManifests）----
+# ---- 4) 真实清单解析：3 skills / 8 plugins（走 parser + LoadManifests）----
 skills_count="$(python3 "$REPO_ROOT/script/parse-manifests.py" skills --file "$REPO_ROOT/configs/skills.toml" | awk 'NF { count++ } END { print count + 0 }')"
 plugins_count="$(python3 "$REPO_ROOT/script/parse-manifests.py" plugins --file "$REPO_ROOT/configs/plugins.toml" | awk 'NF { count++ } END { print count + 0 }')"
-[[ "$skills_count" -eq 4 ]] || fail "skills parser 应输出 4 行，实际 $skills_count"
+[[ "$skills_count" -eq 3 ]] || fail "skills parser 应输出 3 行，实际 $skills_count"
 [[ "$plugins_count" -eq 8 ]] || fail "plugins parser 应输出 8 行，实际 $plugins_count"
 set +e
 timeout 5 "$BIN" --repo-root "$REPO_ROOT" --print-selection >/dev/null 2>/tmp/tui-manifest.err
 rc=$?
 set -e
 [[ "$rc" -eq 0 ]] || { cat /tmp/tui-manifest.err >&2; fail "真实清单解析失败 (exit $rc)"; }
-pass "真实清单解析成功 (skills=4, plugins=8)"
+pass "真实清单解析成功 (skills=3, plugins=8)"
 
 # ---- 5) setup.sh --tui fast-path：任意 argv 位置均转发并移除 --tui ----
 for tui_args in \
@@ -229,9 +229,9 @@ for _ in {1..100}; do
     sleep 0.1
 done
 [[ -s "$MOCK_LOGFILE" ]] || fail "等待 mock setup.sh argv 超时"
-grep -q '^setup.sh|install --ci --skill context-mode --skip-plugins$' "$MOCK_LOGFILE" ||
+grep -q '^setup.sh|install --ci --skill oh-my-claudecode --skip-plugins$' "$MOCK_LOGFILE" ||
     fail "argv 未按预期: $(argv_line)"
-grep -q $'^install\tskill:context-mode$' "$TUI_STDOUT" ||
+grep -q $'^install\tskill:oh-my-claudecode$' "$TUI_STDOUT" ||
     fail "stdout 机器可读记录缺失"
 screen -S "$session" -X stuff 'q' || fail "无法发送 q"
 for _ in {1..100}; do
@@ -317,7 +317,7 @@ for _ in {1..100}; do
     sleep 0.1
 done
 screen -ls 2>/dev/null | grep -q "\\.${failure_session}[[:space:]]" && fail "exit=7 TUI shell 进程未结束"
-grep -q '^setup.sh|install --ci --skill context-mode --skip-plugins$' "$MOCK_LOGFILE" ||
+grep -q '^setup.sh|install --ci --skill oh-my-claudecode --skip-plugins$' "$MOCK_LOGFILE" ||
     fail "exit=7 argv 未按预期: $(argv_line)"
 screen -S "$failure_session" -X quit >/dev/null 2>&1 || true
 failure_session_created=0
@@ -331,7 +331,7 @@ run_tui_case update-all 0 "--update-all --ci" "update	all" '2' 'e' $'\r'
 
 # update selected：Install 页勾选首个 skill → 切 Update → 下箭头 + 空格选中「选中的项目」
 #（Radiobox 的 ArrowDown 只移高亮，需空格才把 selected 设为高亮项）→ 确认
-run_tui_case update-selected 0 "--ci --update-skill context-mode" "update	skill:context-mode" \
+run_tui_case update-selected 0 "--ci --update-skill oh-my-claudecode" "update	skill:oh-my-claudecode" \
     ' ' '2' $'\x1b[B' ' ' 'e' $'\r'
 
 # uninstall all：切 Uninstall 页（mode 0=完全卸载，默认），确认
@@ -341,7 +341,7 @@ run_tui_case uninstall-all 0 "--uninstall all --ci" "uninstall	all" '3' 'e' $'\r
 run_tui_case uninstall-core 0 "--uninstall core --ci" "uninstall	core" '3' $'\x1b[B' ' ' 'e' $'\r'
 
 # uninstall selected：切 Uninstall 页，全选（a），下箭头×2 + 空格选中「选中的项目」，确认
-run_tui_case uninstall-selected 0 "--ci --uninstall-skill context-mode" "uninstall	skill:context-mode" \
+run_tui_case uninstall-selected 0 "--ci --uninstall-skill oh-my-claudecode" "uninstall	skill:oh-my-claudecode" \
     '3' 'a' $'\x1b[B' $'\x1b[B' ' ' 'e' $'\r'
 
 echo "ALL TESTS PASSED"

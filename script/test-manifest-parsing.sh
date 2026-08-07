@@ -41,9 +41,9 @@ assert_fail() {
 # --- 真实 skills.toml ---
 assert_ok "skills.toml 解析成功" python3 "$PARSER" skills --file "$REPO_ROOT/configs/skills.toml"
 skills_out="$(python3 "$PARSER" skills --file "$REPO_ROOT/configs/skills.toml")"
-[[ "$(wc -l <<< "$skills_out")" -eq 4 ]] || fail "skills.toml 应有 4 行，实际 $(wc -l <<< "$skills_out")"
-[[ "$skills_out" == *$'context-mode\tmksglu/context-mode\t*\tclaude-code\tglobal'* ]] \
-    || fail "skills 首行字段不符: ${skills_out%%$'\n'*}"
+[[ "$(wc -l <<< "$skills_out")" -eq 3 ]] || fail "skills.toml 应有 3 行，实际 $(wc -l <<< "$skills_out")"
+[[ "$skills_out" == *$'oh-my-claudecode\tYeachan-Heo/oh-my-claudecode\t*\tclaude-code\tglobal'* ]] \
+    || fail "skills 字段缺失: ${skills_out%%$'\n'*}"
 
 # --- 真实 plugins.toml ---
 assert_ok "plugins.toml 解析成功" python3 "$PARSER" plugins --file "$REPO_ROOT/configs/plugins.toml"

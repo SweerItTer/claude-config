@@ -91,13 +91,13 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ./setup.sh --skip-skills
 
 # 只装核心配置 + 指定的一个/多个 skill（可重复，名字取 configs/skills.toml）
-./setup.sh --skill context-mode --skill oh-my-claudecode
+./setup.sh --skill oh-my-claudecode --skill ponytail
 
 # 只装核心配置 + 指定的一个/多个 plugin（可重复，名字取 configs/plugins.toml）
-./setup.sh --plugin code-review --plugin feature-dev
+./setup.sh --plugin context-mode --plugin code-review
 
 # 混搭：只装指定 skill 和指定 plugin，其余跳过
-./setup.sh --skill context-mode --plugin code-review
+./setup.sh --skill oh-my-claudecode --plugin context-mode
 ```
 
 安装时若同时给了 `--skill` 和 `--plugin`，则只装这些指定项，其余项不装。全不指定 = 全量安装所有 skills + plugins。
@@ -111,13 +111,13 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ./setup.sh --update-all
 
 # 只更新一个/多个指定 skill（可重复）
-./setup.sh --update-skill context-mode --update-skill ponytail
+./setup.sh --update-skill oh-my-claudecode --update-skill ponytail
 
 # 只更新一个/多个指定 plugin（可重复）
 ./setup.sh --update-plugin code-review
 
 # 指定项里混 skills 和 plugins
-./setup.sh --update-skill context-mode --update-plugin code-review
+./setup.sh --update-skill oh-my-claudecode --update-plugin context-mode
 
 # 更新某类型全部（core/all 也接受）
 ./setup.sh --update-skill core
@@ -132,15 +132,15 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 ```bash
 # 卸载一个/多个指定 skill（typed，明确区分 skills/plugin）
-./setup.sh --uninstall-skill context-mode
-./setup.sh --uninstall-skill context-mode --uninstall-skill ponytail
+./setup.sh --uninstall-skill oh-my-claudecode
+./setup.sh --uninstall-skill oh-my-claudecode --uninstall-skill ponytail
 
 # 卸载一个/多个指定 plugin（typed）
 ./setup.sh --uninstall-plugin code-review
 ./setup.sh --uninstall-plugin code-review --uninstall-plugin feature-dev
 
-# 卸载单个目标（无类型时按 skill-first 解析，同名 skill/plugin 会优先 skill）
-./setup.sh --uninstall context-mode
+# 卸载单个目标（无类型时按 skill-first 解析；context-mode 仅是 plugin，推荐使用 typed flag）
+./setup.sh --uninstall-plugin context-mode
 
 # 完全卸载：core 配置 + 全部 skills + plugins
 ./setup.sh --uninstall all
@@ -149,9 +149,9 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ./setup.sh --uninstall core
 ```
 
-- skill 走 `npx skills remove`，plugin 走 `claude plugin uninstall`
+- skill 走 `npx skills remove`，plugin 走 `claude plugin uninstall`；同一仓库只通过一种来源安装，避免 npx skill 与 plugin skill 重复声明
 - 多个清单项并发卸载（默认同时 3 个，`UNINSTALL_JOBS` 可调）；`core`/`all` 串行
-- **typed flags（`--uninstall-skill`/`--uninstall-plugin`）优先**：当同名 skill 与 plugin 都存在（如 `context-mode`、`oh-my-claudecode` 等），用 typed flag 精确指定要卸载哪一类
+- **typed flags（`--uninstall-skill`/`--uninstall-plugin`）优先**：skill 与 plugin 由不同清单声明，即使名称相同也用 typed flag 精确指定来源；当前 `context-mode`、`oh-my-claudecode` 是 plugin 条目
 - 卸载只移除 `~/.claude/skills/` 下由 `npx skills` 安装的副本和 `claude plugin uninstall` 卸载的插件，不触碰本仓库源文件
 - `settings.json` 默认保留，避免误删你的自定义配置。彻底重置：`rm ~/.claude/settings.json`
 

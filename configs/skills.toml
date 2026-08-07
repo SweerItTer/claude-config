@@ -6,15 +6,6 @@
 # 自有 skill 不在这里——它们直接放在 .claude/skills/（仓库源码，即改即生效）。
 # 注意：npx skills 装出来是 copy 到 ~/..claude/skills/，改源码后需 `npx skills update` 同步。
 
-# context-mode — 上下文压缩/统计类 skill 集合（8 个）
-[[sources]]
-name = "context-mode"
-repo = "mksglu/context-mode"
-skill = "*"
-agent = "claude-code"
-scope = "global"
-note = "上下文管理工具集，自动安装全部"
-
 # oh-my-claudecode — OMC 多智能体编排 skill 集合（41 个）
 [[sources]]
 name = "oh-my-claudecode"
