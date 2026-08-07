@@ -1305,7 +1305,11 @@ if lock_path.is_file():
         source_url = (item.get("sourceUrl") or "").removesuffix(".git")
         skill_path = item.get("skillPath") or ""
         if (source == repo or source_url == expected_url) and skill_path:
-            emit(skill_name, lock_path.parent / skill_path)
+            candidates = [lock_path.parent.parent / skill_path, lock_path.parent / skill_path]
+            for candidate in candidates:
+                if candidate.is_file():
+                    emit(skill_name, candidate)
+                    break
 PY
 )"
 

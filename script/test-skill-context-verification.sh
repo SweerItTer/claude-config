@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 
-mkdir -p "$fixture/bin" "$fixture/home/.agents/skills/context-mode-ops"
+mkdir -p "$fixture/bin" "$fixture/home/.agents" "$fixture/home/.claude/skills/context-mode-ops"
 cat >"$fixture/home/.agents/.skill-lock.json" <<'EOF'
 {
   "version": 3,
@@ -15,12 +15,12 @@ cat >"$fixture/home/.agents/.skill-lock.json" <<'EOF'
       "source": "mksglu/context-mode",
       "sourceType": "github",
       "sourceUrl": "https://github.com/mksglu/context-mode.git",
-      "skillPath": "skills/context-mode-ops/SKILL.md"
+      "skillPath": ".claude/skills/context-mode-ops/SKILL.md"
     }
   }
 }
 EOF
-cat >"$fixture/home/.agents/skills/context-mode-ops/SKILL.md" <<'EOF'
+cat >"$fixture/home/.claude/skills/context-mode-ops/SKILL.md" <<'EOF'
 ---
 name: context-mode-ops
 description: fixture
