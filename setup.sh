@@ -1356,7 +1356,19 @@ PY
                 failed=1
                 continue
             fi
-            if ! grep -Fq "| $actual_name |" "$context_file"; then
+            local context_skill_name="$actual_name"
+            local context_plugin_skill_name=""
+            if [[ "$source_kind" == "plugin" ]]; then
+                context_plugin_skill_name="${plugin_id%@*}:$actual_name"
+            fi
+            local context_skill_visible=false
+            if grep -Fq "| $context_skill_name |" "$context_file"; then
+                context_skill_visible=true
+            elif [[ -n "$context_plugin_skill_name" ]] &&
+                grep -Fq "| $context_plugin_skill_name |" "$context_file"; then
+                context_skill_visible=true
+            fi
+            if [[ "$context_skill_visible" != true ]]; then
                 err "skill '$actual_name' 未出现在 Claude -p /context 的 Skills 表"
                 failed=1
                 continue
