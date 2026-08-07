@@ -43,4 +43,7 @@ __pycache__/
 # Hook markers
 .dirty
 
+# CMake build output (tools/installer-tui)
+/build/
+
 .*/
