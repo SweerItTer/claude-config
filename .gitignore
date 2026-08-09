@@ -20,7 +20,11 @@ Thumbs.db
 .claude/
 openspec/
 external/
-*plan*
+# 统一资源计划层（script/resource-plan.py）是核心交付物，必须入库；
+# 只忽略运行时/临时产物，不再用宽松的 *plan* glob 误伤合法脚本。
+*.plan.tmp
+*.plan.json
+plan.log
 
 # CodeGraph data files
 # These are local to each machine and should not be committed
