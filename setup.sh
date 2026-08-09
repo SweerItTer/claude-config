@@ -72,7 +72,14 @@ SKIP_PLUGINS=false
 # 规避同名 skill/plugin 被 uninstall_one 按 skill-first 误分派
 UNINSTALL_TYPED_LIST=()
 UPDATE_SKILLS=()
+UPDATE_LOCAL_SKILLS=()
 UPDATE_PLUGINS=()
+# 统一资源入口：--update-resource/--uninstall-resource 追加 kind:spec；
+# 旧 typed update/uninstall 参数经兼容转换后并入同一列表，走统一 resolver。
+# --choose 提供 kind:id=local|remote|skip 冲突选择。
+UPDATE_RESOURCES=()
+UNINSTALL_RESOURCES=()
+RESOURCE_CHOICES=()
 ACTION="install"
 ACTION_EXPLICIT=false
 
@@ -806,6 +813,216 @@ PLUGINS_CONFIG="$REPO_ROOT/configs/plugins.toml"
 #   parse-manifests.py plugins --file $PLUGINS_CONFIG  → name\trepo\tmethod\tmarketplace\tcommand\tnote
 MANIFEST_PARSER="$REPO_ROOT/script/parse-manifests.py"
 
+# 统一资源计划层：discover → normalize → conflict → select → validate → execute。
+# 本地 skill 只发现 repo_root/skills/<name>/SKILL.md；remote 从清单 + wildcard inventory 展开。
+RESOURCE_PLANNER="$REPO_ROOT/script/resource-plan.py"
+
+# 交互读取单行输入；无 TTY 时返回失败（由调用方按非交互规则处理）。
+resource_prompt() {
+    local prompt_text="$1"
+    local reply
+    if [[ "$CI_MODE" == true || "$DRY_RUN" == true || ! -t 0 ]]; then
+        return 1
+    fi
+    printf '%s' "$prompt_text"
+    IFS= read -r reply || return 1
+    [[ -n "$reply" ]] || return 1
+    printf '%s\n' "$reply"
+}
+
+# 统一发现：对一批资源请求（kind:spec）生成计划 JSON。
+# 输出全局变量 _RESOURCE_PLAN（JSON）。有冲突未决时返回 2。
+resource_plan_for() {
+    local -a reqs=("$@")
+    local -a argv=("$RESOURCE_PLANNER" --repo-root "$REPO_ROOT" --format json)
+    local req
+    for req in "${reqs[@]}"; do
+        [[ -n "$req" ]] && argv+=(--request "$req")
+    done
+    local choice
+    for choice in "${RESOURCE_CHOICES[@]:-}"; do
+        [[ -n "$choice" ]] && argv+=(--choose "$choice")
+    done
+    _RESOURCE_PLAN="$(python3 "${argv[@]}")" || {
+        local rc=$?
+        err "资源计划失败 (exit $rc)"
+        [[ "$rc" == 2 ]] && warn "存在未解决的资源冲突；请用 --choose <kind>:<id>=local|remote|skip 指定来源"
+        return "$rc"
+    }
+    return 0
+}
+
+# 对未决冲突逐项交互选择 local/remote/skip。
+# 交互成功返回 0（_RESOURCE_PLAN 更新）；非交互/放弃返回 2。
+# $1=plan JSON；剩余参数为原始资源请求（re-issue 计划用）。
+resource_resolve_conflicts() {
+    local plan="$1"
+    shift
+    local -a reqs=("$@")
+    local count
+    count="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])["conflicts"]))' "$plan")" || {
+        err "无法解析资源计划"; return 2
+    }
+    [[ "$count" -gt 0 ]] || return 0
+    warn "发现 $count 个资源冲突（同一资源同时存在本地与远程候选）"
+    if [[ "$CI_MODE" == true || "$DRY_RUN" == true || ! -t 0 ]]; then
+        python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+for c in d["conflicts"]:
+    print(f"[冲突] {c[\"kind\"]}:{c[\"id\"]}")
+    for r in c["resources"]:
+        where = r["path"] or r["repo"] or "?"
+        print(f"  {r[\"source\"]}\t{where}")' "$plan"
+        err "非交互环境存在未决冲突；必须用 --choose <kind>:<id>=local|remote|skip 逐项解决"
+        return 2
+    fi
+    local -a choices=()
+    while IFS= read -r cid; do
+        [[ -n "$cid" ]] || continue
+        local kind="${cid%%:*}" id="${cid#*:}"
+        local reply
+        reply="$(resource_prompt "选择 ${kind}:${id} 的来源 (local/remote/skip) [skip]: ")" || {
+            err "无法读取选择，放弃"; return 2
+        }
+        case "$reply" in
+            local|remote|skip) choices+=("--choose=${kind}:${id}=${reply}") ;;
+            *) warn "无效选择 '$reply'，已跳过 ${kind}:${id}" ;;
+        esac
+    done <<< "$(python3 -c 'import json,sys
+for c in json.loads(sys.argv[1])["conflicts"]:
+    print(c["kind"]+":"+c["id"])' "$plan")"
+    if [[ ${#choices[@]} -gt 0 ]]; then
+        local -a args=("$RESOURCE_PLANNER" --repo-root "$REPO_ROOT" --format json)
+        local req
+        for req in "${reqs[@]}"; do
+            [[ -n "$req" ]] && args+=(--request "$req")
+        done
+        local ch
+        for ch in "${choices[@]}"; do
+            args+=("$ch")
+        done
+        _RESOURCE_PLAN="$(python3 "${args[@]}")" || {
+            err "选择后资源计划仍失败 (exit $?)"; return 2
+        }
+    fi
+    return 0
+}
+
+# 校验已解决的计划：无未决冲突才可执行，返回 0/2。
+resource_validate_plan() {
+    local plan="$1"
+    python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+if d["conflicts"]:
+    print("仍有未决冲突，不可执行", file=sys.stderr)
+    sys.exit(2)
+for p in d["plan"]:
+    if p["action"] == "skip":
+        print("跳过 %s:%s" % (p["kind"], p["id"]))' "$plan" || return 2
+    return 0
+}
+
+# 计划中 selected 的 remote 项 exec 键（source alias / plugin 名），每行 kind\tname。
+plan_selected_remote() {
+    local plan="$1"
+    python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+for s in d["selected"]:
+    if s["source"]=="remote":
+        print(s["kind"]+"\t"+s["name"])' "$plan"
+}
+
+# 计划中 selected 的 local skill 目录名（= canonical id）。
+plan_selected_local_skills() {
+    local plan="$1"
+    python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+for s in d["selected"]:
+    if s["kind"]=="skill" and s["source"]=="local":
+        print(s["id"])' "$plan"
+}
+
+# 统一更新入口：对 UPDATE_RESOURCES 生成计划并执行。
+resource_update() {
+    [[ ${#UPDATE_RESOURCES[@]} -gt 0 ]] || return 0
+    phase "Phase 0: 更新指定资源"
+    local rc=0
+    resource_plan_for "${UPDATE_RESOURCES[@]}" || {
+        rc=$?
+        if [[ "$rc" == 2 ]]; then
+            resource_resolve_conflicts "$_RESOURCE_PLAN" "${UPDATE_RESOURCES[@]}" || return 2
+        else
+            return "$rc"
+        fi
+    }
+    resource_validate_plan "$_RESOURCE_PLAN" || return 2
+    local kind name
+    while IFS=$'\t' read -r kind name; do
+        [[ -n "$kind" ]] || continue
+        case "$kind" in
+            skill) update_skill "$name" || rc=1 ;;
+            plugin) update_plugin "$name" || rc=1 ;;
+        esac
+    done <<< "$(plan_selected_remote "$_RESOURCE_PLAN")"
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        update_local_skill "$name" || rc=1
+    done <<< "$(plan_selected_local_skills "$_RESOURCE_PLAN")"
+    if [[ "$rc" == 0 ]]; then
+        log "指定资源更新完成"
+    else
+        err "部分资源更新失败，请检查上方日志"
+    fi
+    return "$rc"
+}
+
+# 统一卸载入口：对 UNINSTALL_RESOURCES 生成计划并执行。
+# local skill 卸载只移除 ~/.claude/skills 下的受控软链接，不触碰仓库源文件。
+resource_uninstall() {
+    [[ ${#UNINSTALL_RESOURCES[@]} -gt 0 ]] || return 0
+    local rc=0
+    resource_plan_for "${UNINSTALL_RESOURCES[@]}" || {
+        rc=$?
+        if [[ "$rc" == 2 ]]; then
+            resource_resolve_conflicts "$_RESOURCE_PLAN" "${UNINSTALL_RESOURCES[@]}" || return 2
+        else
+            return "$rc"
+        fi
+    }
+    resource_validate_plan "$_RESOURCE_PLAN" || return 2
+    local kind name
+    while IFS=$'\t' read -r kind name; do
+        [[ -n "$kind" ]] || continue
+        case "$kind" in
+            skill) uninstall_skill "$name" || rc=1 ;;
+            plugin) uninstall_plugin "$name" || rc=1 ;;
+        esac
+    done <<< "$(plan_selected_remote "$_RESOURCE_PLAN")"
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        uninstall_local_skill "$name" || rc=1
+    done <<< "$(plan_selected_local_skills "$_RESOURCE_PLAN")"
+    if [[ "$rc" == 0 ]]; then
+        log "指定资源卸载完成"
+    else
+        err "部分资源卸载失败，请检查上方日志"
+    fi
+    return "$rc"
+}
+
+# 卸载仓库自有 skill：只移除 CLAUDE_HOME/skills/<name> 下指向本仓库的软链接。
+uninstall_local_skill() {
+    local name="${1:?缺少本地 skill 名}"
+    local src="$REPO_ROOT/skills/$name"
+    local dst="$CLAUDE_HOME/skills/$name"
+    if [[ ! -L "$dst" && ! -e "$dst" ]]; then
+        warn "本地 skill 未安装，跳过: $name"
+        return 0
+    fi
+    remove_symlink_if_ours "$dst" "repo skill '$name'" "$src"
+    log "本地 skill '$name' 已卸载"
+}
+
 parse_skills_toml() {
     local file="$1"
     [[ -f "$file" ]] || return 0
@@ -1005,6 +1222,16 @@ update_all_plugins() {
 }
 
 # 更新单个 skill（npx skills update <name>）
+update_local_skill() {
+    local name="${1:?缺少本地 skill 名}"
+    local src="$REPO_ROOT/skills/$name"
+    local dst="$CLAUDE_HOME/skills/$name"
+    [[ -f "$src/SKILL.md" ]] || { err "仓库自有 skill 不存在或缺少 SKILL.md: $name"; return 1; }
+    info "更新仓库自有 skill: $name"
+    ensure_symlink "$src" "$dst" "repo skill '$name'"
+    log "仓库自有 skill '$name' 已更新"
+}
+
 update_skill() {
     local name="${1:?缺少 skill 名}"
     [[ -f "$SKILLS_CONFIG" ]] || { err "无 skills.toml，无法更新 skill '$name'"; return 1; }
@@ -2048,6 +2275,16 @@ while [[ $# -gt 0 ]]; do
             manifest_has_plugin "$_uninstall_target" || { err "--uninstall-plugin 参数无效: $_uninstall_target (不在 plugins.toml 中)"; exit 1; }
             UNINSTALL_TYPED_LIST+=("plugin:$_uninstall_target")
             shift ;;
+        --uninstall-resource)
+            _uninstall_resource="${2:-}"
+            [[ -n "$_uninstall_resource" ]] || { err "--uninstall-resource 需要参数"; exit 1; }
+            UNINSTALL_RESOURCES+=("$_uninstall_resource")
+            shift 2 ;;
+        --uninstall-resource=*)
+            _uninstall_resource="${1#*=}"
+            [[ -n "$_uninstall_resource" ]] || { err "--uninstall-resource 需要参数"; exit 1; }
+            UNINSTALL_RESOURCES+=("$_uninstall_resource")
+            shift ;;
         --update-skill)
             UPDATE_SKILL="${2:-}"
             [[ -n "$UPDATE_SKILL" ]] || { err "--update-skill 需要参数"; exit 1; }
@@ -2059,6 +2296,18 @@ while [[ $# -gt 0 ]]; do
             [[ "$UPDATE_SKILL" =~ ^(core|all)$ ]] || manifest_has_skill "$UPDATE_SKILL" || { err "--update-skill 参数无效: $UPDATE_SKILL (有效值: core, all, 或 skills.toml 中的 skill 名)"; exit 1; }
             UPDATE_SKILLS+=("$UPDATE_SKILL")
             shift ;;
+        --update-local-skill)
+            UPDATE_LOCAL_SKILL="${2:-}"
+            [[ -n "$UPDATE_LOCAL_SKILL" ]] || { err "--update-local-skill 需要参数"; exit 1; }
+            [[ -f "$REPO_ROOT/skills/$UPDATE_LOCAL_SKILL/SKILL.md" ]] || { err "--update-local-skill 参数无效: $UPDATE_LOCAL_SKILL (仓库 skills 中不存在)"; exit 1; }
+            UPDATE_RESOURCES+=("skill:$UPDATE_LOCAL_SKILL")
+            shift 2 ;;
+        --update-local-skill=*)
+            UPDATE_LOCAL_SKILL="${1#*=}"
+            [[ -n "$UPDATE_LOCAL_SKILL" ]] || { err "--update-local-skill 需要参数"; exit 1; }
+            [[ -f "$REPO_ROOT/skills/$UPDATE_LOCAL_SKILL/SKILL.md" ]] || { err "--update-local-skill 参数无效: $UPDATE_LOCAL_SKILL (仓库 skills 中不存在)"; exit 1; }
+            UPDATE_RESOURCES+=("skill:$UPDATE_LOCAL_SKILL")
+            shift ;;
         --update-plugin)
             UPDATE_PLUGIN="${2:-}"
             [[ -n "$UPDATE_PLUGIN" ]] || { err "--update-plugin 需要参数"; exit 1; }
@@ -2069,6 +2318,26 @@ while [[ $# -gt 0 ]]; do
             UPDATE_PLUGIN="${1#*=}"
             [[ "$UPDATE_PLUGIN" =~ ^(core|all)$ ]] || manifest_has_plugin "$UPDATE_PLUGIN" || { err "--update-plugin 参数无效: $UPDATE_PLUGIN (有效值: core, all, 或 plugins.toml 中的 plugin 名)"; exit 1; }
             UPDATE_PLUGINS+=("$UPDATE_PLUGIN")
+            shift ;;
+        --update-resource)
+            UPDATE_RESOURCE="${2:-}"
+            [[ -n "$UPDATE_RESOURCE" ]] || { err "--update-resource 需要参数"; exit 1; }
+            UPDATE_RESOURCES+=("$UPDATE_RESOURCE")
+            shift 2 ;;
+        --update-resource=*)
+            UPDATE_RESOURCE="${1#*=}"
+            [[ -n "$UPDATE_RESOURCE" ]] || { err "--update-resource 需要参数"; exit 1; }
+            UPDATE_RESOURCES+=("$UPDATE_RESOURCE")
+            shift ;;
+        --choose)
+            CHOICE="${2:-}"
+            [[ -n "$CHOICE" ]] || { err "--choose 需要参数"; exit 1; }
+            RESOURCE_CHOICES+=("$CHOICE")
+            shift 2 ;;
+        --choose=*)
+            CHOICE="${1#*=}"
+            [[ -n "$CHOICE" ]] || { err "--choose 需要参数"; exit 1; }
+            RESOURCE_CHOICES+=("$CHOICE")
             shift ;;
         --update-all)
             UPDATE_ALL=true
@@ -2090,9 +2359,13 @@ while [[ $# -gt 0 ]]; do
             echo "  --uninstall T   卸载单个/多个目标 (core|all|清单中的 skill/plugin 名，可重复出现，列表并发卸载)"
             echo "  --uninstall-skill N  卸载指定 skill（typed，规避同名 plugin）"
             echo "  --uninstall-plugin N 卸载指定 plugin（typed，规避同名 skill）"
+            echo "  --uninstall-resource kind:spec  按统一资源 id 卸载（skill:<名> / plugin:<名>，冲突时需 --choose）"
             echo "  --update-all    更新全部外部 skills + plugins (npx skills update + claude plugin update)"
-            echo "  --update-skill N 更新指定 skill（可重复；core/all=全部）"
+            echo "  --update-skill N 更新指定外部 skill（可重复；core/all=全部）"
+            echo "  --update-local-skill N 更新指定仓库自有 skill（可重复；创建/刷新 ~/.claude/skills 下的软链接）"
             echo "  --update-plugin N 更新指定 plugin（可重复；core/all=全部）"
+            echo "  --update-resource kind:spec  按统一资源 id 更新（skill:<名> / plugin:<名>，冲突时需 --choose）"
+            echo "  --choose kind:id=local|remote|skip  解决同名 local/remote 资源冲突（可重复）"
             echo "  --tui           启动交互式 TUI 安装器（需先构建 tools/installer-tui）"
             exit 0 ;;
         install|update|reinstall|core|uninstall|verify|status|doctor)
@@ -2114,8 +2387,8 @@ fi
 if [[ "$SKIP_PLUGINS" == true && ${#SELECTED_PLUGINS[@]} -gt 0 ]]; then
     err "--skip-plugins 与 --plugin 不能同时使用"; exit 1
 fi
-if [[ "$UPDATE_ALL" == true && (${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0) ]]; then
-    err "--update-all 与 --update-skill/--update-plugin 不能同时使用"; exit 1
+if [[ "$UPDATE_ALL" == true && (${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_LOCAL_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0 || ${#UPDATE_RESOURCES[@]} -gt 0) ]]; then
+    err "--update-all 与单项 skill/plugin 更新不能同时使用"; exit 1
 fi
 
 main() {
@@ -2133,6 +2406,12 @@ main() {
         echo ""
         log "卸载完成 (${uninstall_targets[*]})"
         [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 未实际修改文件"
+        return 0
+    fi
+    # 统一资源卸载入口：走同一 discover/conflict/select 流程。
+    if [[ ${#UNINSTALL_RESOURCES[@]} -gt 0 ]]; then
+        resource_uninstall || return $?
+        echo ""
         return 0
     fi
 
@@ -2156,15 +2435,24 @@ main() {
         fi
         return "$update_failed"
     fi
-    if [[ ${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0 ]]; then
+    # 统一资源更新入口（含旧参数经兼容转换进入的 UPDATE_RESOURCES）。
+    if [[ ${#UPDATE_RESOURCES[@]} -gt 0 ]]; then
+        resource_update || return $?
+        echo ""
+        return 0
+    fi
+    if [[ ${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_LOCAL_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0 ]]; then
         phase "Phase 0: 更新指定项"
-        local s p
+        local s ls p
         for s in "${UPDATE_SKILLS[@]}"; do
             if [[ "$s" == core || "$s" == all ]]; then
                 update_all_skills || update_failed=1
             else
                 update_skill "$s" || update_failed=1
             fi
+        done
+        for ls in "${UPDATE_LOCAL_SKILLS[@]}"; do
+            update_local_skill "$ls" || update_failed=1
         done
         for p in "${UPDATE_PLUGINS[@]}"; do
             if [[ "$p" == core || "$p" == all ]]; then
@@ -2175,7 +2463,7 @@ main() {
         done
         echo ""
         if [[ "$update_failed" == 0 ]]; then
-            log "指定项更新完成 (skills: ${UPDATE_SKILLS[*]:-无} / plugins: ${UPDATE_PLUGINS[*]:-无})"
+            log "指定项更新完成 (外部 skills: ${UPDATE_SKILLS[*]:-无} / 仓库 skills: ${UPDATE_LOCAL_SKILLS[*]:-无} / plugins: ${UPDATE_PLUGINS[*]:-无})"
         else
             err "部分指定项更新失败，请检查上方日志"
         fi
