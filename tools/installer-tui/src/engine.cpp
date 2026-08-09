@@ -14,10 +14,13 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <regex>
+#include <set>
 
 namespace installer {
 namespace {
@@ -28,7 +31,7 @@ bool HasControlChar(const std::string& s) {
          s.find('\r') != std::string::npos;
 }
 
-// 按 tab 切 6 列；列数不足视为坏行
+// 按 tab 切列；列数校验由调用方按协议（6 列清单 / 9 列资源计划）负责
 bool SplitTsv(const std::string& line, std::vector<std::string>* cols) {
   cols->clear();
   std::string cur;
@@ -41,7 +44,7 @@ bool SplitTsv(const std::string& line, std::vector<std::string>* cols) {
     }
   }
   cols->push_back(cur);
-  return cols->size() == 6;
+  return !cols->empty();
 }
 
 // 运行一个子进程，stdout/stderr 合并到同一管道，逐行回调 on_output，返回退出码。
@@ -176,6 +179,91 @@ int RunProcess(const std::vector<std::string>& argv,
 
 }  // namespace
 
+bool LoadResourcePlan(const std::filesystem::path& repo_root, ResourcePlan* out,
+                      std::string* error) {
+  const auto planner = repo_root / "script" / "resource-plan.py";
+  std::vector<std::string> argv = {"python3", planner.string(),
+                                   "--repo-root", repo_root.string(),
+                                   "--format", "tsv"};
+  CollectedOutput co;
+  std::string perr;
+  // 计划层对未决冲突返回 2（协议本身有效），此时仍应读取 TSV 记录。
+  int rc = RunProcess(argv, repo_root,
+                      [&co](const std::string& l) { co.OnLine(l); }, &perr);
+  if (rc < 0) {
+    if (error) *error = "resource-plan.py 无法启动: " + perr;
+    return false;
+  }
+  if (rc != 0 && rc != 2) {
+    if (error) *error = "resource-plan.py exited " + std::to_string(rc) + ": " + perr;
+    return false;
+  }
+
+  out->resources.clear();
+  out->plan.clear();
+  out->conflicts.clear();
+  // 冲突的 (kind,id) 其每个候选资源行都标 conflict=1，这里按 identity 去重，
+  // 否则同一个冲突会重复出现（重复的 --choose、重复的 UI 冲突块）。
+  std::set<std::string> seen_conflicts;
+  std::istringstream iss(co.text);
+  std::string line;
+  while (std::getline(iss, line)) {
+    if (line.empty()) continue;
+    std::vector<std::string> cols;
+    if (!SplitTsv(line, &cols) || cols.size() != 9) {
+      if (error) *error = "bad resource-plan TSV row (need 9 columns): " + line;
+      return false;
+    }
+    ResourceEntry entry;
+    entry.kind = cols[0];
+    entry.id = cols[1];
+    entry.source = cols[2];
+    entry.name = cols[3];
+    entry.repo = cols[4];
+    entry.marketplace = cols[5];
+    entry.path = cols[6];
+    const std::string& action = cols[7];
+    const bool conflicted = cols[8] == "1";
+    if (HasControlChar(entry.kind) || HasControlChar(entry.id) ||
+        HasControlChar(entry.source)) {
+      if (error) *error = "control char in resource-plan TSV identity";
+      return false;
+    }
+    if (conflicted) {
+      const std::string key = entry.kind + ":" + entry.id;
+      if (seen_conflicts.insert(key).second) {
+        out->conflicts.push_back({entry.kind, entry.id});
+      }
+    } else if (!action.empty()) {
+      out->plan.push_back({entry.kind, entry.id, action});
+    }
+    out->resources.push_back(std::move(entry));
+  }
+  return true;
+}
+
+int PrintResourcePlan(const std::filesystem::path& repo_root, std::string* error) {
+  const auto planner = repo_root / "script" / "resource-plan.py";
+  std::vector<std::string> argv = {"python3", planner.string(),
+                                   "--repo-root", repo_root.string(),
+                                   "--format", "tsv"};
+  std::string perr;
+  // 逐行把计划记录原样透传回 stdout（机器可读记录）；计划层对未决冲突返回 2，
+  // 仍须完整透传记录。stderr 由计划层自行输出。
+  int rc = RunProcess(argv, repo_root,
+                      [](const std::string& l) {
+                        const std::string out = l + "\n";
+                        const ssize_t unused = write(STDOUT_FILENO, out.data(), out.size());
+                        (void)unused;
+                      },
+                      &perr);
+  if (rc < 0) {
+    if (error) *error = "resource-plan.py 无法启动: " + perr;
+    return -1;
+  }
+  return rc;
+}
+
 bool LoadManifests(const std::filesystem::path& repo_root, Manifest* out,
                    std::string* error) {
   auto load_kind = [&](const char* kind,
@@ -205,7 +293,7 @@ bool LoadManifests(const std::filesystem::path& repo_root, Manifest* out,
     while (std::getline(iss, line)) {
       if (line.empty()) continue;  // 合法空清单
       std::vector<std::string> cols;
-      if (!SplitTsv(line, &cols)) {
+      if (!SplitTsv(line, &cols) || cols.size() != 6) {
         if (error) *error = "bad " + std::string(kind) +
                             " TSV row (need 6 columns): " + line;
         return false;

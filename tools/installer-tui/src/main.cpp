@@ -120,7 +120,17 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  // 解析清单（skills + plugins）
+  // 统一资源计划：CLI/TUI 共享同一发现/冲突/选择语义（resource-plan.py）
+  installer::ResourcePlan plan;
+  {
+    std::string err;
+    if (!installer::LoadResourcePlan(repo_root, &plan, &err)) {
+      std::fprintf(stderr, "installer-tui: 加载资源计划失败: %s\n", err.c_str());
+      return 2;
+    }
+  }
+
+  // 解析清单（skills + plugins）——仍用于 update/uninstall 的 typed 执行匹配
   installer::Manifest manifest;
   {
     std::string err;
@@ -130,11 +140,16 @@ int main(int argc, char** argv) {
     }
   }
 
-  // --print-selection：纯打印模式（无 UI），用于脚本/测试。无勾选 = all。
+  // --print-selection：纯打印模式（无 UI），用于脚本/测试。
+  // 输出与 CLI 相同的统一资源计划 TSV（resource-plan.py --format tsv）。
   if (print_selection) {
-    std::string record = "all";
-    std::fprintf(stdout, "install\t%s\n", record.c_str());
-    return 0;
+    std::string err;
+    const int rc = installer::PrintResourcePlan(repo_root, &err);
+    if (rc < 0) {
+      std::fprintf(stderr, "installer-tui: --print-selection 失败: %s\n", err.c_str());
+      return 2;
+    }
+    return rc;  // 计划层退出码：0=无冲突，2=有未决冲突
   }
 
   // stdout/stderr 契约：UI 全落 stderr；机器可读选择记录写原始 stdout dup。
@@ -150,7 +165,7 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  int rc = installer::RunUi(repo_root, manifest, selection_fd);
+  int rc = installer::RunUi(repo_root, manifest, plan, selection_fd);
   close(selection_fd);
   return rc;
 }

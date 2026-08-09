@@ -32,6 +32,45 @@ struct Manifest {
   std::vector<PluginEntry> plugins;
 };
 
+struct ResourceEntry {
+  std::string kind;
+  std::string id;
+  std::string source;
+  std::string name;
+  std::string repo;
+  std::string marketplace;
+  std::string path;
+};
+
+struct ResourceChoice {
+  std::string kind;
+  std::string id;
+  std::string action;
+};
+
+struct ResourceConflict {
+  std::string kind;
+  std::string id;
+};
+
+struct ResourcePlan {
+  std::vector<ResourceEntry> resources;
+  std::vector<ResourceChoice> plan;
+  std::vector<ResourceConflict> conflicts;
+};
+
+// 加载统一资源计划（resource-plan.py --format tsv 的 9 列 TSV）。
+// 每个候选资源一行；conflict=1 表示该 (kind,id) 有未决冲突（action 为空），
+// TUI 必须让用户逐项选择 local/remote/skip。冲突存在时该函数仍成功返回
+// （conflicts 非空），由 UI 决定如何呈现；协议破坏（列数不足/非 6 列）才失败。
+bool LoadResourcePlan(const std::filesystem::path& repo_root, ResourcePlan* out,
+                      std::string* error);
+
+// 在 stdout 上原样透传 resource-plan.py --format tsv 的机器可读记录
+// （--print-selection 用）。返回计划层退出码（0=无冲突，2=有未决冲突），
+// 启动失败返回 -1 并填 error。
+int PrintResourcePlan(const std::filesystem::path& repo_root, std::string* error);
+
 // 执行 setup.sh 子进程时的输出回调（逐行）
 using OutputCallback = std::function<void(const std::string&)>;
 

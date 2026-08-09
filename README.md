@@ -110,8 +110,12 @@ ls ~/.claude/agents/ ~/.claude/commands/
 # 更新全部外部 skills + plugins
 ./setup.sh --update-all
 
-# 只更新一个/多个指定 skill（可重复）
+# 只更新一个/多个指定外部 skill（可重复）
 ./setup.sh --update-skill oh-my-claudecode --update-skill ponytail
+
+# 更新仓库自有 skill：创建/刷新 ~/.claude/skills 下的软链接（可重复）
+./setup.sh --update-local-skill evidence-driven-analysis \
+  --update-local-skill three-tier-orchestration
 
 # 只更新一个/多个指定 plugin（可重复）
 ./setup.sh --update-plugin code-review
@@ -124,7 +128,7 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ./setup.sh --update-plugin all
 ```
 
-- skill 走 `npx skills update`，plugin 走 `claude plugin update`
+- 外部 skill 走 `npx skills update`，仓库自有 skill 走 `--update-local-skill` 刷新软链接，plugin 走 `claude plugin update`
 - 任一项失败，最终退出码非零（失败聚合，不会因后续项成功而覆盖）
 - `--update-all` 与 `--update-skill`/`--update-plugin` 互斥，不能同时用
 
@@ -233,20 +237,27 @@ cmake --build build/installer-tui
 build/installer-tui/installer-tui --repo-root ~/claude-config
 ```
 
-### 三个页面
+### 统一资源语义
 
-TUI 与 CLI 对应同一套 skills/plugin 清单，每页都按 **skill** / **plugin** 两类区分：
+TUI 与 CLI 共享同一套资源模型（`script/resource-plan.py`）：资源按 **identity**（`skill:<真实名>` / `plugin:<名>@<marketplace>`）统一管理，不区分「本地 skill / 外部 skill / plugin」入口。本地候选来自仓库 `skills/`，远程候选来自 `configs/` 清单；**只有当同一 identity 同时存在 local 与 remote 候选（冲突）时**才需要用户选择来源，普通唯一资源自动处理，绝不静默默认来源。
+
+### 四个页面
 
 | 页 | 功能 |
 |----|------|
-| **1 Install** | 左侧列勾选 skills，右侧列勾选 plugins。全不勾选 = 全量安装所有 skills + plugins；只勾部分则只装勾选的，未选类别自动跳过（对应 CLI `--skip-skills`/`--skip-plugins`） |
-| **2 Update** | 单选框：`全部外部 skills + plugins`（对应 `--update-all`）/ `选中的项目`。选中的项目复用 Install 页的勾选状态，分别生成 `--update-skill`/`--update-plugin`（对应 CLI 的 typed 更新） |
-| **3 Uninstall** | 单选框：`完全卸载 (core + skills + plugins)`（对应 `--uninstall all`）/ `仅 core`（对应 `--uninstall core`）/ `选中的项目`（对应 typed `--uninstall-skill`/`--uninstall-plugin`），下方按 `[skill]` / `[plugin]` 标注列出可勾选项 |
+| **1 Install** | 统一资源分列勾选（本地 skills / 外部 skills / plugins）。全不勾选 = 全量安装；只勾部分则只装勾选的，未选类别自动跳过（对应 CLI `--skip-skills`/`--skip-plugins`）。页面顶部有冲突时显示冲突区块 |
+| **2 Update** | 单选框：`全部外部 skills + plugins`（对应 `--update-all`）/ `选中的项目`（复用 Install 页勾选，本地 skill 走 symlink 同步，冲突走统一 resolver） |
+| **3 Uninstall** | 单选框：`完全卸载`（对应 `--uninstall all`）/ `仅 core` / `选中的项目`（本地 skill 卸载只删受控软链接，保留仓库源；冲突资源只能勾选一个来源） |
+| **4 诊断** | 单选框：`verify` / `status` / `doctor`（只读检查，对应 CLI 的 `verify`/`status`/`doctor`，执行 `setup.sh <action>`） |
+
+### 冲突处理
+
+同一 identity 的 local（仓库 `skills/` 路径）与 remote（URL/repository）候选同时存在时，Install 页顶部列出冲突区块，每项显示 **local 路径 vs remote URL/repository**，radiobox 三选一：`local` / `remote` / `skip`。未解决冲突时不能确认执行；非交互环境（`--ci`、无 TTY）未解决冲突返回非零。
 
 ### 操作
 
 ```text
-[1] [2] [3]   切页
+[1] [2] [3] [4]  切页
 [a]           全选 / 取消全选（Install 与 Uninstall 页）
 [↑/↓] / [j/k] 移动高亮
 [Space]       勾选 Checkbox / 确认 Radiobox 当前高亮项
@@ -254,7 +265,7 @@ TUI 与 CLI 对应同一套 skills/plugin 清单，每页都按 **skill** / **pl
 [q]           退出
 ```
 
-> 注意：Radiobox（Update 页、Uninstall 页的模式选择）用方向键只移动高亮，**需再按空格**才会真正选中该项，然后按 `e` → `Enter` 确认。
+> 注意：Radiobox（Update 页、Uninstall 页、诊断页的模式选择）用方向键只移动高亮，**需再按空格**才会真正选中该项，然后按 `e` → `Enter` 确认。
 
 ### 执行与输出契约
 
@@ -272,10 +283,13 @@ update	skill:context-mode
 uninstall	all
 uninstall	core
 uninstall	skill:context-mode	plugin:superpowers
+verify	all
+status	all
+doctor	all
 ```
 
 - TUI 的 UI 全部输出到 **stderr**，stdout 只保留机器可读记录，方便脚本消费
-- `--print-selection` 提供无 UI 的纯打印模式：`build/installer-tui/installer-tui --print-selection` 直接输出 `install\tall` 供脚本/测试使用
+- `--print-selection` 提供无 UI 的纯打印模式：`build/installer-tui/installer-tui --print-selection` 直接输出统一资源计划的 9 列 TSV 记录（与 `resource-plan.py --format tsv` 一致），无冲突 exit 0、有未决冲突 exit 2，供脚本/测试使用
 - 无 TTY（stdin 非终端）时：有 `--help`/`--print-selection` 则正常处理，否则提示并退出 2，不会阻塞挂起
 
 ## 清单配置
