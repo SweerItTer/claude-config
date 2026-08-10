@@ -15,6 +15,7 @@ Thumbs.db
 *:Zone.Identifier
 .claude/
 openspec/
+.omc/
 external/
 # 统一资源计划层（script/resource-plan.py）是核心交付物，必须入库；
 # 只忽略运行时/临时产物，不再用宽松的 *plan* glob 误伤合法脚本。
@@ -33,7 +34,7 @@ plan.log
 # Cache
 cache/
 
-# Python bytecode (script/test-manifest-parsing.sh 用 py_compile 校验)
+# Python bytecode (tests/test-manifest-parsing.sh 用 py_compile 校验)
 __pycache__/
 *.pyc
 
