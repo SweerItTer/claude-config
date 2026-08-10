@@ -7,10 +7,6 @@ config/claude/settings.json
 # Generated/runtime artifacts excluded from portable config ownership
 /package.json
 /package-lock.json
-/config/omc/wiki/log.md
-/config/omc/wiki/session-log-*.md
-/config/omc/wiki/index.md
-/config/omc/wiki/environment.md
 /claude/AGENTS.md
 
 # OS files

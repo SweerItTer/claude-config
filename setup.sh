@@ -1347,7 +1347,6 @@ verify_repository_cleanliness() {
     local ignored_paths=(
         "package.json"
         "package-lock.json"
-        "config/omc/wiki/log.md"
         "claude/AGENTS.md"
     )
 
@@ -1368,21 +1367,6 @@ verify_repository_cleanliness() {
             failed=1
         fi
     done
-
-    local session_log_probe="config/omc/wiki/session-log-setup-smoke.md"
-    if git -C "$REPO_ROOT" check-ignore -q -- "$session_log_probe"; then
-        pass "已忽略 OMC session-log 模式"
-    else
-        err "缺少 OMC session-log 忽略规则"
-        failed=1
-    fi
-
-    if git -C "$REPO_ROOT" ls-files 'config/omc/wiki/session-log-*.md' | grep -q .; then
-        err "仍有 OMC session-log 文件被 git 跟踪"
-        failed=1
-    else
-        pass "未跟踪 OMC session-log 文件"
-    fi
 
     [[ $failed -eq 0 ]]
 }
