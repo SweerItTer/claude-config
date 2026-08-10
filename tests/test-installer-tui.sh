@@ -11,6 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# tests/ 位于仓库根下，上移一级即仓库根
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BIN="$REPO_ROOT/build/installer-tui/installer-tui"
 
@@ -67,17 +68,23 @@ set -e
 [[ "$missing_root_rc" -ne 0 ]] || fail "--repo-root 缺值应失败"
 pass "未知参数与 --repo-root 缺值失败"
 
-# ---- 4) 真实清单解析：3 skills / 8 plugins（走 parser + LoadManifests）----
-skills_count="$(python3 "$REPO_ROOT/script/parse-manifests.py" skills --file "$REPO_ROOT/configs/skills.toml" | awk 'NF { count++ } END { print count + 0 }')"
-plugins_count="$(python3 "$REPO_ROOT/script/parse-manifests.py" plugins --file "$REPO_ROOT/configs/plugins.toml" | awk 'NF { count++ } END { print count + 0 }')"
-[[ "$skills_count" -eq 3 ]] || fail "skills parser 应输出 3 行，实际 $skills_count"
-[[ "$plugins_count" -eq 8 ]] || fail "plugins parser 应输出 8 行，实际 $plugins_count"
+# ---- 4) 真实清单解析：外部 skills + plugins（走 parser + LoadManifests）----
+# 断言结构不变量而非硬编码数量：skills.toml 至少含 grilling/grill-me，
+# plugins.toml 至少含 claude-plugin 与 npx 两类；TUI 应能完整解析真实清单。
+skills_out="$(python3 "$REPO_ROOT/script/parse-manifests.py" skills --file "$REPO_ROOT/configs/skills.toml")"
+plugins_out="$(python3 "$REPO_ROOT/script/parse-manifests.py" plugins --file "$REPO_ROOT/configs/plugins.toml")"
+[[ "$(awk 'NF { count++ } END { print count + 0 }' <<< "$skills_out")" -ge 2 ]] \
+    || fail "skills parser 应至少输出 2 行（grilling/grill-me），实际: $skills_out"
+[[ "$(awk 'NF { count++ } END { print count + 0 }' <<< "$plugins_out")" -ge 10 ]] \
+    || fail "plugins parser 应至少输出 10 行"
+[[ "$plugins_out" == *$'CodeGraph\t'* && "$plugins_out" == *$'OpenSpec\t'* ]] \
+    || fail "plugins parser 应含 CodeGraph/OpenSpec (method=npx)"
 set +e
 timeout 5 "$BIN" --repo-root "$REPO_ROOT" --print-selection >/dev/null 2>/tmp/tui-manifest.err
 rc=$?
 set -e
 [[ "$rc" -eq 0 ]] || { cat /tmp/tui-manifest.err >&2; fail "真实清单解析失败 (exit $rc)"; }
-pass "真实清单解析成功 (skills=3, plugins=8)"
+pass "真实清单解析成功（结构不变量：≥2 skills, ≥10 plugins）"
 
 # ---- 5) setup.sh --tui fast-path：任意 argv 位置均转发并移除 --tui ----
 for tui_args in \
@@ -99,7 +106,17 @@ fixture="$(mktemp -d)"
 # 在同一个 $fixture 下（cleanup 一并清理），不污染主 fixture 的"无本地 skill"假设。
 CONFLICT_REPO="$fixture/conflict-repo"
 mkdir -p "$CONFLICT_REPO/configs" "$CONFLICT_REPO/script" "$CONFLICT_REPO/skills/oh-my-claudecode"
-cp "$REPO_ROOT/configs/skills.toml" "$REPO_ROOT/configs/plugins.toml" "$CONFLICT_REPO/configs/"
+# 自造 skills.toml：远程声明同名 oh-my-claudecode source，与本地 skills/oh-my-claudecode 冲突。
+# （真实 configs/skills.toml 双源冲突后已空清单，冲突 fixture 用独立清单保持语义。）
+cat >"$CONFLICT_REPO/configs/skills.toml" <<'TOML'
+[[sources]]
+name = "oh-my-claudecode"
+repo = "owner/oh-my-claudecode"
+skill = "*"
+agent = "claude-code"
+scope = "global"
+TOML
+cp "$REPO_ROOT/configs/plugins.toml" "$CONFLICT_REPO/configs/"
 cp "$REPO_ROOT/script/parse-manifests.py" "$REPO_ROOT/script/resource-plan.py" "$CONFLICT_REPO/script/"
 cat >"$CONFLICT_REPO/skills/oh-my-claudecode/SKILL.md" <<'EOF'
 ---
@@ -119,7 +136,17 @@ chmod +x "$CONFLICT_REPO/setup.sh"
 # 用于验证 uninstall 页勾选本地 skill 正确进记录与 argv（不经过冲突块）。
 UNINST_REPO="$fixture/uninst-repo"
 mkdir -p "$UNINST_REPO/configs" "$UNINST_REPO/script" "$UNINST_REPO/skills/foo-local"
-cp "$REPO_ROOT/configs/skills.toml" "$REPO_ROOT/configs/plugins.toml" "$UNINST_REPO/configs/"
+# 自造 skills.toml：远程声明与本地 foo-local 不同名的 remote-skill，确保无冲突
+# （uninstall fixture 的前提是本地 skill 不与清单条目同名）。
+cat >"$UNINST_REPO/configs/skills.toml" <<'TOML'
+[[sources]]
+name = "uninst-src"
+repo = "owner/uninst-repo"
+skill = "remote-skill"
+agent = "claude-code"
+scope = "global"
+TOML
+cp "$REPO_ROOT/configs/plugins.toml" "$UNINST_REPO/configs/"
 cp "$REPO_ROOT/script/parse-manifests.py" "$REPO_ROOT/script/resource-plan.py" "$UNINST_REPO/script/"
 cat >"$UNINST_REPO/skills/foo-local/SKILL.md" <<'EOF'
 ---
@@ -175,13 +202,39 @@ mkdir -p "$E2E_HOME/.claude"
 cleanup() { rm -rf "$fixture"; }
 trap cleanup EXIT
 
-# fixture 仓库：真实 configs/ + script/(parse-manifests.py + resource-plan.py) + mock setup.sh
+# fixture 仓库：自造 configs/skills.toml + 真实 plugins.toml + script/(parse-manifests.py + resource-plan.py) + mock setup.sh
+# 自造 3 个 source，别名即 skill 名（skill="*" 无 inventory 时降级为集合资源，alias 作为 skill 行/argv 名）。
+# 替代真实清单（双源冲突后已空清单）：omc-a/omc-b 供 multi-skill 用例，pony-skill 供 update/uninstall all 的第三 skill。
 mkdir -p "$fixture/repo/configs" "$fixture/repo/script"
-cp "$REPO_ROOT/configs/skills.toml" "$fixture/repo/configs/"
+cat >"$fixture/repo/configs/skills.toml" <<'TOML'
+[[sources]]
+name = "omc-a"
+repo = "owner/omc-repo"
+skill = "*"
+agent = "claude-code"
+scope = "global"
+note = "omc 集合 A"
+
+[[sources]]
+name = "omc-b"
+repo = "owner/omc-repo"
+skill = "*"
+agent = "claude-code"
+scope = "global"
+note = "omc 集合 B"
+
+[[sources]]
+name = "pony-skill"
+repo = "owner/pony-repo"
+skill = "*"
+agent = "claude-code"
+scope = "global"
+note = "ponytail 集合"
+TOML
 cp "$REPO_ROOT/configs/plugins.toml" "$fixture/repo/configs/"
 cp "$REPO_ROOT/script/parse-manifests.py" "$fixture/repo/script/"
 cp "$REPO_ROOT/script/resource-plan.py" "$fixture/repo/script/"
-# fixture 仓库无本地 skills 目录（真实清单全 wildcard → 集合资源，无冲突）
+# fixture 仓库无本地 skills 目录（清单全 wildcard → 集合资源，无冲突）
 
 # mock setup.sh：记录 argv 到 setup-argv.log，退出码可配置
 cat >"$fixture/repo/setup.sh" <<'EOF'
@@ -361,9 +414,9 @@ for _ in {1..100}; do
     sleep 0.1
 done
 [[ -s "$MOCK_LOGFILE" ]] || fail "等待 mock setup.sh argv 超时"
-grep -q '^setup.sh|install --ci --skill oh-my-claudecode --skip-plugins$' "$MOCK_LOGFILE" ||
+grep -q '^setup.sh|install --ci --skill omc-a --skip-plugins$' "$MOCK_LOGFILE" ||
     fail "argv 未按预期: $(argv_line)"
-grep -q $'^install\tskill:oh-my-claudecode$' "$TUI_STDOUT" ||
+grep -q $'^install\tskill:omc-a$' "$TUI_STDOUT" ||
     fail "stdout 机器可读记录缺失"
 screen -S "$session" -X stuff 'q' || fail "无法发送 q"
 for _ in {1..100}; do
@@ -449,7 +502,7 @@ for _ in {1..100}; do
     sleep 0.1
 done
 screen -ls 2>/dev/null | grep -q "\\.${failure_session}[[:space:]]" && fail "exit=7 TUI shell 进程未结束"
-grep -q '^setup.sh|install --ci --skill oh-my-claudecode --skip-plugins$' "$MOCK_LOGFILE" ||
+grep -q '^setup.sh|install --ci --skill omc-a --skip-plugins$' "$MOCK_LOGFILE" ||
     fail "exit=7 argv 未按预期: $(argv_line)"
 screen -S "$failure_session" -X quit >/dev/null 2>&1 || true
 failure_session_created=0
@@ -460,13 +513,13 @@ export MOCK_EXIT=0
 
 # update all：切 Update 页（mode 0=全部，默认），确认
 # 统一资源语义：逐资源 --update-resource（fixture 无本地 skill，外部 skills + plugins 全覆盖）
-run_tui_case update-all 0 "--ci --update-resource skill:oh-my-claudecode --update-resource skill:ponytail --update-resource skill:superpowers --update-resource plugin:claude-code-setup --update-resource plugin:code-review --update-resource plugin:feature-dev --update-resource plugin:skill-creator --update-resource plugin:oh-my-claudecode --update-resource plugin:context-mode --update-resource plugin:ponytail --update-resource plugin:superpowers" \
+run_tui_case update-all 0 "--ci --update-resource skill:omc-a --update-resource skill:omc-b --update-resource skill:pony-skill --update-resource plugin:claude-code-setup --update-resource plugin:code-review --update-resource plugin:feature-dev --update-resource plugin:skill-creator --update-resource plugin:oh-my-claudecode --update-resource plugin:context-mode --update-resource plugin:ponytail --update-resource plugin:superpowers" \
     "update	all" '2' 'e' $'\r'
 
 # update selected：Install 页勾选首个 skill → 切 Update → 下箭头 + 空格选中「选中的项目」
 #（Radiobox 的 ArrowDown 只移高亮，需空格才把 selected 设为高亮项）→ 确认
 # 勾选的外部 skill 走统一 resolver（--update-resource skill:X）
-run_tui_case update-selected 0 "--ci --update-resource skill:oh-my-claudecode" "update	skill:oh-my-claudecode" \
+run_tui_case update-selected 0 "--ci --update-resource skill:omc-a" "update	skill:omc-a" \
     ' ' '2' $'\x1b[B' ' ' 'e' $'\r'
 
 # uninstall all：切 Uninstall 页（mode 0=完全卸载，默认），确认
@@ -477,8 +530,8 @@ run_tui_case uninstall-core 0 "--uninstall core --ci" "uninstall	core" '3' $'\x1
 
 # uninstall selected：切 Uninstall 页，全选（a），下箭头×2 + 空格选中「选中的项目」，确认
 # 统一资源语义：全选后逐资源 --uninstall-resource（fixture 无本地 skill）
-run_tui_case uninstall-selected 0 "--ci --uninstall-resource skill:oh-my-claudecode --uninstall-resource skill:ponytail --uninstall-resource skill:superpowers --uninstall-resource plugin:claude-code-setup --uninstall-resource plugin:code-review --uninstall-resource plugin:feature-dev --uninstall-resource plugin:skill-creator --uninstall-resource plugin:oh-my-claudecode --uninstall-resource plugin:context-mode --uninstall-resource plugin:ponytail --uninstall-resource plugin:superpowers" \
-    "uninstall	skill:oh-my-claudecode" \
+run_tui_case uninstall-selected 0 "--ci --uninstall-resource skill:omc-a --uninstall-resource skill:omc-b --uninstall-resource skill:pony-skill --uninstall-resource plugin:claude-code-setup --uninstall-resource plugin:code-review --uninstall-resource plugin:feature-dev --uninstall-resource plugin:skill-creator --uninstall-resource plugin:oh-my-claudecode --uninstall-resource plugin:context-mode --uninstall-resource plugin:ponytail --uninstall-resource plugin:superpowers" \
+    "uninstall	skill:omc-a" \
     '3' 'a' $'\x1b[B' $'\x1b[B' ' ' 'e' $'\r'
 
 # ---- 10) 冲突资源：GNU screen 三选一（local/remote/skip）与 argv/记录 ----
@@ -596,10 +649,10 @@ run_tui_case diagnose-doctor 0 "doctor --ci" "^doctor" \
 
 # ---- 14) 批量安装：勾选多个 skill 生成逐项 --skill ----
 # Install 页空格勾选第一个 skill → 下箭头 → 空格勾选第二个 → e → 回车。
-# 期望 setup.sh 收到 install --ci --skill oh-my-claudecode --skill ponytail --skip-plugins，
-# stdout 机器记录 install<TAB>skill:oh-my-claudecode<TAB>skill:ponytail。
-run_tui_case install-multi-skill 0 "install --ci --skill oh-my-claudecode --skill ponytail --skip-plugins" \
-    "install	skill:oh-my-claudecode	skill:ponytail" \
+# 期望 setup.sh 收到 install --ci --skill omc-a --skill omc-b --skip-plugins，
+# stdout 机器记录 install<TAB>skill:omc-a<TAB>skill:omc-b。
+run_tui_case install-multi-skill 0 "install --ci --skill omc-a --skill omc-b --skip-plugins" \
+    "install	skill:omc-a	skill:omc-b" \
     ' ' $'\x1b[B' ' ' 'e' $'\r'
 
 # ---- 15) 安装单个 plugin：右箭头跨列勾选首个 plugin ----
@@ -612,18 +665,18 @@ run_tui_case install-single-plugin 0 "install --ci --skip-skills --plugin claude
 
 # ---- 16) 卸载单个外部 skill：选「选中的项目」勾选一项 ----
 # Uninstall 页 ↓↓ 空格选「选中的项目」→ 下箭头进 checks → 空格勾选第一个外部 skill → e → 回车。
-# 期望 setup.sh 收到 --ci --uninstall-resource skill:oh-my-claudecode，
-# stdout 机器记录 uninstall<TAB>skill:oh-my-claudecode。
-run_tui_case uninstall-single-skill 0 "--ci --uninstall-resource skill:oh-my-claudecode" \
-    "uninstall	skill:oh-my-claudecode" \
+# 期望 setup.sh 收到 --ci --uninstall-resource skill:omc-a，
+# stdout 机器记录 uninstall<TAB>skill:omc-a。
+run_tui_case uninstall-single-skill 0 "--ci --uninstall-resource skill:omc-a" \
+    "uninstall	skill:omc-a" \
     '3' $'\x1b[B' $'\x1b[B' ' ' $'\x1b[B' ' ' 'e' $'\r'
 
 # ---- 17) 更新多选：勾选多个 skill 后走统一 resolver 逐项更新 ----
 # Install 页勾选 2 个 skill → 切 Update 页 → ↓ 空格选「选中的项目」→ e → 回车。
-# 期望 setup.sh 收到 --ci --update-resource skill:oh-my-claudecode --update-resource skill:ponytail，
-# stdout 机器记录 update<TAB>skill:oh-my-claudecode<TAB>skill:ponytail。
-run_tui_case update-multi-skill 0 "--ci --update-resource skill:oh-my-claudecode --update-resource skill:ponytail" \
-    "update	skill:oh-my-claudecode	skill:ponytail" \
+# 期望 setup.sh 收到 --ci --update-resource skill:omc-a --update-resource skill:omc-b，
+# stdout 机器记录 update<TAB>skill:omc-a<TAB>skill:omc-b。
+run_tui_case update-multi-skill 0 "--ci --update-resource skill:omc-a --update-resource skill:omc-b" \
+    "update	skill:omc-a	skill:omc-b" \
     ' ' $'\x1b[B' ' ' '2' $'\x1b[B' ' ' 'e' $'\r'
 
 # ---- 18) 真实安装 + claude /context 读取（端到端）----
