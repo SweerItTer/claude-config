@@ -1312,7 +1312,9 @@ ensure_settings_json() {
     rendered_settings="$(render_settings_template "$template")"
     remove_legacy_settings_entries "$target"
 
-    if [[ -f "$target" ]] && [[ "$CI_MODE" != true ]]; then
+    # settings.json 已存在则始终合并（保留已有值，仅补齐模板缺失键），不区分 CI_MODE。
+    # 旧版在 CI_MODE=true 时跳过 merge 直接覆盖，会抹掉用户自建键（env/token/thinking 等）。
+    if [[ -f "$target" ]]; then
         info "合并现有 settings.json（保留已有值，仅补齐缺失项）..."
         if [[ "$DRY_RUN" == true ]]; then
             info "[DRY-RUN] merge settings.json with template-backed migration keys"

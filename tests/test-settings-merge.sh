@@ -7,8 +7,8 @@
 #   3. Existing settings-owned arrays remain source of truth; template arrays only backfill when missing
 #
 # Usage:
-#   ./script/test-settings-merge.sh          # run all tests
-#   ./script/test-settings-merge.sh -v       # verbose output
+#   ./tests/test-settings-merge.sh           # run all tests
+#   ./tests/test-settings-merge.sh -v        # verbose output
 #
 # Exit code: 0 = all pass, 1 = any failure.
 # Designed for CI: no $HOME dependency, all I/O under /tmp.
@@ -330,6 +330,74 @@ for status, label in results:
 print(f"\n=== Results: {pass_count} passed, {fail_count} failed out of {len(results)} ===")
 sys.exit(1 if fail_count > 0 else 0)
 PYEOF
+
+# ---------------------------------------------------------------------------
+# CI-mode regression: existing settings.json must be MERGED, not overwritten.
+# Guard against regression: CI_MODE=true used to bypass merge and clobber
+# user-owned keys (env tokens, enabledPlugins, thinking, ...).
+# ---------------------------------------------------------------------------
+
+echo ""
+$VERBOSE && echo "=== CI-mode merge regression: 用户键在 --ci 下不得被覆盖 ==="
+
+CI_FIXTURE="$(mktemp -d /tmp/settings-ci-XXXXXX)"
+trap 'rm -rf "$CI_FIXTURE"' EXIT
+
+cat > "$CI_FIXTURE/settings.json" <<'JSON'
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "theme": "dark",
+  "language": "zh-CN",
+  "thinking": { "budget": "high" },
+  "env": { "USER_PRESERVED_TOKEN": "keepme" },
+  "enabledPlugins": { "user-only-plugin@github": true }
+}
+JSON
+
+# 在隔离 CLAUDE_HOME 下跑真实 setup.sh 的 ensure_settings_json（CI_MODE=true 语义）。
+# 两个要点（都是 setup.sh 的 source 特性）：
+#  1. CLAUDE_CONFIG_DIR 必须在 source 之前设好——setup.sh 顶层在 source 瞬间把
+#     CLAUDE_HOME 固化为 ${CLAUDE_CONFIG_DIR:-$HOME/.claude}，source 后再设无效，
+#     否则会污染真实 ~/.claude/settings.json。
+#  2. setup.sh 顶层 CI_MODE=false（第 54 行）会在 source 时覆盖外部传入值，所以
+#     必须在 source 之后重新置 CI_MODE=true，才能模拟 ./setup.sh --ci 的语义
+#     （旧代码在 CI_MODE=true 时跳过 merge 走覆盖分支）。
+(
+    set -uo pipefail
+    export CLAUDE_CONFIG_DIR="$CI_FIXTURE"
+    source "$SETUP_SH" >/dev/null 2>&1
+    CI_MODE=true
+    ensure_settings_json >/dev/null 2>&1
+) 2>/dev/null
+
+CI_FAILED=0
+if ! python3 - "$CI_FIXTURE/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+checks = [
+    ("thinking 保留", d.get("thinking") == {"budget": "high"}),
+    ("env.USER_PRESERVED_TOKEN 保留", (d.get("env") or {}).get("USER_PRESERVED_TOKEN") == "keepme"),
+    ("enabledPlugins.user-only-plugin 保留", (d.get("enabledPlugins") or {}).get("user-only-plugin@github") is True),
+    ("模板 env 键补齐", "CLAUDE_CODE_NEW_INIT" in (d.get("env") or {})),
+    ("模板 enabledPlugins 补齐", "claude-code-setup@claude-plugins-official" in (d.get("enabledPlugins") or {})),
+]
+for name, ok in checks:
+    print(f"  {'PASS' if ok else 'FAIL'}: {name}")
+sys.exit(0 if all(ok for _, ok in checks) else 1)
+PY
+then
+    CI_FAILED=1
+fi
+
+if [[ "$CI_FAILED" == 0 ]]; then
+    echo "  PASS: CI 模式增量合并保留用户键并补齐模板键"
+else
+    echo "  FAIL: CI 模式覆盖了用户键（回归！）" >&2
+    exit 1
+fi
+
+rm -rf "$CI_FIXTURE"
+trap - EXIT
 
 # ---------------------------------------------------------------------------
 # Execute
