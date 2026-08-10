@@ -2,10 +2,6 @@
 
 一键收敛 Claude Code 配置与插件栈。脚本幂等，可安全重复运行。
 
-## 项目 Skill
-
-- [`skills/installer-authoring/SKILL.md`](skills/installer-authoring/SKILL.md)：新增 Skill、MCP、Hook 或 plugin 安装器时的 `install_*` 编写约定，涵盖声明式配置、依赖 preflight、TUI/engine 分层、非交互运行、ownership、回滚和安全卸载。
-
 ## 快速开始
 
 ### 1) 克隆仓库
