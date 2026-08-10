@@ -660,11 +660,14 @@ if [[ ! -d "$E2E_HOME/.claude" ]] || [[ -z "$(ls -A "$E2E_HOME/.claude" 2>/dev/n
 fi
 
 # (a) 真实 npx 安装到隔离 HOME：与 setup.sh install_external_skills 完全一致的命令。
+# 注意 add 后必须再传 -y：第一个 -y 是 npx 的（自动确认下载包），add -y 才是 skills CLI 的
+#（跳过 "Proceed with installation?" 交互确认）。缺 add -y 时，非 agent 环境（无 AI_AGENT/CLAUDE_* env）
+# 且无 TTY 下 skills CLI 会卡在确认提示、不真正安装——CI 实测踩过这个坑。
 # 不静默跳过——npx skills add 失败就是真实验证失败。捕获 npx 输出，失败时打印，
-# 让 CI 能暴露「装到哪了 / 探测到什么」，避免像上一轮那样输出被吞掉无法诊断（fail loudly）。
+# 让 CI 能暴露「装到哪了 / 探测到什么」，避免输出被吞掉无法诊断（fail loudly）。
 e2e_npx_out=""
 if ! e2e_npx_out="$(timeout 180 env CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" HOME="$E2E_HOME" \
-    npx -y skills@latest add "$E2E_SRC" -s real-skill -a claude-code -g 2>&1)"; then
+    npx -y skills@latest add -y "$E2E_SRC" -s real-skill -a claude-code -g 2>&1)"; then
     printf '%s\n' "$e2e_npx_out" >&2
     fail "真实安装 e2e: npx skills add 失败"
 fi
