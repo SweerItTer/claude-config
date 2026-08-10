@@ -776,7 +776,13 @@ ensure_claude_code() {
         claude_bootstrap=true
     fi
 
-    [[ "$claude_bootstrap" == false ]] && pass "Claude Code 已就绪"
+    if [[ "$claude_bootstrap" == false ]]; then
+        pass "Claude Code 已就绪"
+    fi
+    # ponytail: 后台初始化分支显式返回 0。原 `[[ false ]] && pass` 在 set -e 下
+    # 短路为 exit 1，导致 run_install_flow 裸调用 ensure_claude_code 立即退出、
+    # Phase 2 永不执行（CI --smoke-test 2ms 后 exit 1 的根因）。
+    return 0
 }
 
 update_repository() {
