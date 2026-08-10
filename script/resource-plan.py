@@ -124,6 +124,10 @@ def parse_manifest_rows(path: Path, kind: str) -> list[dict[str, str]]:
                 ("name", "repo", "method", "marketplace", "command", "note"))
         rows: list[dict[str, str]] = []
         for lineno, line in enumerate(result.stdout.splitlines(), 1):
+            if not line.strip():
+                # 空清单（0 行）时 parse-manifests.py 输出一个空行
+                # （"\n".join([])），跳过，不做 6 列校验。
+                continue
             cells = line.split("\t")
             if len(cells) != 6:
                 raise PlanError(f"{path}:{lineno}: parser 输出必须是 6 列")
@@ -175,14 +179,25 @@ def declared_resources(skills_file: Path, plugins_file: Path,
                 })
     if plugins_file.is_file():
         for row in parse_manifest_rows(plugins_file, "plugin"):
-            name, repo, marketplace = row["name"], row["repo"], row["marketplace"]
+            name, repo = row["name"], row["repo"]
+            method = row.get("method", "claude-plugin")
+            marketplace = row.get("marketplace")
             if not name or not repo:
                 raise PlanError(f"plugin 清单必须包含 name/repo: {row}")
+            if method == "npx":
+                # npx 插件手动安装，无 marketplace，canonical id 用 name
+                resources.append({
+                    "kind": "plugin", "id": name, "source": "remote",
+                    "name": name, "repo": repo, "method": "npx",
+                    "marketplace": None, "path": None,
+                })
+                continue
             if not marketplace:
                 raise PlanError(f"plugin {name!r} 缺少 marketplace")
             resources.append({
                 "kind": "plugin", "id": f"{name}@{marketplace}", "source": "remote",
-                "name": name, "repo": repo, "marketplace": marketplace, "path": None,
+                "name": name, "repo": repo, "method": method,
+                "marketplace": marketplace, "path": None,
             })
     return resources
 

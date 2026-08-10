@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SCRIPT="$SCRIPT_DIR/resource-plan.py"
+SCRIPT="$SCRIPT_DIR/../script/resource-plan.py"
 
 python3 -m py_compile "$SCRIPT"
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -37,6 +37,7 @@ printf '%s\n' '---' 'name: local-two' 'description: test' '---' > "$fixture/skil
 printf '%s\n' '---' 'name: same' 'description: test' '---' > "$fixture/skills/same/SKILL.md"
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' remote-source owner/repo '*' claude-code global wildcard > "$fixture/config/wildcard-skills.tsv"
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' plug owner/plugin claude-plugin market '' 'plugin fixture' > "$fixture/config/plugins.tsv"
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' codegraph owner/codegraph npx '' 'npm i -g codegraph' 'manual plugin' >> "$fixture/config/plugins.tsv"
 printf '%s\n' '[{"source":"owner/repo","name":"remote-a"},{"source":"owner/repo","name":"remote-b"}]' > "$fixture/config/inventory.json"
 printf '%s\n' '---' 'name: outside' '---' > "$outside/SKILL.md"
 
@@ -48,6 +49,11 @@ collect_rc=$?
 set -e
 [[ "$collect_rc" -eq 0 ]] || fail "wildcard 无 inventory 应降级为集合资源 (exit $collect_rc)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["conflicts"]==[]; assert any(r["kind"]=="skill" and r["id"]=="remote-source" and r["source"]=="remote" and r.get("collection") for r in d["resources"]); assert any(p["action"]=="remote" for p in d["plan"] if p["id"]=="remote-source"); print("PASS: wildcard 无 inventory 降级为集合资源")' "$collect_out"
+
+# npx 插件（method=npx，空 marketplace）不应 PlanError，id 应为 name（非 name@marketplace）
+npx_out="$(python3 "$SCRIPT" --repo-root "$fixture" --skills-file "$fixture/config/empty-skills.tsv" --plugins-file "$fixture/config/plugins.tsv" --format json 2>&1)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); plugs=[r for r in d["resources"] if r["kind"]=="plugin"]; assert any(x["id"]=="codegraph" and x["method"]=="npx" and x["marketplace"] is None for x in plugs), plugs; assert any(x["id"]=="plug@market" for x in plugs), plugs; print("PASS: npx 插件 id=name，claude-plugin 保持 id=name@marketplace")' "$npx_out"
+
 expanded="$(python3 "$SCRIPT" --repo-root "$fixture" --skills-file "$fixture/config/wildcard-skills.tsv" --plugins-file "$fixture/config/plugins.tsv" --inventory "$fixture/config/inventory.json" --format json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); ids={x["id"] for x in d["resources"] if x["source"]=="remote" and x["kind"]=="skill"}; assert {"remote-a","remote-b"} <= ids; assert "*" not in ids; print("PASS: wildcard inventory 展开为实际 skill")' "$expanded"
 ln -s "$outside" "$fixture/skills/escape"
