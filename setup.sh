@@ -1935,6 +1935,100 @@ run_inspection_flow() {
     run_priority_module_actions
 }
 
+# 只读列出统一资源：configs/ 清单声明的 remote skill/plugin + 仓库 skills/ 下的本地 skill。
+# 复用 resource-plan.py 的 9 列 tsv 输出，按 kind 分组展示。
+# exit 0 = 无冲突；2 = 存在未决冲突（列表仍完整输出）。
+run_list_flow() {
+    local out rc
+    out="$(python3 "$RESOURCE_PLANNER" --repo-root "$REPO_ROOT" --format tsv 2>&1)"
+    rc=$?
+    if [[ "$rc" -ne 0 && "$rc" -ne 2 ]]; then
+        err "资源计划失败 (exit $rc)"
+        return "$rc"
+    fi
+    if [[ -z "$out" ]]; then
+        info "未声明任何 skill/plugin 资源"
+        return 0
+    fi
+    python3 -c 'import sys
+from collections import OrderedDict
+groups = OrderedDict()
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    f = line.split("\t")
+    if len(f) != 9:
+        continue
+    kind, rid, source, name, repo, marketplace, path, action, conflict = f
+    where = repo or marketplace or path or "?"
+    groups.setdefault(kind, []).append((rid, source, where, conflict))
+for kind, items in groups.items():
+    print()
+    print(f"=== {kind}s ({len(items)}) ===")
+    for rid, source, where, conflict in items:
+        flag = "  [冲突]" if conflict == "1" else ""
+        print(f"  [{kind}] {rid}\t{source}\t{where}{flag}")' <<< "$out"
+    if [[ "$rc" == 2 ]]; then
+        warn "存在未决冲突；可用 --choose <kind>:<id>=local|remote|skip 指定来源"
+    fi
+    return "$rc"
+}
+
+# 检测 Claude Code CLI 本体安装状态（区别于 verify=核心配置 symlink、doctor=OMC 插件诊断）。
+# 检查: claude 存在性 → 版本/路径 → claude doctor 健康 → claude auth 认证状态。
+# exit 0 = 全部通过；1 = claude 缺失或 doctor 失败。
+run_check_flow() {
+    local failed=0
+
+    phase "Phase 1: Claude Code 存在性"
+    if ! command -v claude >/dev/null 2>&1; then
+        err "claude 命令未找到 (PATH 中无 claude)"
+        return 1
+    fi
+    local claude_bin claude_path
+    claude_bin="$(command -v claude)"
+    claude_path="$(readlink -f "$claude_bin" 2>/dev/null || echo "$claude_bin")"
+    pass "claude 可执行文件: $claude_path"
+
+    local version
+    version="$(claude --version 2>&1 | head -1)"
+    log "Claude Code 已安装: $version"
+
+    phase "Phase 2: claude doctor 健康检查"
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] claude doctor"
+    else
+        local doctor_out doctor_rc
+        doctor_out="$(claude doctor 2>&1)"
+        doctor_rc=$?
+        if [[ $doctor_rc -eq 0 && "$doctor_out" == *"No installation issues found."* ]]; then
+            pass "claude doctor: 无安装问题"
+        else
+            err "claude doctor 失败 (exit $doctor_rc):"
+            echo "$doctor_out" | sed 's/^/    /'
+            failed=1
+        fi
+    fi
+
+    phase "Phase 3: claude auth 认证状态"
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] claude auth status --json"
+    else
+        local auth_out
+        auth_out="$(claude auth status --json 2>&1)"
+        if echo "$auth_out" | grep -q '"loggedIn": true'; then
+            local method
+            method="$(echo "$auth_out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("authMethod") or "unknown")' 2>/dev/null || echo "unknown")"
+            pass "claude 已登录 (authMethod=$method)"
+        else
+            warn "claude 未登录 — 安装可用但需认证才能使用"
+        fi
+    fi
+
+    [[ $failed -eq 0 ]]
+}
+
 UNINSTALL_LIST=()
 UNINSTALL_JOBS=3
 
@@ -2356,7 +2450,7 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         -h|--help)
             echo "用法: ./setup.sh [action] [选项]"
-            echo "  action          install | update | reinstall | core | uninstall | verify | status | doctor"
+            echo "  action          install | update | reinstall | core | uninstall | verify | status | doctor | check | list"
             echo "  --ci            CI 模式 (跳过手动提示)"
             echo "  --dry-run       预览，不实际修改"
             echo "  --no-claude     跳过 Claude Code 安装"
@@ -2380,7 +2474,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --choose kind:id=local|remote|skip  解决同名 local/remote 资源冲突（可重复）"
             echo "  --tui           启动交互式 TUI 安装器（需先构建 tools/installer-tui）"
             exit 0 ;;
-        install|update|reinstall|core|uninstall|verify|status|doctor)
+        install|update|reinstall|core|uninstall|verify|status|doctor|check|list)
             ACTION="$1"
             ACTION_EXPLICIT=true
             shift ;;
@@ -2518,6 +2612,12 @@ main() {
             ;;
         verify|status|doctor)
             run_inspection_flow
+            ;;
+        check)
+            run_check_flow
+            ;;
+        list)
+            run_list_flow
             ;;
         uninstall)
             uninstall_all
