@@ -1091,11 +1091,15 @@ install_external_skills() {
 
         info "安装外部 skill: $name ($repo, skill=$skill)"
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] npx -y skills@latest add $repo -s $skill -a $agent $scope_flag"
+            info "[DRY-RUN] npx -y skills@latest add -y $repo -s $skill -a $agent $scope_flag"
             continue
         fi
 
-        if ! npx -y skills@latest add "$repo" -s "$skill" -a "$agent" $scope_flag; then
+        # add 后必须再传 -y：第一个 -y 是 npx 的（自动确认下载包），add -y 才是 skills CLI 的
+        #（跳过 "Proceed with installation?" 交互确认）。缺 add -y 时，非 agent 环境
+        #（无 AI_AGENT/CLAUDE_* env 且无 TTY，如 cron/CI/普通 shell）skills CLI 会卡在确认提示
+        # 不真正安装。update/remove 已带 -y，仅 add 有此问题。
+        if ! npx -y skills@latest add -y "$repo" -s "$skill" -a "$agent" $scope_flag; then
             err "安装 skill '$name' 失败: $repo"
             return 1
         fi
