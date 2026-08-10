@@ -85,3 +85,17 @@ note = "superpowers 插件（自带 marketplace 名 superpowers-dev）"
 # method = "npx"
 # command = "npm i -g some-manual-plugin && some-plugin setup"
 # note = "手动安装：先装这个插件"
+
+[[plugins]]
+name = "CodeGraph"
+repo = "colbymchenry/codegraph"
+method = "npx"
+command = "npm i -g @colbymchenry/codegraph"
+note = "建立代码调用链"
+
+[[plugins]]
+name = "OpenSpec"
+repo = "Fission-AI/OpenSpec"
+method = "npx"
+command = "npm i -g @fission-ai/openspec@latest"
+note = "代码构思和实现"
