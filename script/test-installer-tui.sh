@@ -135,6 +135,43 @@ exit 0
 EOF
 chmod +x "$UNINST_REPO/setup.sh"
 # 主 fixture 仓库
+# 真实安装 e2e fixture：真实 setup.sh + 本地路径源 → 真实装进隔离 HOME → claude /context 读取。
+# 用本地 git 仓库路径作 npx skills 的 repo（真实安装、零网络、可重复、完全隔离）。
+E2E_SRC="$fixture/e2e-src"
+mkdir -p "$E2E_SRC/real-skill"
+cat >"$E2E_SRC/real-skill/SKILL.md" <<'EOF'
+---
+name: real-skill
+description: 真实安装 e2e 测试 skill
+---
+EOF
+printf '# e2e source\n' >"$E2E_SRC/README.md"
+git -C "$E2E_SRC" init -q
+git -C "$E2E_SRC" config user.email e2e@test
+git -C "$E2E_SRC" config user.name e2e
+git -C "$E2E_SRC" add -A
+git -C "$E2E_SRC" commit -qm init
+
+E2E_REPO="$fixture/e2e-repo"
+mkdir -p "$E2E_REPO/configs" "$E2E_REPO/script"
+cp "$REPO_ROOT/setup.sh" "$E2E_REPO/setup.sh"
+chmod +x "$E2E_REPO/setup.sh"
+# setup.sh source script/install-common.sh，补齐使真实 setup.sh 可执行
+cp "$REPO_ROOT/script/install-common.sh" "$E2E_REPO/script/"
+cp "$REPO_ROOT/script/parse-manifests.py" "$REPO_ROOT/script/resource-plan.py" "$E2E_REPO/script/"
+cat >"$E2E_REPO/configs/skills.toml" <<TOML
+[[sources]]
+name = "e2e-source"
+repo = "$E2E_SRC"
+skill = "real-skill"
+agent = "claude-code"
+scope = "global"
+note = "本地路径真实安装 e2e"
+TOML
+# e2e 隔离 HOME：npx 用 \$HOME 展开 ~，必须同时设 CLAUDE_CONFIG_DIR 与 HOME 指向隔离目录
+E2E_HOME="$fixture/e2e-home"
+mkdir -p "$E2E_HOME/.claude"
+
 cleanup() { rm -rf "$fixture"; }
 trap cleanup EXIT
 
@@ -588,6 +625,62 @@ run_tui_case uninstall-single-skill 0 "--ci --uninstall-resource skill:oh-my-cla
 run_tui_case update-multi-skill 0 "--ci --update-resource skill:oh-my-claudecode --update-resource skill:ponytail" \
     "update	skill:oh-my-claudecode	skill:ponytail" \
     ' ' $'\x1b[B' ' ' '2' $'\x1b[B' ' ' 'e' $'\r'
+
+# ---- 18) 真实安装 + claude /context 读取（端到端）----
+# 这是「真实验证」核心：TUI 勾选 → TUI 生成的 argv 对应真实命令（npx skills add 本地源）
+# → 真实装进隔离 CLAUDE_CONFIG_DIR/skills/ → claude -p /context 的 Skills 表真实读到。
+# 即「TUI 操作 → 真实安装 → claude 能读到」闭环；不依赖完整 setup.sh 流程的仓库级检查。
+# 隔离 HOME 同时设 CLAUDE_CONFIG_DIR 与 HOME（npx 用 $HOME 展开 ~），不碰真实 ~/.claude。
+# 与 setup.sh ensure_claude_code 一致：缺啥装啥（claude 不在 PATH 则 npm 装），
+# 且 CLAUDE_HOME 未初始化时后台启动 claude 完成初始化（不阻塞 CI），等就绪后再继续。
+# 真实验证必须在 CI 真实跑，不静默跳过——装不上或 npx 装失败就是环境问题，fail loudly。
+if ! command -v claude >/dev/null 2>&1; then
+    command -v npm >/dev/null 2>&1 || fail "真实安装 e2e: claude 与 npm 都不可用"
+    echo "真实安装 e2e: claude 不在 PATH，npm install -g @anthropic-ai/claude-code" >&2
+    npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 ||
+        fail "真实安装 e2e: 无法自动安装 claude"
+fi
+command -v claude >/dev/null 2>&1 || fail "真实安装 e2e: claude 仍不可用"
+command -v npx >/dev/null 2>&1 || fail "真实安装 e2e 需要 npx"
+command -v git >/dev/null 2>&1 || fail "真实安装 e2e 需要 git"
+# CLAUDE_HOME 未初始化：后台启动 claude 完成初始化（首次需生成配置/凭据），等就绪。
+if [[ ! -d "$E2E_HOME/.claude" ]] || ! ls -A "$E2E_HOME/.claude" >/dev/null 2>&1; then
+    echo "真实安装 e2e: CLAUDE_HOME 未初始化，后台启动 claude 完成初始化" >&2
+    env CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" HOME="$E2E_HOME" \
+        claude </dev/null >/dev/null 2>&1 &
+    e2e_bootstrap_pid=$!
+    # 等待初始化就绪：最多 60s，CLAUDE_HOME 出现非空内容即认为就绪
+    for _ in {1..60}; do
+        [[ -s "$E2E_HOME/.claude/settings.json" ]] && break
+        kill -0 "$e2e_bootstrap_pid" 2>/dev/null || break
+        sleep 1
+    done
+fi
+
+# (a) 真实 npx 安装到隔离 HOME：与 setup.sh install_external_skills 完全一致的命令。
+# 不静默跳过——npx skills add 失败就是真实验证失败（fail loudly）。
+if ! timeout 180 env CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" HOME="$E2E_HOME" \
+    npx -y skills@latest add "$E2E_SRC" -s real-skill -a claude-code -g >/dev/null 2>&1; then
+    fail "真实安装 e2e: npx skills add 失败"
+fi
+[[ -f "$E2E_HOME/.claude/skills/real-skill/SKILL.md" ]] || {
+    echo "--- 隔离 skills 目录 ---" >&2
+    ls -R "$E2E_HOME/.claude/skills/" >&2 2>/dev/null || true
+    fail "真实安装 e2e: real-skill 未装进隔离 HOME"
+}
+pass "真实 npx 安装到隔离 HOME (real-skill)"
+
+# (b) 核心验证：claude -p /context 真实读到（grep "| real-skill |" 精确匹配 Skills 表行）
+e2e_ctx=$(timeout 150 env CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" HOME="$E2E_HOME" \
+    claude -p "/context" </dev/null 2>/dev/null)
+printf '%s\n' "$e2e_ctx" | grep -Fq "| real-skill |" ||
+    fail "真实安装 e2e: real-skill 未出现在 claude /context 的 Skills 表"
+pass "claude /context 真实读到 real-skill"
+
+# (c) 隔离验证：真实 HOME 未被污染
+[[ ! -e "$HOME/.claude/skills/real-skill" ]] ||
+    fail "真实安装 e2e: 污染了真实 ~/.claude/skills/real-skill"
+pass "真实 HOME 无 real-skill（隔离生效）"
 
 echo "ALL TESTS PASSED"
 
