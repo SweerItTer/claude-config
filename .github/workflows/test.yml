@@ -225,23 +225,23 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$ftxui_prefix"
           cmake --build ./build/installer-tui --parallel
-          chmod +x ./script/test-installer-tui.sh
-          ./script/test-installer-tui.sh
+          chmod +x ./tests/test-installer-tui.sh
+          ./tests/test-installer-tui.sh
 
       - name: Verify setup dependency bootstrap regression script
         run: |
-          chmod +x ./script/test-setup-dependencies.sh
-          ./script/test-setup-dependencies.sh
+          chmod +x ./tests/test-setup-dependencies.sh
+          ./tests/test-setup-dependencies.sh
 
       - name: Verify settings merge regression script
         run: |
-          chmod +x ./script/test-settings-merge.sh
-          ./script/test-settings-merge.sh
+          chmod +x ./tests/test-settings-merge.sh
+          ./tests/test-settings-merge.sh
 
       - name: Verify skill context source fallback regression script
         run: |
-          chmod +x ./script/test-skill-context-verification.sh
-          ./script/test-skill-context-verification.sh
+          chmod +x ./tests/test-skill-context-verification.sh
+          ./tests/test-skill-context-verification.sh
 
       - name: Run setup.sh smoke test
         run: |
