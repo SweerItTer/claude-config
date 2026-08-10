@@ -27,6 +27,12 @@ cd ~/claude-config
 # 只做检查，不改动已有配置
 ./setup.sh verify
 
+# 检测 Claude Code CLI 本体安装状态（版本/路径/doctor/auth）
+./setup.sh check
+
+# 只读列出清单声明的外部 skills/plugins 与仓库本地 skills
+./setup.sh list
+
 # 交互式路径（可选）：构建 FTXUI TUI 后勾选安装，见「交互式 TUI 安装器」
 ./setup.sh --tui
 ```
@@ -60,7 +66,7 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 - **skills**：`skills.toml` 中的 `name` 是 source 别名，`skill = "*"` 表示该仓库的全部 skills，不是单个实际 skill 名。setup 会用 `npx -y skills@latest list -g --json` 按 `source` 找到实际安装项，检查每个 `SKILL.md`，再逐项确认名称出现在 `claude -p /context` 的 Skills 表中。若当前 `skills` CLI 的 list 输出漏掉已安装 agent，验证器会使用该 CLI 自己维护的 `~/.agents/.skill-lock.json` 精确恢复 source/path，不会退化为模糊目录匹配。
 - **plugins**：从 `plugins.toml` 逐项检查精确的 `<name>@<marketplace>`，并要求 `claude plugin list --json` 返回 `scope = "user"`；缓存目录存在不等于已注册。
-- **settings**：检查 `settings.template.json` 的非空键已存在于目标 `settings.json`。增量合并的“保留已有值、补齐缺失键、二次运行稳定”由 `script/test-settings-merge.sh` 在隔离 fixture 中验证。
+- **settings**：检查 `settings.template.json` 的非空键已存在于目标 `settings.json`。增量合并的“保留已有值、补齐缺失键、二次运行稳定”由 `tests/test-settings-merge.sh` 在隔离 fixture 中验证。
 
 仓库顶层 `skills/` 下的 skill（包括 `misuse-driven-robustness-testing` 和 `project-governance`）是仓库自有源，不加入外部 `configs/skills.toml`；仅解压到仓库不会自动安装到 `~/.claude/skills`，也不会因此出现在当前用户的 `/context` 中。
 
@@ -90,15 +96,14 @@ ls ~/.claude/agents/ ~/.claude/commands/
 # 只装 plugins，跳过 skills
 ./setup.sh --skip-skills
 
-# 只装核心配置 + 指定的一个/多个 skill（可重复，名字取 configs/skills.toml）
-./setup.sh --skill oh-my-claudecode --skill ponytail
-
 # 只装核心配置 + 指定的一个/多个 plugin（可重复，名字取 configs/plugins.toml）
 ./setup.sh --plugin context-mode --plugin code-review
 
-# 混搭：只装指定 skill 和指定 plugin，其余跳过
-./setup.sh --skill oh-my-claudecode --plugin context-mode
+# 混搭：只装指定 plugin 和仓库自有 skill（本地 skills/ 目录），其余跳过
+./setup.sh --plugin context-mode --update-local-skill evidence-driven-analysis
 ```
+
+> `--skill`（按 skills.toml 选外部 skill）当前无合法值：双源冲突治理后 `configs/skills.toml` 为空清单，外部 skill 全部经 `configs/plugins.toml` 的 claude plugin 机制提供（oh-my-claudecode / ponytail / superpowers 均为 plugin 条目）。若在 skills.toml 新增 npx source，`--skill <名字>` 恢复可用（名字取 source 的 `name`）。
 
 安装时若同时给了 `--skill` 和 `--plugin`，则只装这些指定项，其余项不装。全不指定 = 全量安装所有 skills + plugins。
 
@@ -110,8 +115,8 @@ ls ~/.claude/agents/ ~/.claude/commands/
 # 更新全部外部 skills + plugins
 ./setup.sh --update-all
 
-# 只更新一个/多个指定外部 skill（可重复）
-./setup.sh --update-skill oh-my-claudecode --update-skill ponytail
+# 只更新一个/多个指定外部 skill（可重复；当前 skills.toml 为空清单，见下）
+# ./setup.sh --update-skill <skills.toml 中的 source 名>
 
 # 更新仓库自有 skill：创建/刷新 ~/.claude/skills 下的软链接（可重复）
 ./setup.sh --update-local-skill evidence-driven-analysis \
@@ -120,24 +125,28 @@ ls ~/.claude/agents/ ~/.claude/commands/
 # 只更新一个/多个指定 plugin（可重复）
 ./setup.sh --update-plugin code-review
 
-# 指定项里混 skills 和 plugins
-./setup.sh --update-skill oh-my-claudecode --update-plugin context-mode
+# 指定项里混 plugins 和仓库自有 skill
+./setup.sh --update-plugin context-mode --update-local-skill evidence-driven-analysis
 
 # 更新某类型全部（core/all 也接受）
 ./setup.sh --update-skill core
 ./setup.sh --update-plugin all
 ```
 
-- 外部 skill 走 `npx skills update`，仓库自有 skill 走 `--update-local-skill` 刷新软链接，plugin 走 `claude plugin update`
+- 外部 skill 走 `npx skills update`，仓库自有 skill 走 `--update-local-skill` 刷新软链接，plugin 走 `claude plugin update`；外部 skill 的更新现经 plugin 机制（`claude plugin update`）完成，`--update-skill` 仅在 skills.toml 有 npx source 时可用
 - 任一项失败，最终退出码非零（失败聚合，不会因后续项成功而覆盖）
 - `--update-all` 与 `--update-skill`/`--update-plugin` 互斥，不能同时用
 
 ### 卸载
 
 ```bash
-# 卸载一个/多个指定 skill（typed，明确区分 skills/plugin）
-./setup.sh --uninstall-skill oh-my-claudecode
-./setup.sh --uninstall-skill oh-my-claudecode --uninstall-skill ponytail
+# 卸载一个/多个指定 plugin（typed，明确区分 skills/plugin）
+# （当前 skills.toml 为空清单，外部 skill 经 plugin 提供，`--uninstall-skill` 仅在 skills.toml 有 source 时可用）
+./setup.sh --uninstall-plugin oh-my-claudecode
+./setup.sh --uninstall-plugin oh-my-claudecode --uninstall-plugin ponytail
+
+# 卸载仓库自有 skill（本地 skills/ 目录下的软链接）
+./setup.sh --uninstall-skill evidence-driven-analysis
 
 # 卸载一个/多个指定 plugin（typed）
 ./setup.sh --uninstall-plugin code-review
@@ -155,7 +164,7 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 - skill 走 `npx skills remove`，plugin 走 `claude plugin uninstall`；同一仓库只通过一种来源安装，避免 npx skill 与 plugin skill 重复声明
 - 多个清单项并发卸载（默认同时 3 个，`UNINSTALL_JOBS` 可调）；`core`/`all` 串行
-- **typed flags（`--uninstall-skill`/`--uninstall-plugin`）优先**：skill 与 plugin 由不同清单声明，即使名称相同也用 typed flag 精确指定来源；当前 `context-mode`、`oh-my-claudecode` 是 plugin 条目
+- **typed flags（`--uninstall-skill`/`--uninstall-plugin`）优先**：skill 与 plugin 由不同清单声明，即使名称相同也用 typed flag 精确指定来源；当前 `context-mode`、`oh-my-claudecode`、`ponytail`、`superpowers` 均为 plugin 条目（双源冲突治理后 skills.toml 为空清单）
 - 卸载只移除 `~/.claude/skills/` 下由 `npx skills` 安装的副本和 `claude plugin uninstall` 卸载的插件，不触碰本仓库源文件
 - `settings.json` 默认保留，避免误删你的自定义配置。彻底重置：`rm ~/.claude/settings.json`
 
@@ -165,6 +174,8 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ./setup.sh verify     # 检查核心配置是否齐全
 ./setup.sh status     # 检查核心配置与模块状态
 ./setup.sh doctor     # 诊断路径，排查安装异常
+./setup.sh check      # 检测 Claude Code CLI 本体安装状态（版本/路径/doctor/auth）
+./setup.sh list       # 只读列出声明的外部 skills/plugins 与仓库本地 skills（按资源类型分组，冲突项标注）
 ./setup.sh --smoke-test   # 运行 doctor + 上下文注入检查
 ```
 
@@ -297,15 +308,31 @@ doctor	all
 外部 skills 与 plugins 声明在 `configs/` 下，用 Python `parse-manifests.py` 解析（纯标准库，Python 3.10 无 tomllib 时自动回退）：
 
 ```text
-configs/skills.toml    → 每个 [[sources]] 声明一个外部 skill 源
+configs/skills.toml    → 每个 [[sources]] 声明一个外部 skill 源（当前为空清单）
 configs/plugins.toml   → 每个 [[plugins]] 声明一个第三方 plugin
 ```
 
 - `skills.toml`：`npx -y skills@latest add <repo> -s <skill> -a claude-code -g`
+  - **当前为空**：外部 skill 全部经 plugins.toml 的 claude plugin 机制提供，避免同一 skill 同时出现在 npx source 与 plugin（双源冲突）。新增 npx source 时取消注释下方 vercel 示例并按需调整即可。
 - `plugins.toml`：`method = "claude-plugin"` → `claude plugin marketplace add + install`；`method = "npx"` → 手动安装，仅备注命令
   - 官方市场（anthropics/claude-plugins-official）需**为每个 plugin 单独声明 `[[plugins]]` 条目**（如 skill-creator、code-review），只声明 marketplace 不会安装任何 plugin；marketplace add 由各条目在 install 前幂等执行
 
-测试：`bash script/test-manifest-parsing.sh`
+测试：`bash tests/test-manifest-parsing.sh`
+
+## 运行测试
+
+测试脚本在 `tests/` 下，CI（`.github/workflows/test.yml`）与本地共用同一入口。各脚本都是幂等自包含的 bash 回归测试，隔离于 `$HOME`/`~/.claude`（settings-merge 用临时 fixture 验证增量合并）：
+
+```bash
+bash tests/test-manifest-parsing.sh        # TOML 清单解析（skills.toml / plugins.toml）
+bash tests/test-resource-plan.sh           # 统一资源计划层（discover/normalize/conflict）
+bash tests/test-setup-resolver.sh          # setup.sh 统一 resolver 与旧 flags 兼容
+bash tests/test-setup-path-and-marketplace.sh  # repo 路径定位与 marketplace 解析
+bash tests/test-setup-dependencies.sh      # 依赖 bootstrap 回归
+bash tests/test-settings-merge.sh          # settings.json 增量合并语义
+bash tests/test-skill-context-verification.sh  # skill 上下文验证 source fallback
+bash tests/test-installer-tui.sh           # TUI 集成测试（需先构建 FTXUI，见「交互式 TUI 安装器」）
+```
 
 ## 架构概要
 
@@ -314,10 +341,11 @@ configs/plugins.toml   → 每个 [[plugins]] 声明一个第三方 plugin
   CLAUDE.md        → claude/CLAUDE.md.ccfg（或由 OMC 注入后的宿主文件）
   rules/           → claude/rules/
   rules-available/ → claude/rules-available/
-  skills/          → 自有 skill 由 npx skills 安装，外部 skill 也装到这里
+  skills/          → 自有 skill 由软链接安装（本地 skills/ 源）；外部 skill 现由 plugin 提供（见 plugins/）
   settings.json    ← 从 claude/settings.template.json 渲染并合并
   plugins/
     marketplaces/{omc,superpowers,context-mode,ponytail,claude-plugins-official}
+    cache/omc/{oh-my-claudecode,context-mode,ponytail,superpowers}/.../skills/ → 外部 skill 经 plugin 注入
 ```
 
 外部 skills 与 plugins 的来源声明在 `configs/`（见上文清单配置），不由仓库直接管理。
