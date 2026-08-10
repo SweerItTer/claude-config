@@ -6,18 +6,17 @@
 
 | 编辑文件类型 | 加载规则集 |
 |-------------|-----------|
-| `.java` | `java/` |
-| `.vue` `.html` | `web/` |
-| `.js` `.jsx` | `typescript/` + `web/` |
+| `.pl` `.perl` | `perl/` |
+| `.py` | `python/` |
 
 ## 可用规则集
 
 ### 自维护 (curated)
 | 目录 | 覆盖领域 |
 |------|---------|
-| `java/` | coding-style, hooks, patterns, security, testing |
-| `typescript/` | coding-style, hooks, patterns, security, testing |
-| `web/` | coding-style, design-quality, hooks, patterns, performance, security, testing |
+| `perl/` | coding-style, hooks, patterns, security, testing |
+| `python/` | coding-style, hooks, patterns, security, testing |
+| `zh/` | agents, code-review, coding-style, development-workflow, git-workflow, hooks, patterns, performance, security, testing |
 
 ## 使用协议
 
