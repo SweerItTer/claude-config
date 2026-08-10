@@ -1,6 +1,6 @@
 ---
 name: evidence-driven-analysis
-description: Use when a technical conclusion must be justified from concrete evidence — logs, code, tests, metrics, diffs, packets, traces, or documents. Triggers for bug diagnosis, root-cause analysis, postmortems, incident findings, and architecture risk assessment. In Claude Code, triggers whenever a "why does this fail", "what causes X", "analyze this crash/log/diff", or "trace this regression" task requires traceable, intervention-grounded conclusions rather than plausible-sounding prose. Do not use for lightweight explanations, brainstorming, opinions, or tasks with no concrete evidence set.
+description: Use only when the user explicitly requests evidence-based root-cause analysis and provides concrete logs, code, tests, metrics, diffs, packets, traces, or documents. Do not trigger for ordinary debugging, explanations, reviews, brainstorming, or opinions unless the user asks for a traceable evidence report.
 ---
 
 # Evidence-Driven Analysis

@@ -1,12 +1,12 @@
 ---
 name: three-tier-orchestration
-description: Use for multi-step implementation, hardware/embedded debugging, or any TEAM request. Requires TeamCreate; parallel subagents are never a substitute.
+description: Use only when the user explicitly requests multi-agent or subagent collaboration, TEAM/team mode, or coordinated parallel work. Do not trigger for ordinary multi-step implementation, refactoring, debugging, review, verification, TDD, or single-agent tasks.
 ---
 
 # Three-Tier Orchestration
 
-> **Triggers:** multi-step implementation · refactor · code review · debug · OpenSpec apply · hardware interface (serial / bus / debug probe / embedded target) · firmware · bootloader · register · device log · `/team` `/opsx:apply` `/opsx:explore` `autopilot` `ultrawork` `tdd` `review` `verify` `ralph` `ralplan` `deep-analyze` `deepsearch`
-> **Skip:** single-command answers · Q&A · text polish · single-line edits
+> **Trigger only when the user explicitly requests:** multi-agent/subagent collaboration, TEAM/team mode, or coordinated parallel work (including `/team`).
+> **Skip by default:** ordinary multi-step implementation, refactoring, debugging, code review, verification, TDD, hardware work, OpenSpec work, and single-agent tasks. Do not infer a multi-agent request from task size or from generic words such as `review`, `verify`, `debug`, `tdd`, `autopilot`, or `ultrawork`.
 
 ## Pipeline
 
