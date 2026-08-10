@@ -644,28 +644,39 @@ command -v claude >/dev/null 2>&1 || fail "真实安装 e2e: claude 仍不可用
 command -v npx >/dev/null 2>&1 || fail "真实安装 e2e 需要 npx"
 command -v git >/dev/null 2>&1 || fail "真实安装 e2e 需要 git"
 # CLAUDE_HOME 未初始化：后台启动 claude 完成初始化（首次需生成配置/凭据），等就绪。
-if [[ ! -d "$E2E_HOME/.claude" ]] || ! ls -A "$E2E_HOME/.claude" >/dev/null 2>&1; then
+# 注意：fixture 会预建空的 .claude 目录，因此「空目录」也必须视为未初始化，不能据此跳过。
+if [[ ! -d "$E2E_HOME/.claude" ]] || [[ -z "$(ls -A "$E2E_HOME/.claude" 2>/dev/null || true)" ]]; then
     echo "真实安装 e2e: CLAUDE_HOME 未初始化，后台启动 claude 完成初始化" >&2
     env CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" HOME="$E2E_HOME" \
         claude </dev/null >/dev/null 2>&1 &
     e2e_bootstrap_pid=$!
-    # 等待初始化就绪：最多 60s，CLAUDE_HOME 出现非空内容即认为就绪
+    # 等待初始化就绪：最多 60s，.claude.json 出现即认为 CLAUDE_HOME 可用
+    #（实测首次 claude </dev/null 生成 .claude.json/backups/sessions，不写 settings.json）
     for _ in {1..60}; do
-        [[ -s "$E2E_HOME/.claude/settings.json" ]] && break
+        [[ -s "$E2E_HOME/.claude/.claude.json" ]] && break
         kill -0 "$e2e_bootstrap_pid" 2>/dev/null || break
         sleep 1
     done
 fi
 
 # (a) 真实 npx 安装到隔离 HOME：与 setup.sh install_external_skills 完全一致的命令。
-# 不静默跳过——npx skills add 失败就是真实验证失败（fail loudly）。
-if ! timeout 180 env CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" HOME="$E2E_HOME" \
-    npx -y skills@latest add "$E2E_SRC" -s real-skill -a claude-code -g >/dev/null 2>&1; then
+# 不静默跳过——npx skills add 失败就是真实验证失败。捕获 npx 输出，失败时打印，
+# 让 CI 能暴露「装到哪了 / 探测到什么」，避免像上一轮那样输出被吞掉无法诊断（fail loudly）。
+e2e_npx_out=""
+if ! e2e_npx_out="$(timeout 180 env CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" HOME="$E2E_HOME" \
+    npx -y skills@latest add "$E2E_SRC" -s real-skill -a claude-code -g 2>&1)"; then
+    printf '%s\n' "$e2e_npx_out" >&2
     fail "真实安装 e2e: npx skills add 失败"
 fi
 [[ -f "$E2E_HOME/.claude/skills/real-skill/SKILL.md" ]] || {
     echo "--- 隔离 skills 目录 ---" >&2
     ls -R "$E2E_HOME/.claude/skills/" >&2 2>/dev/null || true
+    echo "--- npx 输出（尾部 40 行）---" >&2
+    printf '%s\n' "$e2e_npx_out" | tail -40 >&2
+    echo "--- 隔离 HOME 结构 ---" >&2
+    find "$E2E_HOME" -maxdepth 4 \( -name 'SKILL.md' -o -name 'skills' \) 2>/dev/null | head -20 >&2
+    echo "--- 真实 HOME 是否被污染 ---" >&2
+    ls -d "$HOME/.claude/skills/real-skill" "$HOME/.agents/skills/real-skill" 2>/dev/null || echo "真实 HOME 无 real-skill" >&2
     fail "真实安装 e2e: real-skill 未装进隔离 HOME"
 }
 pass "真实 npx 安装到隔离 HOME (real-skill)"
