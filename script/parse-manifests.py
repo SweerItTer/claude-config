@@ -13,6 +13,11 @@ Output (tab-separated, one record per line; empty fields blank):
     skills:  name  repo  skill  agent  scope  note
     plugins: name  repo  method  marketplace  command  note
 
+With --tsv-safe, empty fields are emitted as the placeholder ``<nil>`` so bash
+``read`` with IFS=$'\\t' cannot fold consecutive tabs (bash collapses empty
+fields under IFS whitespace) — otherwise a plugin with an empty marketplace
+column shifts ``command`` into the ``note`` slot.
+
 Exits non-zero on schema violations (missing required field, unknown method).
 """
 
@@ -41,7 +46,10 @@ DEFAULTS = {
 }
 
 
-def _row(item, keys):
+PLACEHOLDER = "<nil>"
+
+
+def _row(item, keys, tsv_safe=False):
     """Flatten one manifest item into a tab-separated string."""
     values = []
     for key in keys:
@@ -50,6 +58,8 @@ def _row(item, keys):
             value = DEFAULTS.get(key, "")
         if not isinstance(value, str):
             return None, f"{key} 字段必须是字符串，收到 {type(value).__name__}"
+        if tsv_safe and not value:
+            value = PLACEHOLDER
         values.append(value)
     return "\t".join(values), None
 
@@ -99,8 +109,10 @@ def _parse_subset_toml(text):
         current[key] = value[1:-1]
 
     push()
+    # 纯注释文件（无任何表）视为空清单：与 tomllib 路径对空文件返回 {} 的行为
+    # 保持一致，调用方 data.get("sources", []) 得到 []，解析成功 0 行。
     if table_name is None:
-        raise ValueError("清单中没有 [[sources]] 或 [[plugins]] 表")
+        return {}
     return {table_name: entries}
 
 
@@ -119,7 +131,7 @@ def load(manifest_path):
         raise SystemExit(1)
 
 
-def parse_skills(path):
+def parse_skills(path, tsv_safe=False):
     data = load(path)
     entries = data.get("sources", [])
     if not isinstance(entries, list):
@@ -136,7 +148,7 @@ def parse_skills(path):
         if missing:
             errors.append(f"[{index}] 缺少必填字段: {', '.join(missing)}")
             continue
-        row, err = _row(item, SKILL_KEYS)
+        row, err = _row(item, SKILL_KEYS, tsv_safe)
         if err:
             errors.append(f"[{index}] {err}")
         else:
@@ -150,7 +162,7 @@ def parse_skills(path):
     return rows
 
 
-def parse_plugins(path):
+def parse_plugins(path, tsv_safe=False):
     data = load(path)
     entries = data.get("plugins", [])
     if not isinstance(entries, list):
@@ -171,7 +183,7 @@ def parse_plugins(path):
         if method not in PLUGIN_METHODS:
             errors.append(f"[{index}] method 必须是 {'|'.join(sorted(PLUGIN_METHODS))}，收到: {method}")
             continue
-        row, err = _row(item, PLUGIN_KEYS)
+        row, err = _row(item, PLUGIN_KEYS, tsv_safe)
         if err:
             errors.append(f"[{index}] {err}")
         else:
@@ -191,12 +203,14 @@ def main(argv):
     for name, help_text in (("skills", "解析 skills.toml"), ("plugins", "解析 plugins.toml")):
         sub_parser = sub.add_parser(name, help=help_text)
         sub_parser.add_argument("--file", required=True, help="TOML 清单路径")
+        sub_parser.add_argument("--tsv-safe", action="store_true",
+                                help="空字段输出 <nil> 占位，避免 bash read 折叠连续 tab")
 
     args = parser.parse_args(argv)
     if args.command == "skills":
-        rows = parse_skills(args.file)
+        rows = parse_skills(args.file, args.tsv_safe)
     else:
-        rows = parse_plugins(args.file)
+        rows = parse_plugins(args.file, args.tsv_safe)
     print("\n".join(rows))
 
 

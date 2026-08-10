@@ -1038,7 +1038,9 @@ parse_skills_toml() {
 parse_plugins_toml() {
     local file="$1"
     [[ -f "$file" ]] || return 0
-    python3 "$MANIFEST_PARSER" plugins --file "$file"
+    # --tsv-safe: 空字段（如 npx 插件的 marketplace）输出 <nil> 占位，
+    # 否则 bash IFS=$'\t' 会折叠连续 tab 把 command 列错位成 note。
+    python3 "$MANIFEST_PARSER" plugins --tsv-safe --file "$file"
 }
 
 # 检查名字是否在 skills.toml 中
