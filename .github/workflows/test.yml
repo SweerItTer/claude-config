@@ -228,6 +228,31 @@ jobs:
           chmod +x ./tests/test-installer-tui.sh
           ./tests/test-installer-tui.sh
 
+      - name: Verify Claude check regression script
+        run: |
+          chmod +x ./tests/test-claude-check.sh
+          ./tests/test-claude-check.sh
+
+      - name: Verify manifest parsing regression script
+        run: |
+          chmod +x ./tests/test-manifest-parsing.sh
+          ./tests/test-manifest-parsing.sh
+
+      - name: Verify resource plan regression script
+        run: |
+          chmod +x ./tests/test-resource-plan.sh
+          ./tests/test-resource-plan.sh
+
+      - name: Verify setup path and marketplace regression script
+        run: |
+          chmod +x ./tests/test-setup-path-and-marketplace.sh
+          ./tests/test-setup-path-and-marketplace.sh
+
+      - name: Verify setup resolver regression script
+        run: |
+          chmod +x ./tests/test-setup-resolver.sh
+          ./tests/test-setup-resolver.sh
+
       - name: Verify setup dependency bootstrap regression script
         run: |
           chmod +x ./tests/test-setup-dependencies.sh
