@@ -1,834 +1,363 @@
 ---
 name: git-workflow
-description: Use when planning branches, splitting implementation changes, preparing commits, writing commit messages, or deciding when a change is ready to commit.
+description: >-
+  Use for any Git task involving staging, commits, commit-message generation,
+  splitting mixed changes into atomic commits, branch/worktree changes, rebases,
+  merges, pull requests, releases, or history cleanup. Especially use before
+  committing a multi-file or mixed-purpose diff: reconstruct a stable commit
+  sequence by responsibility boundary, logical dependency, implementation order,
+  rollback boundary, and verification evidence; then generate concise English
+  Gitmoji Conventional Commit messages and execute commits only when authorized.
 ---
 
-# Git Workflow Patterns
+# Git Workflow
 
-Best practices for Git version control, branching strategies, and collaborative development.
+Keep Git history useful as an engineering record rather than a transcript of edit order.
+For commit work, first reconstruct the logical change graph, then stage, verify, and commit one coherent node at a time.
 
-## When to Activate
+For less common Git operations, load only the relevant reference:
 
-- Setting up Git workflow for a new project
-- Deciding on branching strategy (GitFlow, trunk-based, GitHub flow)
-- Writing commit messages and PR descriptions
-- Resolving merge conflicts
-- Managing releases and version tags
-- Onboarding new team members to Git practices
+- Branches, worktrees, rebase, merge, conflict handling: `references/branching-history.md`
+- Pull requests, releases, tags, and collaboration: `references/collaboration-release.md`
+- Configuration, hooks, ignore rules, stash, and recovery commands: `references/tooling-recovery.md`
 
-## Branching Strategies
+## Operating Contract
 
-### GitHub Flow (Simple, Recommended for Most)
+Before changing Git state:
 
-Best for continuous deployment and small-to-medium teams.
+1. Run `git status --short --branch`.
+2. Identify the current worktree, branch, staged changes, unstaged changes, and untracked paths.
+3. Separate task-owned changes from unrelated or user-owned changes.
+4. Preserve unrelated work. Do not reset, clean, stash, stage, amend, or absorb it silently.
+5. Prefer explicit paths or `git add -p`; never use `git add .` as a substitute for ownership analysis.
 
-```
-main (protected, always deployable)
-  │
-  ├── feature/user-auth      → PR → merge to main
-  ├── feature/payment-flow   → PR → merge to main
-  └── fix/login-bug          → PR → merge to main
-```
+Generating a plan or message does not authorize a commit. Run `git commit` only when the user's task includes committing. Treat push, force-push, rebase, squash, and published-history edits as separate authority boundaries.
 
-**Rules:**
-- `main` is always deployable
-- Create feature branches from `main`
-- Open Pull Request when ready for review
-- After approval and CI passes, merge to `main`
-- Deploy immediately after merge
+## Commit Workflow
 
-### Trunk-Based Development (High-Velocity Teams)
-
-Best for teams with strong CI/CD and feature flags.
-
-```
-main (trunk)
-  │
-  ├── short-lived feature (1-2 days max)
-  ├── short-lived feature
-  └── short-lived feature
-```
-
-**Rules:**
-- Everyone commits to `main` or very short-lived branches
-- Feature flags hide incomplete work
-- CI must pass before merge
-- Deploy multiple times per day
-
-### GitFlow (Complex, Release-Cycle Driven)
-
-Best for scheduled releases and enterprise projects.
-
-```
-main (production releases)
-  │
-  └── develop (integration branch)
-        │
-        ├── feature/user-auth
-        ├── feature/payment
-        │
-        ├── release/1.0.0    → merge to main and develop
-        │
-        └── hotfix/critical  → merge to main and develop
-```
-
-**Rules:**
-- `main` contains production-ready code only
-- `develop` is the integration branch
-- Feature branches from `develop`, merge back to `develop`
-- Release branches from `develop`, merge to `main` and `develop`
-- Hotfix branches from `main`, merge to both `main` and `develop`
-
-### When to Use Which
-
-| Strategy | Team Size | Release Cadence | Best For |
-|----------|-----------|-----------------|----------|
-| GitHub Flow | Any | Continuous | SaaS, web apps, startups |
-| Trunk-Based | 5+ experienced | Multiple/day | High-velocity teams, feature flags |
-| GitFlow | 10+ | Scheduled | Enterprise, regulated industries |
-
-### Branch and Workspace Safety
-
-Before creating, switching, rebasing, or merging a branch, run `git status --short --branch` and identify the current worktree, branch, and every uncommitted path. Do not assume a dirty worktree belongs to the current task.
-
-- Preserve unrelated or user-owned changes; never overwrite, reset, clean, stash, or absorb them silently.
-- If changes belong to the current task, commit a complete boundary before switching. If they are intentionally incomplete, use a uniquely named temporary WIP commit or an explicitly identified stash entry, then verify restoration before continuing.
-- If ownership or intended disposition is unclear, stop before changing branches or worktrees and surface the conflict.
-- Prefer an isolated worktree for parallel or risky work, and verify its branch, path, and base commit before editing.
-- After switching or creating a worktree, rerun `git status --short --branch` and confirm the expected baseline before making changes.
-- Never use `git add .` or a broad cleanup command as a substitute for deciding which work belongs to the task.
-
-## Commit Messages
-
-### Conventional Commits Format
-
-```
-<type>(<scope>): <subject>
-
-[optional body]
-
-[optional footer(s)]
-```
-
-### Types
-
-| Type | Use For | Example |
-|------|---------|---------|
-| `feat` | New feature | `feat(auth): add OAuth2 login` |
-| `fix` | Bug fix | `fix(api): handle null response in user endpoint` |
-| `docs` | Documentation | `docs(readme): update installation instructions` |
-| `style` | Formatting, no code change | `style: fix indentation in login component` |
-| `refactor` | Code refactoring | `refactor(db): extract connection pool to module` |
-| `test` | Adding/updating tests | `test(auth): add unit tests for token validation` |
-| `chore` | Maintenance tasks | `chore(deps): update dependencies` |
-| `perf` | Performance improvement | `perf(query): add index to users table` |
-| `ci` | CI/CD changes | `ci: add PostgreSQL service to test workflow` |
-| `revert` | Revert previous commit | `revert: revert "feat(auth): add OAuth2 login"` |
-
-### Good vs Bad Examples
-
-```
-# BAD: Vague, no context
-git commit -m "fixed stuff"
-git commit -m "updates"
-git commit -m "WIP"
-
-# GOOD: Clear, specific, explains why
-git commit -m "fix(api): retry requests on 503 Service Unavailable
-
-The external API occasionally returns 503 errors during peak hours.
-Added exponential backoff retry logic with max 3 attempts.
-
-Closes #123"
-```
-
-### Commit Message Template
-
-Create `.gitmessage` in repo root:
-
-```
-# <type>(<scope>): <subject>
-# # Types: feat, fix, docs, style, refactor, test, chore, perf, ci, revert
-# Scope: api, ui, db, auth, etc.
-# Subject: imperative mood, no period, max 50 chars
-#
-# [optional body] - explain why, not what
-# [optional footer] - Breaking changes, closes #issue
-```
-
-Enable with: `git config commit.template .gitmessage`
-
-## Atomic Commits
-
-Atomic commits keep history readable, reviewable, and easy to revert. Each commit should represent one logical change.
-
-### Rules
-
-- One commit should contain one logical change
-- Do not mix unrelated changes in the same commit
-- Do not mix formatting-only changes with behavior changes
-- Do not mix refactoring with feature work unless the refactor is required for that feature
-- Each commit should be understandable on its own
-- Each commit should preferably compile and pass relevant tests
-- Split large commits before pushing or opening a PR
-- Use `git add -p` to stage only related hunks
-- Do not commit a compile-breaking intermediate state merely to make the diff smaller; split at a complete, independently reviewable boundary.
-
-### Minimal Diff and Boundary Gate
-
-Before staging, describe the change in one sentence: **what behavior changes, which module owns it, and what evidence proves the slice**. Then classify every changed path:
-
-| Boundary | Typical contents | Separate when |
-|---|---|---|
-| Contract | public types, API docs, compatibility notes | API meaning changes before implementation |
-| Implementation | one module's production code | ownership or rollback boundary differs |
-| Integration | wiring between modules | callers become buildable as a complete slice |
-| Verification | tests, fixtures, probes | test intent or execution lifecycle is distinct |
-| Fix | review/test correction | it repairs a previously committed behavior |
-
-Rules:
-
-1. **Smallest coherent diff wins.** Minimize files and hunks only after tracing the full call path; do not hide a required caller, contract, or test just to reduce line count.
-2. **One responsibility per commit.** A commit may span several files when they form one inseparable module boundary, but it must not mix unrelated modules, documentation cleanup, refactors, or speculative future work.
-3. **Complete the boundary before committing.** A signature change must include its required callers; a new runtime path must include the smallest proof that it is reachable. If the boundary cannot build or pass its relevant check, keep it uncommitted or finish the missing companion changes.
-4. **Commit at the evidence checkpoint.** After self-review, relevant build/test/static checks, and any required human review, commit the verified slice immediately. Do not accumulate several verified slices into one commit.
-5. **Fixes stay separate.** A defect found after a feature commit becomes a new `fix` commit with its own evidence; do not silently amend or mix it into the next feature unless the history is explicitly private and the fix has not been reviewed.
-6. **Stage deliberately.** Inspect `git status --short`, `git diff`, and `git diff --cached` before every commit. Prefer explicit paths or `git add -p`; never use `git add .` when unrelated work may exist.
-
-### Scope and Commit Message Quality
-
-Use the narrowest stable module scope that a maintainer would search for in history. Prefer `auth-session`, `network-backend`, `parser`, or `cli-api` over `core`, `system`, `misc`, or a broad product name. The scope should describe the owning module, not merely the issue category or repository.
-
-A non-trivial commit needs a body. Keep the subject concise but specific (usually 50–72 characters, imperative, no trailing period), then explain:
-
-- **Why:** the user-visible problem or invariant being addressed;
-- **What changed:** the owned behavior and important boundary decisions;
-- **Evidence:** tests/build/static checks run, plus environment limitations;
-- **Follow-up:** intentionally deferred behavior, if any.
+Use this workflow whenever there is more than one changed hunk, file, responsibility, or change intent.
 
 ```text
-<type>(<owning-module>): <specific behavior in imperative form>
-
-Why: <problem or invariant>
-What: <implementation boundary and notable decision>
-Evidence: <checks run; known environment limitation>
-Follow-up: <deferred work, or "None">
+inspect workspace
+      ↓
+trace changed behavior and call/dependency paths
+      ↓
+assign every task-owned hunk to one responsibility
+      ↓
+build dependency-ordered atomic commit plan
+      ↓
+stage one planned slice
+      ↓
+inspect staged diff + verify slice
+      ↓
+generate stable commit message
+      ↓
+commit if authorized
+      ↓
+repeat
 ```
 
-Never use a generic scope or a one-line subject for a change whose rationale, verification, or limitation would be lost without a body. A short trivial change may omit the body only when the subject fully explains the change and no caveat affects future maintainers.
+Do not let current diff order or edit chronology dictate history. The final commit sequence should explain how the implementation logically comes into existence.
 
-### Comment Discipline at Commit Boundaries
+## Atomic Commit Invariant
 
-Before committing code that introduces a non-obvious constraint, verify that the code explains it locally: ownership transfer, lock ordering, resource cleanup, error normalization, truncation, ABI/platform workaround, or a deliberate simplification. Write a short comment at the decision point when names and structure cannot carry that constraint. Do not add line-by-line narration, comments that restate the next statement, or long design essays in source files; put broader rationale in the appropriate documentation.
+Each commit should answer one sentence cleanly:
 
-### Good Examples
+> What behavior or invariant changes, which responsibility owns it, and why can this slice be reviewed and reverted as one unit?
 
-```bash
-# GOOD: Separate behavior, tests, and refactor into focused commits
-git commit -m "fix(auth): reject expired access tokens"
-git commit -m "test(auth): add expired token coverage"
-git commit -m "refactor(auth): extract token validation helper"
+Treat a commit as atomic when:
+
+- it has one primary intent;
+- it stays inside one coherent responsibility or rollback boundary;
+- every included hunk is necessary for that intent;
+- its dependency position is clear;
+- it is independently understandable;
+- it builds or passes the relevant focused check when the repository permits that boundary;
+- reverting it does not silently revert unrelated behavior.
+
+Atomic does not mean one file, one function, or minimum line count. Several files may belong together when they form one inseparable behavior boundary.
+
+## Split Decision Order
+
+When several possible cuts exist, decide in this order. Higher rules override lower ones.
+
+1. **Responsibility / ownership boundary** — separate modules or layers that own different behavior or rollback independently.
+2. **Logical dependency** — prerequisites precede the changes that depend on them.
+3. **Behavior / invariant** — keep one observable behavior, policy, bug, or internal invariant per commit.
+4. **Implementation order** — foundation before owned implementation; implementation before integration/caller wiring.
+5. **Change intent** — independently valid `refactor`, `feat`, `fix`, `test`, `docs`, build/config, or mechanical cleanup should not be mixed.
+6. **Verification lifecycle** — focused proof may travel with the behavior it exclusively verifies; independent test infrastructure or broad regression coverage may stand alone.
+7. **Edit chronology** — use only as supporting evidence, never as the primary split rule.
+
+Never split merely by filename order, directory order, diff order, or an arbitrary line-count target.
+
+## Boundary Classes
+
+Classify changed hunks before staging:
+
+| Boundary | Typical contents | Split when |
+|---|---|---|
+| Contract | public API, type, ABI, schema, compatibility meaning | consumers depend on the new contract |
+| Foundation | reusable helper, primitive, abstraction | independently valid and enables later behavior |
+| Implementation | one module's owned production behavior | ownership or rollback differs |
+| Integration | caller wiring, routing, registration, lifecycle connection | connects already-valid components |
+| Verification | focused tests, fixtures, probes | proof has an independent lifecycle |
+| Documentation | user/developer documentation | useful independently of mechanics |
+| Fix | correction to an already coherent behavior | discovered after the earlier boundary exists |
+| Mechanical | formatting, rename-only, generated/config churn | obscures semantic review |
+
+## Dependency Ordering
+
+Prefer a history shaped like:
+
+```text
+contract / primitive
+        ↓
+owned implementation
+        ↓
+integration / caller wiring
+        ↓
+verification / documentation
 ```
 
-### Bad Examples
+This is a reasoning model, not a mandatory four-commit template.
 
-```bash
-# BAD: Multiple unrelated changes in one commit
-git commit -m "fix auth, update UI, clean code, and add tests"
+Apply these constraints:
 
-# BAD: Vague and impossible to review later
-git commit -m "big update"
-git commit -m "final changes"
+- Keep a signature change with the minimum required callers when separating them would create a compile-breaking or meaningless intermediate commit.
+- Put a preparatory refactor before a feature only when it is behavior-preserving and independently reviewable.
+- Put a lower-level implementation before upper-level integration when each boundary can stand alone.
+- Keep a focused unit test with its behavior when separating it adds no useful history.
+- Split reusable test harnesses, broad regression suites, or independent verification capability when they have their own lifecycle.
+- Put documentation after the behavior it describes unless the documentation itself defines a contract.
+- Put a defect discovered after a coherent commit into a later `fix` commit rather than hiding it in unrelated work.
+- If two proposed commits depend cyclically on each other or either would be false/broken alone, merge them into one larger atomic boundary.
+
+## Commit Plan Gate
+
+Before staging the first slice, establish a plan like:
+
+```text
+Commit 1: <proposed message>
+Purpose: <one logical change>
+Owns: <module or responsibility>
+Includes: <paths or hunks>
+Depends on: <none or earlier commit>
+Evidence: <build/test/static/review checkpoint>
+
+Commit 2: ...
 ```
 
-### Splitting Work into Atomic Commits
+The plan is ready only when:
 
-```bash
-# Stage changes interactively
-git add -p
+- every task-owned hunk belongs to exactly one planned commit;
+- unrelated or user-owned hunks belong to none;
+- dependency direction is explicit and acyclic;
+- each commit is independently understandable at its chosen boundary;
+- the sequence reads naturally in `git log`;
+- every proposed message describes the resulting behavior, not the editing activity.
 
-# Commit one logical change at a time
-git commit -m "fix(api): validate missing user id"
+If ownership of a hunk is uncertain, leave it unstaged and surface the ambiguity rather than attaching it to the nearest commit.
 
-# Continue staging the next logical change
-git add -p
-git commit -m "test(api): cover missing user id validation"
+## Per-Commit Execution Loop
+
+For each planned commit:
+
+1. Inspect `git status --short`, `git diff`, and `git diff --cached`.
+2. Stage only that commit's explicit paths/hunks with explicit paths or `git add -p`.
+3. Re-read `git diff --cached`.
+4. Confirm all staged hunks satisfy the same atomic invariant.
+5. Run the smallest meaningful build/test/static check available for that slice.
+6. Generate the message from the staged diff plus the plan intent.
+7. Commit only if authorized.
+8. Re-check status before moving to the next dependency node.
+
+If verification fails because the proposed split is structurally invalid, revise the boundary. Do not create a known-broken intermediate commit just to keep the diff small.
+
+## Commit Message Contract
+
+Use Gitmoji plus Conventional Commits:
+
+```text
+<emoji> <type>(<scope>): <subject>
+
+- <what changed and why>
+- <important boundary or behavior detail>
+- <verification or limitation when useful>
 ```
 
-### When to Squash
+For trivial commits, omit the body when the subject completely explains the change and no rationale or caveat would be lost.
 
-Squash commits when the branch contains noisy intermediate commits that do not add useful history.
+### Type and Gitmoji
 
-**Good squash candidates:**
-- `WIP` commits
-- Fixup commits created during review
-- Repeated formatting-only corrections
-- Local trial-and-error commits
+Use the semantic type of the atomic slice, not the dominant file extension or largest diff.
 
-**Do not squash when:**
-- Commits represent clear, independent logical changes
-- Keeping separate commits makes review or revert easier
-- The branch has already been shared and others may depend on its history
+| Type | Emoji | Meaning |
+|---|---|---|
+| `feat` | ✨ | new behavior or capability |
+| `fix` | 🐞 | bug fix |
+| `docs` | 📝 | documentation-only change |
+| `style` | 💄 | formatting/style without behavior change |
+| `refactor` | ♻️ | behavior-preserving restructuring |
+| `perf` | ⚡️ | performance improvement |
+| `test` | ✅ | test-only or independent verification change |
+| `build` | 📦 | build system or dependency packaging |
+| `ci` | 👷 | CI workflow/configuration |
+| `chore` | 🔧 | maintenance/configuration not covered above |
+| `i18n` | 🌐 | localization or translation |
+| `revert` | ⏪ | explicit revert of an earlier commit |
 
-## Merge vs Rebase
+A mixed diff does not justify a mixed commit. If `refactor + feat`, `fix + formatting`, or `docs + unrelated code` can stand independently, split them first and generate one message per atomic commit.
 
-### Merge (Preserves History)
+### Stable Scope Selection
 
-```bash
-# Creates a merge commit
-git checkout main
-git merge feature/user-auth
+Choose the narrowest stable responsibility a maintainer would search for later.
 
-# Result:
-# *   merge commit
-# |\
-# | * feature commits
-# |/
-# * main commits
+Prefer, in order:
+
+1. existing repository/module vocabulary;
+2. public subsystem or component name;
+3. stable internal responsibility;
+4. a concise file-family name only when no stronger module concept exists.
+
+Good scopes:
+
+```text
+network-runtime
+wifi-profile
+wpa-control
+auth-session
+parser
+cli-api
 ```
 
-**Use when:**
-- Merging feature branches into `main`
-- You want to preserve exact history
-- Multiple people worked on the branch
-- The branch has been pushed and others may have based work on it
+Avoid volatile or meaningless scopes such as:
 
-### Rebase (Linear History)
-
-```bash
-# Rewrites feature commits onto target branch
-git checkout feature/user-auth
-git rebase main
-
-# Result:
-# * feature commits (rewritten)
-# * main commits
+```text
+core
+misc
+changes
+update
+src
+issue-123
 ```
 
-**Use when:**
-- Updating your local feature branch with latest `main`
-- You want a linear, clean history
-- The branch is local-only (not pushed)
-- You're the only one working on the branch
+Keep the same scope for the same responsibility across adjacent commits. Do not rename the scope merely because a later commit touches different files in that module.
 
-### Rebase Workflow
+### Subject Rules
 
-```bash
-# Update feature branch with latest main (before PR)
-git checkout feature/user-auth
-git fetch origin
-git rebase origin/main
+Write the subject in English and make it stable enough to understand months later.
 
-# Fix any conflicts
-# Tests should still pass
+- use imperative mood;
+- use lowercase after `:` unless a proper identifier requires otherwise;
+- do not end with a period;
+- keep the subject text at or below 50 characters when practical;
+- name the resulting behavior, not the implementation activity;
+- avoid vague verbs such as `update`, `change`, `modify`, `adjust`, `cleanup`, or `handle` unless the object makes the behavior precise.
 
-# Force push (only if you're the only contributor)
-git push --force-with-lease origin feature/user-auth
+Prefer:
+
+```text
+✨ feat(wifi-runtime): refresh address after reconnect
+🐞 fix(wpa-control): preserve scan events during reconnect
+♻️ refactor(network-runtime): extract dhcp activation path
 ```
 
-### When NOT to Rebase
+Avoid:
 
-```
-# NEVER rebase branches that:
-- Have been pushed to a shared repository
-- Other people have based work on
-- Are protected branches (main, develop)
-- Are already merged
-
-# Why: Rebase rewrites history, breaking others' work
+```text
+🔧 chore(core): update files
+✨ feat(network): make changes
+🐞 fix: fix issue
 ```
 
-## Pull Request Workflow
+### Body Rules
 
-### PR Title Format
+Use an English bullet body when the rationale, boundary decision, evidence, or limitation is not obvious from the subject.
 
-```
-<type>(<scope>): <description>
+- use `-` bullets;
+- explain what and why, not a line-by-line diff;
+- wrap lines to about 72 characters when practical;
+- mention verification when it materially increases trust;
+- mention deferred behavior only when future maintainers could otherwise misread the commit as complete.
 
-Examples:
-feat(auth): add SSO support for enterprise users
-fix(api): resolve race condition in order processing
-docs(api): add OpenAPI specification for v2 endpoints
-```
+Example:
 
-### PR Description Template
+```text
+✨ feat(network-runtime): add explicit dhcp activation
 
-```markdown
-## What
-
-Brief description of what this PR does.
-
-## Why
-
-Explain the motivation and context.
-
-## How
-
-Key implementation details worth highlighting.
-
-## Testing
-
-- [ ] Unit tests added/updated
-- [ ] Integration tests added/updated
-- [ ] Manual testing performed
-
-## Screenshots (if applicable)
-
-Before/after screenshots for UI changes.
-
-## Checklist
-
-- [ ] Code follows project style guidelines
-- [ ] Self-review completed
-- [ ] Comments added for complex logic
-- [ ] Documentation updated
-- [ ] No new warnings introduced
-- [ ] Tests pass locally
-- [ ] Related issues linked
-
-Closes #123
+- keep address acquisition under explicit runtime control
+- expose dhcp activation without coupling it to wifi enable
+- verify with focused network runtime tests
 ```
 
-### Code Review Checklist
+## Message-Only Mode
 
-**For Reviewers:**
+When the user asks only for a commit message or provides a prepared staged diff for naming:
 
-- [ ] Does the code solve the stated problem?
-- [ ] Are there any edge cases not handled?
-- [ ] Is the code readable and maintainable?
-- [ ] Are there sufficient tests?
-- [ ] Are there security concerns?
-- [ ] Is the commit history clean (squashed if needed)?
+- inspect the supplied/staged diff;
+- infer the narrowest valid atomic intent;
+- if the diff actually contains several independent atomic changes, return separate proposed messages in dependency order rather than disguising them as one message;
+- output only the commit message(s) when the user explicitly requested pure message output;
+- do not stage, commit, amend, or push unless separately requested.
 
-**For Authors:**
+## History Quality Check
 
-- [ ] Self-review completed before requesting review
-- [ ] CI passes (tests, lint, typecheck)
-- [ ] PR size is reasonable (<500 lines ideal)
-- [ ] Related to a single feature/fix
-- [ ] Description clearly explains the change
+Before finalizing a commit sequence, ask whether a future maintainer can answer these from `git log` plus one commit diff at a time:
 
-## Conflict Resolution
+- What responsibility changed?
+- Why did it change?
+- What prerequisite came before it?
+- What behavior did this commit establish?
+- Can this commit be reviewed or reverted without dragging unrelated work with it?
 
-### Identify Conflicts
+If not, revise the split or message.
 
-```bash
-# Check for conflicts before merge
-git checkout main
-git merge feature/user-auth --no-commit --no-ff
+## Examples
 
-# If conflicts, Git will show:
-# CONFLICT (content): Merge conflict in src/auth/login.ts
-# Automatic merge failed; fix conflicts and then commit the result.
+### Good: dependency-ordered feature
+
+```text
+♻️ refactor(network-runtime): expose address refresh primitive
+✨ feat(wifi-runtime): refresh address after reconnect
+✅ test(wifi-runtime): cover reconnect address refresh
 ```
 
-### Resolve Conflicts
+This is useful only when the refactor and tests truly have independent boundaries. If the first commit cannot stand without the feature, or the test exclusively proves the feature and adds no separate history value, keep them together instead.
 
-```bash
-# See conflicted files
-git status
+### Good: one behavior across several files
 
-# View conflict markers in file
-# <<<<<<< HEAD
-# content from main
-# =======
-# content from feature branch
-# >>>>>>> feature/user-auth
+A public API declaration, its implementation, and required caller updates may form one commit when splitting them would leave an invalid intermediate state:
 
-# Option 1: Manual resolution
-# Edit file, remove markers, keep correct content
-
-# Option 2: Use merge tool
-git mergetool
-
-# Option 3: Accept one side
-git checkout --ours src/auth/login.ts    # Keep main version
-git checkout --theirs src/auth/login.ts  # Keep feature version
-
-# After resolving, stage and commit
-git add src/auth/login.ts
-git commit
+```text
+✨ feat(wifi-profile): add persistent profile removal
 ```
 
-### Conflict Prevention Strategies
+Atomicity follows the behavior boundary, not file count.
 
-```bash
-# 1. Keep feature branches small and short-lived
-# 2. Rebase frequently onto main
-git checkout feature/user-auth
-git fetch origin
-git rebase origin/main
+### Bad: edit transcript
 
-# 3. Communicate with team about touching shared files
-# 4. Use feature flags instead of long-lived branches
-# 5. Review and merge PRs promptly
+```text
+🔧 chore(network): update header
+🔧 chore(network): update source
+🔧 chore(network): fix compile
+✨ feat(network): finish feature
 ```
 
-## Branch Management
+This records editing chronology rather than engineering intent.
 
-### Naming Conventions
+### Bad: mixed rollback boundaries
 
-```
-# Feature branches
-feature/user-authentication
-feature/JIRA-123-payment-integration
-
-# Bug fixes
-fix/login-redirect-loop
-fix/456-null-pointer-exception
-
-# Hotfixes (production issues)
-hotfix/critical-security-patch
-hotfix/database-connection-leak
-
-# Releases
-release/1.2.0
-release/2024-01-hotfix
-
-# Experiments/POCs
-experiment/new-caching-strategy
-poc/graphql-migration
+```text
+✨ feat(network): add dhcp control and refactor parser
 ```
 
-### Branch Cleanup
+Split the unrelated parser refactor unless it is a necessary, behavior-preserving prerequisite to the DHCP change.
 
-```bash
-# Delete local branches that are merged
-git branch --merged main | grep -v "^\*\|main" | xargs -n 1 git branch -d
+## Other Git Operations
 
-# Delete remote-tracking references for deleted remote branches
-git fetch -p
+Do not load generic Git guidance unless the task needs it:
 
-# Delete local branch
-git branch -d feature/user-auth  # Safe delete (only if merged)
-git branch -D feature/user-auth  # Force delete
-
-# Delete remote branch
-git push origin --delete feature/user-auth
-```
-
-### Stash Workflow
-
-Use stashes only when a commit or isolated worktree is not practical. Give the entry a unique tag, capture its SHA immediately, restore by SHA rather than position, verify the restored paths, and drop only that entry after successful restoration.
-
-```bash
-# Save work in progress with a unique tag
-git stash push -u -m "WIP: user authentication <task-id>"
-git stash list --format='%H %gs'  # capture the SHA matching the unique tag
-
-# Restore the identified entry, then verify before dropping it
-git stash apply <captured-sha>
-git status --short
-# Confirm the expected paths and diff are restored
-git stash drop <current-stash-ref-for-captured-sha>
-```
-
-## Release Management
-
-### Semantic Versioning
-
-```
-MAJOR.MINOR.PATCH
-
-MAJOR: Breaking changes
-MINOR: New features, backward compatible
-PATCH: Bug fixes, backward compatible
-
-Examples:
-1.0.0 → 1.0.1 (patch: bug fix)
-1.0.1 → 1.1.0 (minor: new feature)
-1.1.0 → 2.0.0 (major: breaking change)
-```
-
-### Creating Releases
-
-```bash
-# Create annotated tag
-git tag -a v1.2.0 -m "Release v1.2.0
-
-Features:
-- Add user authentication
-- Implement password reset
-
-Fixes:
-- Resolve login redirect issue
-
-Breaking Changes:
-- None"
-
-# Push tag to remote
-git push origin v1.2.0
-
-# List tags
-git tag -l
-
-# Delete tag
-git tag -d v1.2.0
-git push origin --delete v1.2.0
-```
-
-### Changelog Generation
-
-```bash
-# Generate changelog from commits
-git log v1.1.0..v1.2.0 --oneline --no-merges
-
-# Or use conventional-changelog
-npx conventional-changelog -i CHANGELOG.md -s
-```
-
-## Git Configuration
-
-### Essential Configs
-
-```bash
-# User identity
-git config --global user.name "Your Name"
-git config --global user.email "your@email.com"
-
-# Default branch name
-git config --global init.defaultBranch main
-
-# Pull behavior (rebase instead of merge)
-git config --global pull.rebase true
-
-# Push behavior (push current branch only)
-git config --global push.default current
-
-# Auto-correct typos
-git config --global help.autocorrect 1
-
-# Better diff algorithm
-git config --global diff.algorithm histogram
-
-# Color output
-git config --global color.ui auto
-```
-
-### Useful Aliases
-
-```bash
-# Add to ~/.gitconfig
-[alias]
-    co = checkout
-    br = branch
-    ci = commit
-    st = status
-    unstage = reset HEAD --
-    last = log -1 HEAD
-    visual = log --oneline --graph --all
-    amend = commit --amend --no-edit
-    wip = commit -m "WIP"
-    undo = reset --soft HEAD~1
-    contributors = shortlog -sn
-```
-
-### Gitignore Patterns
-
-```gitignore
-# Dependencies
-node_modules/
-vendor/
-
-# Build outputs
-dist/
-build/
-*.o
-*.exe
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Test coverage
-coverage/
-
-# Cache
-.cache/
-*.tsbuildinfo
-```
-
-## Common Workflows
-
-### Starting a New Feature
-
-```bash
-# 1. Update main branch
-git checkout main
-git pull origin main
-
-# 2. Create feature branch
-git checkout -b feature/user-auth
-
-# 3. Make changes and commit
-git add src/auth/login.ts tests/auth/login.test.ts
-git commit -m "feat(auth): implement OAuth2 login"
-
-# 4. Push to remote
-git push -u origin feature/user-auth
-
-# 5. Create Pull Request on GitHub/GitLab
-```
-
-### Updating a PR with New Changes
-
-```bash
-# 1. Make additional changes
-git add src/auth/login.ts tests/auth/login.test.ts
-git commit -m "feat(auth): add error handling"
-
-# 2. Push updates
-git push origin feature/user-auth
-```
-
-### Syncing Fork with Upstream
-
-```bash
-# 1. Add upstream remote (once)
-git remote add upstream https://github.com/original/repo.git
-
-# 2. Fetch upstream
-git fetch upstream
-
-# 3. Merge upstream/main into your main
-git checkout main
-git merge upstream/main
-
-# 4. Push to your fork
-git push origin main
-```
-
-### Undoing Mistakes
-
-```bash
-# Undo last commit (keep changes)
-git reset --soft HEAD~1
-
-# Undo last commit (discard changes)
-git reset --hard HEAD~1
-
-# Undo last commit pushed to remote
-git revert HEAD
-git push origin main
-
-# Undo specific file changes
-git checkout HEAD -- path/to/file
-
-# Fix last commit message
-git commit --amend -m "New message"
-
-# Add forgotten file to last commit
-git add forgotten-file
-git commit --amend --no-edit
-```
-
-## Git Hooks
-
-### Pre-Commit Hook
-
-```bash
-#!/bin/bash
-# .git/hooks/pre-commit
-
-# Run linting
-npm run lint || exit 1
-
-# Run tests
-npm test || exit 1
-
-# Check for secrets
-if git diff --cached | grep -E '(password|api_key|secret)'; then
-    echo "Possible secret detected. Commit aborted."
-    exit 1
-fi
-```
-
-### Pre-Push Hook
-
-```bash
-#!/bin/bash
-# .git/hooks/pre-push
-
-# Run full test suite
-npm run test:all || exit 1
-
-# Check for console.log statements
-if git diff origin/main | grep -E 'console\.log'; then
-    echo "Remove console.log statements before pushing."
-    exit 1
-fi
-```
-
-## Anti-Patterns
-
-```
-# BAD: Committing directly to main
-git checkout main
-git commit -m "fix bug"
-
-# GOOD: Use feature branches and PRs
-
-# BAD: Committing secrets
-git add .env  # Contains API keys
-
-# GOOD: Add to .gitignore, use environment variables
-
-# BAD: Giant PRs (1000+ lines)
-# GOOD: Break into smaller, focused PRs
-
-# BAD: "Update" commit messages
-git commit -m "update"
-git commit -m "fix"
-
-# GOOD: Descriptive messages
-git commit -m "fix(auth): resolve redirect loop after login"
-
-# BAD: Rewriting public history
-git push --force origin main
-
-# GOOD: Use revert for public branches
-git revert HEAD
-
-# BAD: Long-lived feature branches (weeks/months)
-# GOOD: Keep branches short (days), rebase frequently
-
-# BAD: Committing generated files
-git add dist/
-git add node_modules/
-
-# GOOD: Add to .gitignore
-```
-
-## Quick Reference
-
-| Task | Command |
-|------|---------|
-| Create branch | `git checkout -b feature/name` |
-| Switch branch | `git checkout branch-name` |
-| Delete branch | `git branch -d branch-name` |
-| Merge branch | `git merge branch-name` |
-| Rebase branch | `git rebase main` |
-| View history | `git log --oneline --graph` |
-| View changes | `git diff` |
-| Stage changes | `git add <explicit-paths>` or `git add -p` |
-| Commit | `git commit -m "message"` |
-| Push | `git push origin branch-name` |
-| Pull | `git pull origin branch-name` |
-| Stash | `git stash push -u -m "WIP: <task-id>"`; apply captured SHA, verify, then drop |
-| Undo last commit | `git reset --soft HEAD~1` |
-| Revert commit | `git revert HEAD` |
+- For branch/worktree creation, switching, merge/rebase, and conflicts, read `references/branching-history.md`.
+- For PRs, releases, tags, and review conventions, read `references/collaboration-release.md`.
+- For stash, recovery, configuration, hooks, `.gitignore`, and common commands, read `references/tooling-recovery.md`.

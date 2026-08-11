@@ -1,0 +1,23 @@
+{
+  "skill_name": "git-workflow",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I changed a network runtime helper, wired WiFi reconnect to call it, added a focused reconnect test, and also reformatted an unrelated parser file. Split these changes into commits and give me the commit plan and messages. Do not commit yet.",
+      "expected_output": "Separates unrelated parser formatting; orders reusable network foundation before WiFi integration when independently valid; places the focused test with the behavior or separately only if justified; produces stable Gitmoji Conventional Commit messages without executing commits.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "This API signature changed in a header, its implementation changed, and three mandatory callers must change or the tree will not compile. I want atomic commits. Should these be four tiny commits? Prepare the commit split and message.",
+      "expected_output": "Does not split mechanically by file. Keeps the signature, implementation, and mandatory callers together when separating would create a broken or meaningless intermediate state, and explains the single atomic behavior boundary.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Generate commit messages for this mixed staged diff: behavior-preserving auth helper extraction plus a new OAuth fallback that uses the helper. I only want the messages, nothing else.",
+      "expected_output": "Recognizes two independent intents when the refactor can stand alone; outputs dependency-ordered refactor then feature messages using English Gitmoji Conventional Commit format, with no explanatory prose outside the messages.",
+      "files": []
+    }
+  ]
+}
