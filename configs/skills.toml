@@ -1,0 +1,39 @@
+# configs/skills.toml — 外部 skill 清单（npx source）
+#
+# 本文件声明"从外部仓库安装的 skill"，由 setup.sh 用 npx skills 驱动：
+#   npx -y skills@latest add <repo> -s <skill> -a claude-code -g
+#
+# repo 指仓库本体（owner/repo 或完整 URL）；skill 用 SKILL.md frontmatter 的 name
+# 或目录 basename（带斜杠的子路径不会被匹配）。子目录里的 skill 会被默认搜索深度发现。
+# 自有 skill 不在这里——它们直接放在 .claude/skills/（仓库源码，即改即生效）。
+# 注意：npx skills 装出来是 copy 到 ~/.claude/skills/，改源码后需 `npx skills update` 同步。
+
+# 可选：vercel 官方 skill（示例，按需取消注释）
+# [[sources]]
+# name = "vercel-agent-skills"
+# repo = "vercel-labs/agent-skills"
+# skill = "*"
+# agent = "claude-code"
+# scope = "global"
+
+# mattpocock/skills 仓库，子目录 skills/productivity/ 下各为一个独立 skill
+[[sources]]
+name = "grilling"
+repo = "mattpocock/skills"
+skill = "grilling"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "grill-me"
+repo = "mattpocock/skills"
+skill = "grill-me"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "humanizer"
+repo = "blader/humanizer"
+skill = "humanizer"
+agent = "claude-code"
+scope = "global"

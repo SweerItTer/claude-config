@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "canonical_instruction": "AGENTS.md",
+  "governance_file": "docs/dev-guide/document-governance.md",
+  "paths": {
+    "requirement": "docs/requirement",
+    "specs": "docs/specs",
+    "dev_guide": "docs/dev-guide",
+    "analysis": "docs/analysis",
+    "archive": "docs/archive",
+    "todo": "docs/TODO.md"
+  }
+}

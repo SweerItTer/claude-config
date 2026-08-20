@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-omc_cli="$repo_root/external/oh-my-claudecode/bridge/cli.cjs"
+# OMC CLI 现在由 claude plugin 安装（plugins.toml 的 oh-my-claudecode 条目）。
+# 解析已安装的 plugin 缓存路径；找不到则报 FAIL。
+claude_home="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 timeout_seconds="${CLAUDE_DOCTOR_TIMEOUT:-120}"
 
-if [[ ! -f "$omc_cli" ]]; then
-    echo "FAIL: OMC CLI 不存在: $omc_cli"
+omc_cli="$(find "$claude_home/plugins/cache/omc/oh-my-claudecode" -mindepth 3 -maxdepth 3 -path '*/bridge/cli.cjs' -type f 2>/dev/null | sort -V | tail -1 || true)"
+
+if [[ -z "$omc_cli" ]]; then
+    echo "FAIL: OMC plugin 未安装 (cache/omc/oh-my-claudecode 下无 bridge/cli.cjs)。请先运行 ./setup.sh 安装 plugin。"
     exit 1
 fi
 

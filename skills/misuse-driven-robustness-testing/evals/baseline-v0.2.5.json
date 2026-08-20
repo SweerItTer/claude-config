@@ -1,0 +1,15 @@
+{
+  "version": "0.2.5",
+  "suite": "v0.2.5-deterministic-tool-regression",
+  "passed_ids": [
+    "T01",
+    "T02",
+    "T03",
+    "T04",
+    "T05",
+    "T06",
+    "T07"
+  ],
+  "total": 7,
+  "passed": 7
+}

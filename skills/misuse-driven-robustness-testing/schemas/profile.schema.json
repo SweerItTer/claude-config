@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:misuse-driven-robustness-testing:profile-schema:v0.2.4",
+  "title": "Misuse-driven robustness testing profile",
+  "type": "object",
+  "required": [
+    "system",
+    "claims"
+  ],
+  "properties": {
+    "system": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "states": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "statement",
+          "impact",
+          "probability"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"
+          },
+          "statement": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "impact": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "probability": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "lenses": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "misunderstanding",
+                "input",
+                "sequence",
+                "repeat",
+                "interrupt",
+                "timing",
+                "resource",
+                "environment",
+                "ownership",
+                "observability"
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "safety": {
+      "type": "object",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "max_duration_minutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "forbidden": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*"
+    }
+  }
+}

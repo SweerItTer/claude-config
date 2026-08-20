@@ -1,0 +1,28 @@
+{
+  "system": "Wi-Fi lifecycle module",
+  "scope": "init/bind/enable/scan/disable and asynchronous scan-result handling",
+  "states": ["UNINIT", "READY", "ENABLED", "SCANNING", "DISABLED"],
+  "operations": ["init", "bind_ifname", "enable", "scan", "disable", "deliver_scan_result"],
+  "dependencies": ["wpa control socket", "network runtime", "event relay"],
+  "claims": [
+    {
+      "id": "C1",
+      "statement": "enable before bind_ifname fails without starting workers",
+      "impact": 3,
+      "probability": 4,
+      "lenses": ["sequence", "observability"]
+    },
+    {
+      "id": "C2",
+      "statement": "old scan-result events cannot mutate a disabled or rebuilt instance",
+      "impact": 5,
+      "probability": 3,
+      "lenses": ["interrupt", "timing", "ownership"]
+    }
+  ],
+  "safety": {
+    "environment": "host simulator or dedicated board",
+    "max_duration_minutes": 30,
+    "forbidden": ["production device", "unbounded event flood"]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "blocking": [],
+  "fix": [],
+  "improve": [],
+  "pass": [
+    {
+      "code": "NO_BROKEN_MARKDOWN_LINKS",
+      "detail": "Checked 0 relative Markdown links in Skill runtime documentation; none were broken.",
+      "path": "."
+    },
+    {
+      "code": "NO_MACHINE_ABSOLUTE_PATHS",
+      "detail": "No developer-machine absolute paths were detected in Skill runtime documentation.",
+      "path": "."
+    },
+    {
+      "code": "SKILL_SOURCE_PROFILE",
+      "detail": "Skill-source audit profile is active; application-repository taxonomy, TODO, and canonical-instruction requirements are intentionally not applied.",
+      "path": "."
+    },
+    {
+      "code": "SKILL_FRONTMATTER_PRESENT",
+      "detail": "SKILL.md declares name and description.",
+      "path": "SKILL.md"
+    },
+    {
+      "code": "SKILL_EVALS_PRESENT",
+      "detail": "Evaluation scenarios are present in the source package.",
+      "path": "evals/evals.json"
+    },
+    {
+      "code": "SKILL_REFERENCES_PRESENT",
+      "detail": "Progressively loaded reference material is present.",
+      "path": "references"
+    },
+    {
+      "code": "SKILL_SCRIPTS_PRESENT",
+      "detail": "Bundled deterministic scripts directory is present.",
+      "path": "scripts"
+    }
+  ]
+}

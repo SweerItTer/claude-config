@@ -25,6 +25,28 @@ else
 fi
 
 SCRIPT_DIR="$REPO_ROOT/script"
+
+# --tui fast-path：启动交互式 TUI 安装器。在 source install-common / 参数预解析前
+# 拦截，避免触发顶层 engine 初始化。TUI 是独立可执行文件，本脚本只负责定位与 exec。
+TUI_REQUESTED=false
+TUI_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--tui" ]]; then
+        TUI_REQUESTED=true
+    else
+        TUI_ARGS+=("$arg")
+    fi
+done
+if [[ "$TUI_REQUESTED" == true ]]; then
+    TUI_BIN="$REPO_ROOT/build/installer-tui/installer-tui"
+    if [[ ! -x "$TUI_BIN" ]]; then
+        echo "installer-tui 未构建，请先构建:" >&2
+        echo "  cmake -S tools/installer-tui -B build/installer-tui -DCMAKE_BUILD_TYPE=Release && cmake --build build/installer-tui --parallel" >&2
+        exit 2
+    fi
+    exec "$TUI_BIN" --repo-root "$REPO_ROOT" "${TUI_ARGS[@]}"
+fi
+
 # shellcheck source=script/install-common.sh
 source "$SCRIPT_DIR/install-common.sh"
 
@@ -35,16 +57,32 @@ NO_VERIFY=false
 FORCE=false
 SMOKE_TEST=false
 UPDATE=false
-UPDATE_THIRD_PARTY_REMOTE=false
-NO_PATCH=false
-PLUGIN_FILTER_ENABLED=false
+UPDATE_SKILL=""
+UPDATE_PLUGIN=""
+UPDATE_ALL=false
+SELECTED_SKILL=""
+SELECTED_PLUGIN=""
+# 多选：--skill/--plugin 支持重复出现，逐个追加；--skip-* 显式跳过整类。
+# 空数组 ≠ 全量（全量 = 无 --skip 且无显式选择时默认装该类别全部）
+SELECTED_SKILLS=()
 SELECTED_PLUGINS=()
-KNOWN_PLUGIN_MODULES=(openspec codegraph context-mode omc superpowers ponytail)
+SKIP_SKILLS=false
+SKIP_PLUGINS=false
+# typed 卸载：--uninstall-skill/--uninstall-plugin 追加 skill:NAME / plugin:NAME，
+# 规避同名 skill/plugin 被 uninstall_one 按 skill-first 误分派
+UNINSTALL_TYPED_LIST=()
+UPDATE_SKILLS=()
+UPDATE_LOCAL_SKILLS=()
+UPDATE_PLUGINS=()
+# 统一资源入口：--update-resource/--uninstall-resource 追加 kind:spec；
+# 旧 typed update/uninstall 参数经兼容转换后并入同一列表，走统一 resolver。
+# --choose 提供 kind:id=local|remote|skip 冲突选择。
+UPDATE_RESOURCES=()
+UNINSTALL_RESOURCES=()
+RESOURCE_CHOICES=()
 ACTION="install"
 ACTION_EXPLICIT=false
 
-KNOWN_MARKETPLACES_CONFIG="$REPO_ROOT/config/known_marketplaces.json"
-EXTERNAL_DIR="$REPO_ROOT/external"
 NVM_INSTALL_VERSION="v0.40.4"
 MIN_SUPPORTED_NODE_MAJOR=20
 MAX_SUPPORTED_NODE_MAJOR=25
@@ -503,42 +541,6 @@ EOF
     rm -f "$tmp"
 }
 
-ensure_marketplace_symlink() {
-    local src="$1"
-    local dst="$2"
-    local label="$3"
-
-    if symlink_points_to "$dst" "$src"; then
-        pass "$label 已就绪"
-        return 0
-    fi
-
-    local backup_base="${dst}.backup.$(date +%s)"
-    local backup="$backup_base"
-    local backup_index=0
-    while [[ -e "$backup" || -L "$backup" ]]; do
-        backup_index=$((backup_index + 1))
-        backup="${backup_base}.${backup_index}"
-    done
-
-    if [[ "$DRY_RUN" == true ]]; then
-        if [[ -e "$dst" || -L "$dst" ]]; then
-            info "[DRY-RUN] move $dst -> $backup, then symlink to $src"
-        else
-            info "[DRY-RUN] ln -s $src -> $dst"
-        fi
-        return 0
-    fi
-
-    mkdir -p "$(dirname "$dst")"
-    if [[ -L "$dst" || -e "$dst" ]]; then
-        mv "$dst" "$backup"
-        warn "$label 目标冲突，已备份到: $backup"
-    fi
-    ln -s "$src" "$dst"
-    log "$label 已更新"
-}
-
 ensure_symlink() {
     local src="$1"
     local dst="$2"
@@ -577,108 +579,8 @@ ensure_symlink() {
     log "$label 已更新"
 }
 
-__setup_original_run_installer() {
-    local name="$1"
-    local script="$SCRIPT_DIR/install-${name}.sh"
-    shift || true
-
-    if [[ ! -f "$script" ]]; then
-        err "安装脚本不存在: $script"
-        return 1
-    fi
-
-    info "--- ${name} [${ACTION}] ---"
-    ACTION="$ACTION" bash "$script" "$REPO_ROOT" "$DRY_RUN" "$FORCE" "$@"
-}
-
-run_installer() {
-  local name="${1:-}"
-  if ! should_run_plugin "$name"; then
-    info "Skip plugin installer: $name (--plugins filter active)"
-    return 0
-  fi
-  __setup_original_run_installer "$@"
-}
-
-normalize_plugin_name() {
-  local name="${1:-}"
-  name="${name,,}"
-  name="${name//_/-}"
-
-  case "$name" in
-    context|contextmode|context-mode) echo "context-mode" ;;
-    oh-my-claudecode|oh-my-cc|omc) echo "omc" ;;
-    superpower|superpowers) echo "superpowers" ;;
-    pony|ponytail) echo "ponytail" ;;
-    open-spec|openspec) echo "openspec" ;;
-    code-graph|codegraph) echo "codegraph" ;;
-    *) echo "$name" ;;
-  esac
-}
-
-add_selected_plugins() {
-  local raw="${1:-}"
-  local item normalized
-
-  PLUGIN_FILTER_ENABLED=true
-  raw="${raw//,/ }"
-
-  for item in $raw; do
-    normalized="$(normalize_plugin_name "$item")"
-    [[ -n "$normalized" ]] || continue
-    SELECTED_PLUGINS+=("$normalized")
-  done
-}
-
-plugin_selected() {
-  local query
-  query="$(normalize_plugin_name "$1")"
-
-  local item
-  for item in "${SELECTED_PLUGINS[@]}"; do
-    [[ "$item" == "$query" ]] && return 0
-  done
-
-  return 1
-}
-
-selected_plugins_csv() {
-  local IFS=,
-  echo "${SELECTED_PLUGINS[*]}"
-}
-
-validate_selected_plugins() {
-  [[ "$PLUGIN_FILTER_ENABLED" == "true" ]] || return 0
-
-  local selected known ok
-  local unknowns=()
-  for selected in "${SELECTED_PLUGINS[@]}"; do
-    ok=false
-    for known in "${KNOWN_PLUGIN_MODULES[@]}"; do
-      if [[ "$selected" == "$known" ]]; then
-        ok=true
-        break
-      fi
-    done
-    [[ "$ok" == "true" ]] || unknowns+=("$selected")
-  done
-
-  if ((${#unknowns[@]} > 0)); then
-    err "Unknown plugin(s): ${unknowns[*]}"
-    err "Known plugins: ${KNOWN_PLUGIN_MODULES[*]}"
-    return 1
-  fi
-
-  if ((${#SELECTED_PLUGINS[@]} == 0)); then
-    err "--plugins was provided but no plugin name was parsed"
-    return 1
-  fi
-}
-
-should_run_plugin() {
-  [[ "$PLUGIN_FILTER_ENABLED" != "true" ]] || plugin_selected "$1"
-}
-
+# --plugin <name> / --plugin=<name>：单数，装单个 plugin（SELECTED_PLUGIN）。
+# 旧复数过滤体系（--plugins / --only-plugin*）已在阶段 2 移除。
 preparse_plugin_filter_args() {
   SETUP_FILTERED_ARGS=()
 
@@ -688,16 +590,15 @@ preparse_plugin_filter_args() {
     shift
 
     case "$arg" in
-      --plugin|--plugins|--only-plugin|--only-plugins)
-        if [[ $# -eq 0 ]]; then
-          echo "[ERR] $arg requires at least one plugin name" >&2
-          return 1
-        fi
-        add_selected_plugins "$1"
-        shift
+      --plugin) SETUP_FILTERED_ARGS+=("$arg"); SETUP_FILTERED_ARGS+=("$1"); shift ;;
+      --plugin=*) SETUP_FILTERED_ARGS+=("$arg") ;;
+      --plugins|--only-plugin|--only-plugins)
+        echo "[ERR] $arg 已被移除：用 --plugin <name> 装单个 plugin" >&2
+        return 1
         ;;
-      --plugin=*|--plugins=*|--only-plugin=*|--only-plugins=*)
-        add_selected_plugins "${arg#*=}"
+      --plugins=*|--only-plugin=*|--only-plugins=*)
+        echo "[ERR] ${arg%%=*} 已被移除：用 --plugin=<name> 装单个 plugin" >&2
+        return 1
         ;;
       *)
         SETUP_FILTERED_ARGS+=("$arg")
@@ -708,10 +609,6 @@ preparse_plugin_filter_args() {
 
 preparse_plugin_filter_args "$@"
 set -- "${SETUP_FILTERED_ARGS[@]}"
-validate_selected_plugins
-if [[ "$PLUGIN_FILTER_ENABLED" == "true" ]]; then
-  info "Plugin filter enabled: $(selected_plugins_csv)"
-fi
 
 render_settings_template() {
     local tmpl="$1"
@@ -879,296 +776,13 @@ ensure_claude_code() {
         claude_bootstrap=true
     fi
 
-    [[ "$claude_bootstrap" == false ]] && pass "Claude Code 已就绪"
-}
-
-normalize_git_url() {
-    local url="$1"
-    url="${url#git+}"
-    url="${url%.git}"
-    url="${url%/}"
-    printf '%s' "$url"
-}
-
-remote_urls_compatible() {
-    local configured="$1"
-    local existing="$2"
-    [[ "$(normalize_git_url "$configured")" == "$(normalize_git_url "$existing")" ]]
-}
-
-safe_external_target() {
-    local target="$1"
-    [[ "$target" == "$EXTERNAL_DIR"/* ]] || return 1
-    [[ "$target" != "$EXTERNAL_DIR" ]]
-}
-
-list_third_party_sources() {
-    KNOWN_MARKETPLACES_CONFIG="$KNOWN_MARKETPLACES_CONFIG" \
-    REPO_ROOT="$REPO_ROOT" \
-    EXTERNAL_DIR="$EXTERNAL_DIR" \
-    python3 - <<'PYEOF'
-import json
-import os
-import sys
-from pathlib import Path
-
-config_path = Path(os.environ['KNOWN_MARKETPLACES_CONFIG'])
-repo_root = Path(os.environ['REPO_ROOT']).resolve()
-external_dir = Path(os.environ['EXTERNAL_DIR']).resolve()
-
-if not config_path.is_file():
-    print(f"known marketplaces config not found: {config_path}", file=sys.stderr)
-    sys.exit(1)
-
-try:
-    data = json.loads(config_path.read_text(encoding='utf-8'))
-except json.JSONDecodeError as exc:
-    print(f"invalid JSON in {config_path}: {exc}", file=sys.stderr)
-    sys.exit(1)
-
-if not isinstance(data, dict):
-    print(f"invalid {config_path}: top-level value must be an object", file=sys.stderr)
-    sys.exit(1)
-
-for name, entry in data.items():
-    if not isinstance(name, str) or not name:
-        print(f"invalid {config_path}: marketplace names must be non-empty strings", file=sys.stderr)
-        sys.exit(1)
-    if not isinstance(entry, dict):
-        print(f"invalid {config_path}: entry {name!r} must be an object", file=sys.stderr)
-        sys.exit(1)
-
-    source = entry.get('source')
-    if not isinstance(source, dict):
-        print(f"invalid {config_path}: entry {name!r} missing source object", file=sys.stderr)
-        sys.exit(1)
-
-    source_kind = source.get('source')
-    if source_kind == 'github':
-        source_ref = source.get('repo')
-        if not isinstance(source_ref, str) or '/' not in source_ref or source_ref.count('/') != 1:
-            print(f"invalid {config_path}: entry {name!r} github source requires repo like owner/name", file=sys.stderr)
-            sys.exit(1)
-        clone_url = f"https://github.com/{source_ref}.git"
-    elif source_kind == 'git':
-        source_ref = source.get('url')
-        if not isinstance(source_ref, str) or not source_ref:
-            print(f"invalid {config_path}: entry {name!r} git source requires url", file=sys.stderr)
-            sys.exit(1)
-        clone_url = source_ref
-    else:
-        print(f"invalid {config_path}: entry {name!r} has unsupported source.source {source_kind!r}", file=sys.stderr)
-        sys.exit(1)
-
-    install_location = entry.get('installLocation')
-    if not isinstance(install_location, str) or not install_location:
-        print(f"invalid {config_path}: entry {name!r} requires installLocation", file=sys.stderr)
-        sys.exit(1)
-
-    if install_location.startswith('REPO_ROOT/'):
-        resolved = (repo_root / install_location[len('REPO_ROOT/'):]).resolve()
-    elif install_location == 'REPO_ROOT':
-        print(f"invalid {config_path}: entry {name!r} installLocation must be under REPO_ROOT/external", file=sys.stderr)
-        sys.exit(1)
-    elif os.path.isabs(install_location):
-        resolved = Path(install_location).resolve()
-        try:
-            resolved.relative_to(repo_root)
-        except ValueError:
-            print(f"invalid {config_path}: entry {name!r} absolute installLocation is outside repo root", file=sys.stderr)
-            sys.exit(1)
-    else:
-        print(f"invalid {config_path}: entry {name!r} installLocation must use REPO_ROOT/... or a repo-local absolute path", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        resolved.relative_to(external_dir)
-    except ValueError:
-        print(f"invalid {config_path}: entry {name!r} installLocation must resolve under {external_dir}", file=sys.stderr)
-        sys.exit(1)
-    if resolved == external_dir:
-        print(f"invalid {config_path}: entry {name!r} installLocation must be a child of {external_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    print('\t'.join([name, source_kind, source_ref, clone_url, str(resolved)]))
-PYEOF
-}
-
-remove_and_clone_third_party_source() {
-    local name="$1"
-    local clone_url="$2"
-    local target="$3"
-    local reason="$4"
-
-    if ! safe_external_target "$target"; then
-        err "拒绝删除不安全路径: $target"
-        return 1
+    if [[ "$claude_bootstrap" == false ]]; then
+        pass "Claude Code 已就绪"
     fi
-
-    if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] remove $target ($reason)"
-        info "[DRY-RUN] git clone --depth=1 $clone_url $target"
-        return 0
-    fi
-
-    # ponytail: 原子替换 — 先 clone 到临时目录, 成功后再替换, 失败则原 target 原封不动
-    # 之前的 "rm -rf 再 clone" 若 clone 失败 (断网/超时) 会留下空目录, 所有引用
-    # external/.../hooks/*.mjs 的 hook 当场 MODULE_NOT_FOUND
-    local staging="${target}.staging.$$"
-    rm -rf "$staging"
-    if ! git clone --depth=1 "$clone_url" "$staging"; then
-        rm -rf "$staging"
-        err "第三方 source 克隆失败, 保留原目录: $name ($clone_url)"
-        return 1
-    fi
-
-    rm -rf "$target"
-    if ! mv "$staging" "$target"; then
-        rm -rf "$staging" "$target"
-        err "第三方 source 替换失败: $name ($target)"
-        return 1
-    fi
-    log "第三方 source 已重新克隆: $name"
-}
-
-refresh_existing_third_party_source() {
-    local name="$1"
-    local clone_url="$2"
-    local target="$3"
-    local origin_url branch remote_branch
-
-    origin_url="$(git -C "$target" remote get-url origin 2>/dev/null || true)"
-    if [[ -z "$origin_url" ]]; then
-        if [[ "$FORCE" == true ]]; then
-            remove_and_clone_third_party_source "$name" "$clone_url" "$target" "missing origin remote"
-            return $?
-        fi
-        err "第三方 source 缺少 origin remote: $name ($target)。使用 --force 可删除并重新 clone。"
-        return 1
-    fi
-
-    if ! remote_urls_compatible "$clone_url" "$origin_url"; then
-        if [[ "$FORCE" == true ]]; then
-            remove_and_clone_third_party_source "$name" "$clone_url" "$target" "origin remote mismatch: $origin_url"
-            return $?
-        fi
-        err "第三方 source origin 不匹配: $name ($target)。配置: $clone_url，当前: $origin_url。使用 --force 可删除并重新 clone。"
-        return 1
-    fi
-
-    local dirty_output
-    local dirty_pathspecs=(. ':(exclude).omc/**' ':(exclude).in_use/**')
-    if [[ "$name" == "context-mode" ]]; then
-        dirty_pathspecs+=(':(exclude).claude/**' ':(exclude)openspec/**')
-    fi
-    dirty_output="$(git -C "$target" status --porcelain --untracked-files=all -- "${dirty_pathspecs[@]}")"
-
-    if [[ "$DRY_RUN" == true ]]; then
-        # ponytail: dry-run 只预览不修改, 跳过脏工作区检测
-        # 但仍提示真正的源码改动; .omc/.in_use 这类运行时目录不算源码脏状态
-        if [[ -n "$dirty_output" ]]; then
-            warn "[DRY-RUN] 第三方 source 有本地修改, 预览忽略: $name ($target)"
-        fi
-        info "[DRY-RUN] refresh shallow checkout $name at $target from $clone_url"
-        info "[DRY-RUN] git -C $target fetch --depth=1 origin"
-        info "[DRY-RUN] checkout origin default branch or current upstream branch, then reset --hard"
-        return 0
-    fi
-
-    if [[ -n "$dirty_output" ]]; then
-        if [[ "$FORCE" == true ]]; then
-            remove_and_clone_third_party_source "$name" "$clone_url" "$target" "dirty checkout"
-            return $?
-        fi
-        err "第三方 source 有本地修改: $name ($target)。请先提交/清理，或使用 --force 删除并重新 clone。"
-        return 1
-    fi
-
-    git -C "$target" fetch --depth=1 origin
-    remote_branch="$(git -C "$target" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
-    branch="$(git -C "$target" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-    if [[ -n "$branch" && "$branch" != HEAD ]] && git -C "$target" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-        remote_branch="$branch"
-    fi
-    if [[ -n "$remote_branch" ]] && git -C "$target" show-ref --verify --quiet "refs/remotes/origin/$remote_branch"; then
-        git -C "$target" checkout -B "$remote_branch" "origin/$remote_branch"
-        git -C "$target" reset --hard "origin/$remote_branch"
-    else
-        git -C "$target" checkout --detach FETCH_HEAD
-        git -C "$target" reset --hard FETCH_HEAD
-    fi
-    log "第三方 source 已刷新: $name"
-}
-
-sync_third_party_source() {
-    local name="$1"
-    local source_kind="$2"
-    local source_ref="$3"
-    local clone_url="$4"
-    local target="$5"
-
-    if ! safe_external_target "$target"; then
-        err "第三方 source 路径不安全: $name ($target)"
-        return 1
-    fi
-
-    if [[ ! -e "$target" && ! -L "$target" ]]; then
-        if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] git clone --depth=1 $clone_url $target ($name from $source_kind:$source_ref)"
-            return 0
-        fi
-        git clone --depth=1 "$clone_url" "$target"
-        log "第三方 source 已克隆: $name"
-        return 0
-    fi
-
-    if [[ ! -d "$target/.git" && ! -f "$target/.git" ]]; then
-        if [[ "$FORCE" == true ]]; then
-            remove_and_clone_third_party_source "$name" "$clone_url" "$target" "non-git destination"
-            return $?
-        fi
-        err "第三方 source 目标已存在但不是 git checkout: $name ($target)。使用 --force 可删除并重新 clone。"
-        return 1
-    fi
-
-    refresh_existing_third_party_source "$name" "$clone_url" "$target"
-}
-should_sync_marketplace_source() {
-  local name="$1"
-
-  if [[ "$PLUGIN_FILTER_ENABLED" == "true" ]] && ! plugin_selected "$name"; then
-    return 1
-  fi
-
-  return 0
-}
-
-ensure_third_party_sources() {
-    info "读取 marketplace source 配置: $KNOWN_MARKETPLACES_CONFIG"
-    if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] mkdir -p $EXTERNAL_DIR"
-    else
-        mkdir -p "$EXTERNAL_DIR"
-    fi
-
-    local sources name source_kind source_ref clone_url target
-    if ! sources="$(list_third_party_sources)"; then
-        return 1
-    fi
-
-    while IFS=$'\t' read -r name source_kind source_ref clone_url target; do
-        [[ -n "$name" ]] || continue
-        if ! should_sync_marketplace_source "$name"; then
-            if [[ "$PLUGIN_FILTER_ENABLED" == "true" ]] && ! plugin_selected "$name"; then
-                info "未选择插件，跳过第三方 source: $name"
-            fi
-            continue
-        fi
-        info "准备第三方 source: $name -> $target"
-        sync_third_party_source "$name" "$source_kind" "$source_ref" "$clone_url" "$target"
-    done <<< "$sources"
-
-    log "配置中的第三方仓库已准备为最新 shallow checkout"
+    # ponytail: 后台初始化分支显式返回 0。原 `[[ false ]] && pass` 在 set -e 下
+    # 短路为 exit 1，导致 run_install_flow 裸调用 ensure_claude_code 立即退出、
+    # Phase 2 永不执行（CI --smoke-test 2ms 后 exit 1 的根因）。
+    return 0
 }
 
 update_repository() {
@@ -1177,13 +791,9 @@ update_repository() {
         return 0
     fi
 
-    info "更新当前仓库与配置中的第三方仓库..."
-    if [[ "$UPDATE_THIRD_PARTY_REMOTE" == true ]]; then
-        info "兼容标志 --update-third-party 已启用：第三方仓库会刷新到最新 shallow checkout"
-    fi
+    info "更新当前仓库..."
     if [[ "$DRY_RUN" == true ]]; then
         info "[DRY-RUN] git pull --ff-only"
-        ensure_third_party_sources
         info "[DRY-RUN] SETUP_UPDATE_REEXECED=true ./setup.sh ${ORIGINAL_ARGS[*]}"
         return 0
     fi
@@ -1192,63 +802,505 @@ update_repository() {
         cd "$REPO_ROOT"
         git pull --ff-only --depth=1
     )
-    ensure_third_party_sources
 
     export SETUP_UPDATE_REEXECED=true
-    log "仓库与配置中的第三方仓库已更新"
+    log "仓库已更新"
     info "重新执行 setup 以加载更新后的脚本..."
     exec "$REPO_ROOT/setup.sh" "${ORIGINAL_ARGS[@]}"
+}
+
+# --- 清单驱动安装（npx skills + claude plugin） ---
+
+SKILLS_CONFIG="$REPO_ROOT/configs/skills.toml"
+PLUGINS_CONFIG="$REPO_ROOT/configs/plugins.toml"
+
+# 清单解析统一入口：Python 解析器输出 TSV（可安全处理值中的 "="）
+#   parse-manifests.py skills  --file $SKILLS_CONFIG   → name\trepo\tskill\tagent\tscope\tnote
+#   parse-manifests.py plugins --file $PLUGINS_CONFIG  → name\trepo\tmethod\tmarketplace\tcommand\tnote
+MANIFEST_PARSER="$REPO_ROOT/script/parse-manifests.py"
+
+# 统一资源计划层：discover → normalize → conflict → select → validate → execute。
+# 本地 skill 只发现 repo_root/skills/<name>/SKILL.md；remote 从清单 + wildcard inventory 展开。
+RESOURCE_PLANNER="$REPO_ROOT/script/resource-plan.py"
+
+# 交互读取单行输入；无 TTY 时返回失败（由调用方按非交互规则处理）。
+resource_prompt() {
+    local prompt_text="$1"
+    local reply
+    if [[ "$CI_MODE" == true || "$DRY_RUN" == true || ! -t 0 ]]; then
+        return 1
+    fi
+    printf '%s' "$prompt_text"
+    IFS= read -r reply || return 1
+    [[ -n "$reply" ]] || return 1
+    printf '%s\n' "$reply"
+}
+
+# 统一发现：对一批资源请求（kind:spec）生成计划 JSON。
+# 输出全局变量 _RESOURCE_PLAN（JSON）。有冲突未决时返回 2。
+resource_plan_for() {
+    local -a reqs=("$@")
+    local -a argv=("$RESOURCE_PLANNER" --repo-root "$REPO_ROOT" --format json)
+    local req
+    for req in "${reqs[@]}"; do
+        [[ -n "$req" ]] && argv+=(--request "$req")
+    done
+    local choice
+    for choice in "${RESOURCE_CHOICES[@]:-}"; do
+        [[ -n "$choice" ]] && argv+=(--choose "$choice")
+    done
+    _RESOURCE_PLAN="$(python3 "${argv[@]}")" || {
+        local rc=$?
+        err "资源计划失败 (exit $rc)"
+        [[ "$rc" == 2 ]] && warn "存在未解决的资源冲突；请用 --choose <kind>:<id>=local|remote|skip 指定来源"
+        return "$rc"
+    }
+    return 0
+}
+
+# 对未决冲突逐项交互选择 local/remote/skip。
+# 交互成功返回 0（_RESOURCE_PLAN 更新）；非交互/放弃返回 2。
+# $1=plan JSON；剩余参数为原始资源请求（re-issue 计划用）。
+resource_resolve_conflicts() {
+    local plan="$1"
+    shift
+    local -a reqs=("$@")
+    local count
+    count="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])["conflicts"]))' "$plan")" || {
+        err "无法解析资源计划"; return 2
+    }
+    [[ "$count" -gt 0 ]] || return 0
+    warn "发现 $count 个资源冲突（同一资源同时存在本地与远程候选）"
+    if [[ "$CI_MODE" == true || "$DRY_RUN" == true || ! -t 0 ]]; then
+        python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+for c in d["conflicts"]:
+    print(f"[冲突] {c[\"kind\"]}:{c[\"id\"]}")
+    for r in c["resources"]:
+        where = r["path"] or r["repo"] or "?"
+        print(f"  {r[\"source\"]}\t{where}")' "$plan"
+        err "非交互环境存在未决冲突；必须用 --choose <kind>:<id>=local|remote|skip 逐项解决"
+        return 2
+    fi
+    local -a choices=()
+    while IFS= read -r cid; do
+        [[ -n "$cid" ]] || continue
+        local kind="${cid%%:*}" id="${cid#*:}"
+        local reply
+        reply="$(resource_prompt "选择 ${kind}:${id} 的来源 (local/remote/skip) [skip]: ")" || {
+            err "无法读取选择，放弃"; return 2
+        }
+        case "$reply" in
+            local|remote|skip) choices+=("--choose=${kind}:${id}=${reply}") ;;
+            *) warn "无效选择 '$reply'，已跳过 ${kind}:${id}" ;;
+        esac
+    done <<< "$(python3 -c 'import json,sys
+for c in json.loads(sys.argv[1])["conflicts"]:
+    print(c["kind"]+":"+c["id"])' "$plan")"
+    if [[ ${#choices[@]} -gt 0 ]]; then
+        local -a args=("$RESOURCE_PLANNER" --repo-root "$REPO_ROOT" --format json)
+        local req
+        for req in "${reqs[@]}"; do
+            [[ -n "$req" ]] && args+=(--request "$req")
+        done
+        local ch
+        for ch in "${choices[@]}"; do
+            args+=("$ch")
+        done
+        _RESOURCE_PLAN="$(python3 "${args[@]}")" || {
+            err "选择后资源计划仍失败 (exit $?)"; return 2
+        }
+    fi
+    return 0
+}
+
+# 校验已解决的计划：无未决冲突才可执行，返回 0/2。
+resource_validate_plan() {
+    local plan="$1"
+    python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+if d["conflicts"]:
+    print("仍有未决冲突，不可执行", file=sys.stderr)
+    sys.exit(2)
+for p in d["plan"]:
+    if p["action"] == "skip":
+        print("跳过 %s:%s" % (p["kind"], p["id"]))' "$plan" || return 2
+    return 0
+}
+
+# 计划中 selected 的 remote 项 exec 键（source alias / plugin 名），每行 kind\tname。
+plan_selected_remote() {
+    local plan="$1"
+    python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+for s in d["selected"]:
+    if s["source"]=="remote":
+        print(s["kind"]+"\t"+s["name"])' "$plan"
+}
+
+# 计划中 selected 的 local skill 目录名（= canonical id）。
+plan_selected_local_skills() {
+    local plan="$1"
+    python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+for s in d["selected"]:
+    if s["kind"]=="skill" and s["source"]=="local":
+        print(s["id"])' "$plan"
+}
+
+# 统一更新入口：对 UPDATE_RESOURCES 生成计划并执行。
+resource_update() {
+    [[ ${#UPDATE_RESOURCES[@]} -gt 0 ]] || return 0
+    phase "Phase 0: 更新指定资源"
+    local rc=0
+    resource_plan_for "${UPDATE_RESOURCES[@]}" || {
+        rc=$?
+        if [[ "$rc" == 2 ]]; then
+            resource_resolve_conflicts "$_RESOURCE_PLAN" "${UPDATE_RESOURCES[@]}" || return 2
+        else
+            return "$rc"
+        fi
+    }
+    resource_validate_plan "$_RESOURCE_PLAN" || return 2
+    local kind name
+    while IFS=$'\t' read -r kind name; do
+        [[ -n "$kind" ]] || continue
+        case "$kind" in
+            skill) update_skill "$name" || rc=1 ;;
+            plugin) update_plugin "$name" || rc=1 ;;
+        esac
+    done <<< "$(plan_selected_remote "$_RESOURCE_PLAN")"
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        update_local_skill "$name" || rc=1
+    done <<< "$(plan_selected_local_skills "$_RESOURCE_PLAN")"
+    if [[ "$rc" == 0 ]]; then
+        log "指定资源更新完成"
+    else
+        err "部分资源更新失败，请检查上方日志"
+    fi
+    return "$rc"
+}
+
+# 统一卸载入口：对 UNINSTALL_RESOURCES 生成计划并执行。
+# local skill 卸载只移除 ~/.claude/skills 下的受控软链接，不触碰仓库源文件。
+resource_uninstall() {
+    [[ ${#UNINSTALL_RESOURCES[@]} -gt 0 ]] || return 0
+    local rc=0
+    resource_plan_for "${UNINSTALL_RESOURCES[@]}" || {
+        rc=$?
+        if [[ "$rc" == 2 ]]; then
+            resource_resolve_conflicts "$_RESOURCE_PLAN" "${UNINSTALL_RESOURCES[@]}" || return 2
+        else
+            return "$rc"
+        fi
+    }
+    resource_validate_plan "$_RESOURCE_PLAN" || return 2
+    local kind name
+    while IFS=$'\t' read -r kind name; do
+        [[ -n "$kind" ]] || continue
+        case "$kind" in
+            skill) uninstall_skill "$name" || rc=1 ;;
+            plugin) uninstall_plugin "$name" || rc=1 ;;
+        esac
+    done <<< "$(plan_selected_remote "$_RESOURCE_PLAN")"
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        uninstall_local_skill "$name" || rc=1
+    done <<< "$(plan_selected_local_skills "$_RESOURCE_PLAN")"
+    if [[ "$rc" == 0 ]]; then
+        log "指定资源卸载完成"
+    else
+        err "部分资源卸载失败，请检查上方日志"
+    fi
+    return "$rc"
+}
+
+# 卸载仓库自有 skill：只移除 CLAUDE_HOME/skills/<name> 下指向本仓库的软链接。
+uninstall_local_skill() {
+    local name="${1:?缺少本地 skill 名}"
+    local src="$REPO_ROOT/skills/$name"
+    local dst="$CLAUDE_HOME/skills/$name"
+    if [[ ! -L "$dst" && ! -e "$dst" ]]; then
+        warn "本地 skill 未安装，跳过: $name"
+        return 0
+    fi
+    remove_symlink_if_ours "$dst" "repo skill '$name'" "$src"
+    log "本地 skill '$name' 已卸载"
+}
+
+parse_skills_toml() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    python3 "$MANIFEST_PARSER" skills --file "$file"
+}
+
+parse_plugins_toml() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    # --tsv-safe: 空字段（如 npx 插件的 marketplace）输出 <nil> 占位，
+    # 否则 bash IFS=$'\t' 会折叠连续 tab 把 command 列错位成 note。
+    python3 "$MANIFEST_PARSER" plugins --tsv-safe --file "$file"
+}
+
+# 检查名字是否在 skills.toml 中
+manifest_has_skill() {
+    local name="${1:?缺少 skill 名}"
+    [[ -f "$SKILLS_CONFIG" ]] || return 1
+    [[ -n "$(parse_skills_toml "$SKILLS_CONFIG" | awk -F'\t' -v n="$name" '$1 == n { print $1 }')" ]]
+}
+
+# 检查名字是否在 plugins.toml 中
+manifest_has_plugin() {
+    local name="${1:?缺少 plugin 名}"
+    [[ -f "$PLUGINS_CONFIG" ]] || return 1
+    [[ -n "$(parse_plugins_toml "$PLUGINS_CONFIG" | awk -F'\t' -v n="$name" '$1 == n { print $1 }')" ]]
+}
+
+# 判断名字是否命中一组 filters（空 filters 视为命中全部）
+filter_matches() {
+    local needle="$1"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
+# 安装外部 skills（读 skills.toml → npx skills add）
+# 参数：0 个或多个 name 过滤。无参 = 装全部；有参 = 只装命中的 name。
+install_external_skills() {
+    local -a filters=("$@")
+    [[ -f "$SKILLS_CONFIG" ]] || { info "无 skills.toml，跳过外部 skill"; return 0; }
+
+    local parsed
+    parsed="$(parse_skills_toml "$SKILLS_CONFIG")" || {
+        err "解析 skills.toml 失败"
+        return 1
+    }
+    local line name repo skill agent scope
+    while IFS=$'\t' read -r name repo skill agent scope note; do
+        [[ -n "$name" ]] || continue
+        if [[ ${#filters[@]} -gt 0 ]] && ! filter_matches "$name" "${filters[@]}"; then
+            continue
+        fi
+
+        local scope_flag=""
+        [[ "$scope" == "global" ]] && scope_flag="-g"
+
+        # 兜底：外部 skill 只装到 Claude Code。npx skills 不带 -a 时会检测环境
+        # 装到 ~/.agents/skills/（不加载），-a '*' 会扩散到 codex/gemini 等所有
+        # agent。因此 agent 字段被改动或漏写时强制回退 claude-code，绝不装他处。
+        if [[ "${agent:-claude-code}" != "claude-code" ]]; then
+            warn "source '$name' 的 agent='${agent:-}' 非 claude-code，已强制改为 claude-code"
+            agent="claude-code"
+        fi
+
+        info "安装外部 skill: $name ($repo, skill=$skill)"
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] npx -y skills@latest add -y $repo -s $skill -a $agent $scope_flag"
+            continue
+        fi
+
+        # add 后必须再传 -y：第一个 -y 是 npx 的（自动确认下载包），add -y 才是 skills CLI 的
+        #（跳过 "Proceed with installation?" 交互确认）。缺 add -y 时，非 agent 环境
+        #（无 AI_AGENT/CLAUDE_* env 且无 TTY，如 cron/CI/普通 shell）skills CLI 会卡在确认提示
+        # 不真正安装。update/remove 已带 -y，仅 add 有此问题。
+        if ! npx -y skills@latest add -y "$repo" -s "$skill" -a "$agent" $scope_flag </dev/null; then
+            err "安装 skill '$name' 失败: $repo"
+            return 1
+        fi
+        log "skill '$name' 已安装"
+    done <<< "$parsed"
+}
+
+# 安装第三方 plugins（读 plugins.toml → claude plugin install）
+# 参数：0 个或多个 name 过滤。无参 = 装全部；有参 = 只装命中的 name。
+install_third_party_plugins() {
+    local -a filters=("$@")
+    [[ -f "$PLUGINS_CONFIG" ]] || { info "无 plugins.toml，跳过第三方 plugin"; return 0; }
+
+    local parsed
+    parsed="$(parse_plugins_toml "$PLUGINS_CONFIG")" || {
+        err "解析 plugins.toml 失败"
+        return 1
+    }
+    local line name repo method marketplace command note
+    while IFS=$'\t' read -r name repo method marketplace command note; do
+        [[ -n "$name" ]] || continue
+        if [[ ${#filters[@]} -gt 0 ]] && ! filter_matches "$name" "${filters[@]}"; then
+            continue
+        fi
+
+        case "$method" in
+            claude-plugin)
+                info "安装 plugin: $name (marketplace: $marketplace)"
+                if [[ "$DRY_RUN" == true ]]; then
+                    info "[DRY-RUN] claude plugin marketplace add $repo --scope user && claude plugin install ${name}@${marketplace} -s user"
+                    continue
+                fi
+                claude plugin marketplace add "$repo" --scope user 2>/dev/null || \
+                    warn "marketplace 添加失败（可能已存在）: $name"
+                if ! claude plugin install "${name}@${marketplace}" -s user; then
+                    err "安装 plugin '$name' 失败"
+                    return 1
+                fi
+                log "plugin '$name' 已安装"
+                ;;
+            npx)
+                warn "需手动安装 plugin '$name': $command"
+                ;;
+            *)
+                warn "未知安装方式 '$method'，跳过 plugin '$name'"
+                ;;
+        esac
+    done <<< "$parsed"
+}
+
+# 更新所有外部 skills（npx skills update）
+update_all_skills() {
+    [[ -f "$SKILLS_CONFIG" ]] || { info "无 skills.toml，跳过外部 skill 更新"; return 0; }
+    local parsed
+    parsed="$(parse_skills_toml "$SKILLS_CONFIG")" || {
+        err "解析 skills.toml 失败"
+        return 1
+    }
+    : "$parsed"
+    info "更新所有外部 skills..."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] npx -y skills@latest update -g -y"
+        return 0
+    fi
+    if ! npx -y skills@latest update -g -y; then
+        err "更新 skills 失败"
+        return 1
+    fi
+    log "外部 skills 已更新"
+}
+
+# 更新单个 plugin（claude plugin update），找不到返回失败
+update_plugin() {
+    local name="${1:?缺少 plugin 名}"
+    [[ -f "$PLUGINS_CONFIG" ]] || { err "无 plugins.toml，无法更新 plugin '$name'"; return 1; }
+
+    local parsed
+    parsed="$(parse_plugins_toml "$PLUGINS_CONFIG")" || {
+        err "解析 plugins.toml 失败"
+        return 1
+    }
+    local line repo method marketplace command note
+    while IFS=$'\t' read -r line repo method marketplace command note; do
+        [[ "$line" == "$name" ]] || continue
+        if [[ "$method" == "npx" ]]; then
+            warn "plugin '$name' 是 npx 手动安装，需手动更新: $command"
+            return 0
+        fi
+        info "更新 plugin: $name"
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] claude plugin update ${name}@${marketplace} -s user"
+            return 0
+        fi
+        if ! claude plugin update "${name}@${marketplace}" -s user; then
+            err "更新 plugin '$name' 失败"
+            return 1
+        fi
+        log "plugin '$name' 已更新"
+        return 0
+    done <<< "$parsed"
+
+    err "plugins.toml 中找不到 plugin: $name"
+    return 1
+}
+
+# 更新所有第三方 plugins（claude plugin update），任一项失败最终非零
+update_all_plugins() {
+    [[ -f "$PLUGINS_CONFIG" ]] || { info "无 plugins.toml，跳过第三方 plugin 更新"; return 0; }
+
+    local parsed
+    parsed="$(parse_plugins_toml "$PLUGINS_CONFIG")" || {
+        err "解析 plugins.toml 失败"
+        return 1
+    }
+    local line repo method marketplace command note
+    local rc=0
+    while IFS=$'\t' read -r line repo method marketplace command note; do
+        [[ -n "$line" ]] || continue
+        if ! update_plugin "$line"; then
+            rc=1
+        fi
+    done <<< "$parsed"
+    return "$rc"
+}
+
+# 更新单个 skill（npx skills update <name>）
+update_local_skill() {
+    local name="${1:?缺少本地 skill 名}"
+    local src="$REPO_ROOT/skills/$name"
+    local dst="$CLAUDE_HOME/skills/$name"
+    [[ -f "$src/SKILL.md" ]] || { err "仓库自有 skill 不存在或缺少 SKILL.md: $name"; return 1; }
+    info "更新仓库自有 skill: $name"
+    ensure_symlink "$src" "$dst" "repo skill '$name'"
+    log "仓库自有 skill '$name' 已更新"
+}
+
+update_skill() {
+    local name="${1:?缺少 skill 名}"
+    [[ -f "$SKILLS_CONFIG" ]] || { err "无 skills.toml，无法更新 skill '$name'"; return 1; }
+
+    local parsed
+    parsed="$(parse_skills_toml "$SKILLS_CONFIG")" || {
+        err "解析 skills.toml 失败"
+        return 1
+    }
+    local line repo skill agent scope note
+    while IFS=$'\t' read -r line repo skill agent scope note; do
+        [[ "$line" == "$name" ]] || continue
+        local scope_flag=""
+        [[ "$scope" == "global" ]] && scope_flag="-g"
+        info "更新 skill: $name"
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] npx -y skills@latest update $name $scope_flag -y"
+            return 0
+        fi
+        if ! npx -y skills@latest update "$name" $scope_flag -y; then
+            err "更新 skill '$name' 失败"
+            return 1
+        fi
+        log "skill '$name' 已更新"
+        return 0
+    done <<< "$parsed"
+
+    err "skills.toml 中找不到 skill: $name"
+    return 1
 }
 
 ensure_core_config() {
     mkdir -p "$CLAUDE_HOME"
 
-    remove_legacy_rtk_link "$CLAUDE_HOME/RTK.md" "$REPO_ROOT/config/claude/RTK.md"
+    remove_legacy_rtk_link "$CLAUDE_HOME/RTK.md" "$REPO_ROOT/claude/RTK.md"
     remove_legacy_marketplace_entries "$CLAUDE_HOME/plugins/known_marketplaces.json"
     remove_legacy_installed_plugins_entries "$CLAUDE_HOME/plugins/installed_plugins.json"
 
     ensure_user_local_bin_path
 
-    ensure_symlink "$REPO_ROOT/config/claude/CLAUDE.md.ccfg" "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink"
-    # ensure_symlink "$REPO_ROOT/config/claude/itp.md" "$CLAUDE_HOME/itp.md" "itp.md symlink"
-    # ensure_symlink "$REPO_ROOT/config/claude/haiku-throttle.md" "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink"
-    remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md 旧 symlink" "$REPO_ROOT/config/claude/AGENTS.md"
+    ensure_symlink "$REPO_ROOT/claude/CLAUDE.md.ccfg" "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink"
+    # ensure_symlink "$REPO_ROOT/claude/itp.md" "$CLAUDE_HOME/itp.md" "itp.md symlink"
+    # ensure_symlink "$REPO_ROOT/claude/haiku-throttle.md" "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink"
+    remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md 旧 symlink" "$REPO_ROOT/claude/AGENTS.md"
 
-    ensure_symlink "$REPO_ROOT/config/claude/rules" "$CLAUDE_HOME/rules" "rules symlink"
-    ensure_symlink "$REPO_ROOT/config/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink"
-    ensure_symlink "$REPO_ROOT/config/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook"
+    ensure_symlink "$REPO_ROOT/claude/rules" "$CLAUDE_HOME/rules" "rules symlink"
+    ensure_symlink "$REPO_ROOT/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink"
+    ensure_symlink "$REPO_ROOT/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook"
 
-    local repo_skills_dir="$REPO_ROOT/config/claude/skills"
-    if [[ -d "$repo_skills_dir" ]]; then
-        mkdir -p "$CLAUDE_HOME/skills"
-
-        local skill_src skill_name skill_dst
-        for skill_src in "$repo_skills_dir"/*; do
-            [[ -e "$skill_src" ]] || continue
-            skill_name="$(basename "$skill_src")"
-            skill_dst="$CLAUDE_HOME/skills/$skill_name"
-
-            if [[ -e "$skill_dst" || -L "$skill_dst" ]] && ! symlink_points_to "$skill_dst" "$skill_src"; then
-                if [[ "$DRY_RUN" == true ]]; then
-                    info "[DRY-RUN] 重建已有 skill 目标: $skill_dst"
-                else
-                    rm -rf "$skill_dst"
-                fi
-            fi
-
-            ensure_symlink "$skill_src" "$skill_dst" "skill symlink '$skill_name'"
-        done
-    fi
-
-    local cpo_src="$REPO_ROOT/external/claude-plugins-official"
-    local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
-    if [[ -d "$cpo_src" ]]; then
-        ensure_marketplace_symlink "$cpo_src" "$cpo_dst" "claude-plugins-official marketplace"
-    fi
+    # 自有 skill 位于顶层 skills/（npx skills 通用 agent 约定目录）。
+    # 仓库内安装由 npx skills 从 GitHub 远程拉取到 ~/.claude/skills/；
+    # 开发时也可直接从本地 skills/ 读取。外部 skill 由
+    # install_external_skills() 通过 npx skills 安装。
 }
 
 ensure_settings_json() {
-    local template="$REPO_ROOT/config/claude/settings.template.json"
+    local template="$REPO_ROOT/claude/settings.template.json"
     local target="$CLAUDE_HOME/settings.json"
 
     if [[ ! -f "$template" ]]; then
@@ -1260,7 +1312,9 @@ ensure_settings_json() {
     rendered_settings="$(render_settings_template "$template")"
     remove_legacy_settings_entries "$target"
 
-    if [[ -f "$target" ]] && [[ "$CI_MODE" != true ]]; then
+    # settings.json 已存在则始终合并（保留已有值，仅补齐模板缺失键），不区分 CI_MODE。
+    # 旧版在 CI_MODE=true 时跳过 merge 直接覆盖，会抹掉用户自建键（env/token/thinking 等）。
+    if [[ -f "$target" ]]; then
         info "合并现有 settings.json（保留已有值，仅补齐缺失项）..."
         if [[ "$DRY_RUN" == true ]]; then
             info "[DRY-RUN] merge settings.json with template-backed migration keys"
@@ -1283,73 +1337,6 @@ ensure_settings_json() {
     log "settings.json 已生成"
 }
 
-build_plugin_registration_entries() {
-    SETTINGS_TEMPLATE_JSON="$REPO_ROOT/config/claude/settings.template.json" \
-    EXTERNAL_DIR="$EXTERNAL_DIR" \
-    python3 - <<'PYEOF'
-import json
-import os
-from pathlib import Path
-
-settings_path = Path(os.environ['SETTINGS_TEMPLATE_JSON'])
-external_dir = Path(os.environ['EXTERNAL_DIR'])
-
-
-def manifest_candidates(marketplace_name, plugin_name):
-    marketplace_dir_by_name = {
-        'omc': external_dir / 'oh-my-claudecode',
-        'superpowers': external_dir / 'superpowers',
-        'claude-plugins-official': external_dir / 'claude-plugins-official',
-    }
-    root = marketplace_dir_by_name.get(marketplace_name, external_dir / marketplace_name)
-    return [
-        root,
-        root / plugin_name,
-        root / 'plugins' / plugin_name,
-        root / 'packages' / plugin_name,
-    ]
-
-
-def entry(plugin_key, marketplace_name, plugin_name):
-    candidates = manifest_candidates(marketplace_name, plugin_name)
-    selected = candidates[0]
-    for candidate in candidates:
-        if (candidate / '.claude-plugin' / 'plugin.json').is_file():
-            selected = candidate
-            break
-    return {
-        'pluginKey': plugin_key,
-        'marketplaceName': marketplace_name,
-        'pluginName': plugin_name,
-        'sourcePath': str(selected),
-        'pluginJsonPath': str(selected / '.claude-plugin' / 'plugin.json'),
-    }
-
-entries = [
-    entry('oh-my-claudecode@omc', 'omc', 'oh-my-claudecode'),
-    entry('superpowers@superpowers', 'superpowers', 'superpowers'),
-]
-
-if settings_path.is_file():
-    settings = json.loads(settings_path.read_text(encoding='utf-8'))
-    enabled = settings.get('enabledPlugins') or {}
-    for plugin_key, is_enabled in sorted(enabled.items()):
-        if is_enabled is True and plugin_key.endswith('@claude-plugins-official'):
-            plugin_name = plugin_key.rsplit('@claude-plugins-official', 1)[0]
-            entries.append(entry(plugin_key, 'claude-plugins-official', plugin_name))
-
-print(json.dumps(entries, ensure_ascii=False))
-PYEOF
-}
-
-register_repository_plugins() {
-    local entries_json
-
-    info "修复 repository-managed plugin registry..."
-    entries_json="$(build_plugin_registration_entries)"
-    register_plugins_to_installed_json "$entries_json" "$CLAUDE_HOME/plugins/installed_plugins.json" "$CLAUDE_HOME"
-}
-
 verify_repository_cleanliness() {
     if [[ "$NO_VERIFY" == true || "$DRY_RUN" == true ]]; then
         info "跳过仓库洁净验证"
@@ -1360,8 +1347,7 @@ verify_repository_cleanliness() {
     local ignored_paths=(
         "package.json"
         "package-lock.json"
-        "config/omc/wiki/log.md"
-        "config/claude/AGENTS.md"
+        "claude/AGENTS.md"
     )
 
     local path
@@ -1382,21 +1368,6 @@ verify_repository_cleanliness() {
         fi
     done
 
-    local session_log_probe="config/omc/wiki/session-log-setup-smoke.md"
-    if git -C "$REPO_ROOT" check-ignore -q -- "$session_log_probe"; then
-        pass "已忽略 OMC session-log 模式"
-    else
-        err "缺少 OMC session-log 忽略规则"
-        failed=1
-    fi
-
-    if git -C "$REPO_ROOT" ls-files 'config/omc/wiki/session-log-*.md' | grep -q .; then
-        err "仍有 OMC session-log 文件被 git 跟踪"
-        failed=1
-    else
-        pass "未跟踪 OMC session-log 文件"
-    fi
-
     [[ $failed -eq 0 ]]
 }
 
@@ -1407,8 +1378,8 @@ verify_core_config() {
     fi
 
     local failed=0
-    if is_valid_claude_md "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/config/claude/CLAUDE.md.ccfg"; then
-        if symlink_points_to "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/config/claude/CLAUDE.md.ccfg"; then
+    if is_valid_claude_md "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/claude/CLAUDE.md.ccfg"; then
+        if symlink_points_to "$CLAUDE_HOME/CLAUDE.md" "$REPO_ROOT/claude/CLAUDE.md.ccfg"; then
             pass "CLAUDE.md symlink"
         else
             pass "CLAUDE.md injected file (OMC + Claude-Config)"
@@ -1422,8 +1393,8 @@ verify_core_config() {
         failed=1
     fi
 
-    # if symlink_points_to "$CLAUDE_HOME/itp.md" "$REPO_ROOT/config/claude/itp.md" \
-    #     && symlink_points_to "$CLAUDE_HOME/haiku-throttle.md" "$REPO_ROOT/config/claude/haiku-throttle.md"; then
+    # if symlink_points_to "$CLAUDE_HOME/itp.md" "$REPO_ROOT/claude/itp.md" \
+    #     && symlink_points_to "$CLAUDE_HOME/haiku-throttle.md" "$REPO_ROOT/claude/haiku-throttle.md"; then
     #     pass "ITP/throttle symlink"
     # else
     #     err "ITP/throttle symlink 缺失"
@@ -1436,7 +1407,7 @@ verify_core_config() {
     elif [[ -L "$agents_path" ]]; then
         local agents_target
         agents_target="$(readlink -f "$agents_path" 2>/dev/null || true)"
-        if [[ "$agents_target" == "$REPO_ROOT/config/claude/AGENTS.md" ]]; then
+        if [[ "$agents_target" == "$REPO_ROOT/claude/AGENTS.md" ]]; then
             err "AGENTS.md 不应再链接到仓库内第三方内容"
             failed=1
         else
@@ -1448,56 +1419,32 @@ verify_core_config() {
         warn "AGENTS.md 存在但类型不常见，核心 setup 不接管: $agents_path"
     fi
 
-    if symlink_points_to "$CLAUDE_HOME/rules" "$REPO_ROOT/config/claude/rules"; then
+    if symlink_points_to "$CLAUDE_HOME/rules" "$REPO_ROOT/claude/rules"; then
         pass "rules symlink"
     else
         err "rules symlink 缺失"
         failed=1
     fi
 
-    if symlink_points_to "$CLAUDE_HOME/rules-available" "$REPO_ROOT/config/claude/rules-available"; then
+    if symlink_points_to "$CLAUDE_HOME/rules-available" "$REPO_ROOT/claude/rules-available"; then
         pass "rules-available symlink"
     else
         err "rules-available symlink 缺失"
         failed=1
     fi
 
-    if symlink_points_to "$CLAUDE_HOME/hooks/rules-loader.sh" "$REPO_ROOT/config/claude/hooks/rules-loader.sh"; then
+    if symlink_points_to "$CLAUDE_HOME/hooks/rules-loader.sh" "$REPO_ROOT/claude/hooks/rules-loader.sh"; then
         pass "rules-loader hook"
     else
         err "rules-loader hook 缺失"
         failed=1
     fi
 
-    local repo_skills_dir="$REPO_ROOT/config/claude/skills"
-    local repo_skills_ok=0
-    if [[ -d "$repo_skills_dir" ]]; then
-        repo_skills_ok=1
-        local skill_src skill_name skill_dst
-        for skill_src in "$repo_skills_dir"/*; do
-            [[ -e "$skill_src" ]] || continue
-            skill_name="$(basename "$skill_src")"
-            skill_dst="$CLAUDE_HOME/skills/$skill_name"
-            if ! symlink_points_to "$skill_dst" "$skill_src"; then
-                repo_skills_ok=0
-                break
-            fi
-        done
-    fi
-
-    if [[ $repo_skills_ok -eq 1 ]]; then
-        pass "repo skills symlink"
+    local repo_skills_dir="$REPO_ROOT/skills"
+    if [[ -d "$repo_skills_dir" ]] && [[ -n "$(ls -A "$repo_skills_dir")" ]]; then
+        pass "自有 skills 就绪 ($repo_skills_dir)"
     else
-        err "repo skills symlink 缺失"
-        failed=1
-    fi
-
-    local cpo_src="$REPO_ROOT/external/claude-plugins-official"
-    local cpo_dst="$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official"
-    if [[ ! -d "$cpo_src" ]] || symlink_points_to "$cpo_dst" "$cpo_src"; then
-        pass "claude-plugins-official marketplace"
-    else
-        err "claude-plugins-official marketplace 缺失"
+        err "自有 skills 目录缺失或为空: $repo_skills_dir"
         failed=1
     fi
 
@@ -1511,13 +1458,300 @@ verify_core_config() {
     if [[ -f "$CLAUDE_HOME/plugins/known_marketplaces.json" ]]; then
         pass "known_marketplaces.json 已存在"
     else
-        err "known_marketplaces.json 不存在"
-        failed=1
+        warn "known_marketplaces.json 不存在（首次安装时装 plugin 后会自动生成，可接受）"
     fi
 
     verify_repository_cleanliness || failed=1
 
     [[ $failed -eq 0 ]]
+}
+
+verify_installed_skills_context() {
+    local context_file="$1"
+    local list_file list_err plugin_file plugin_err
+    list_file="$(mktemp)"
+    list_err="$(mktemp)"
+    plugin_file="$(mktemp)"
+    plugin_err="$(mktemp)"
+
+    if ! npx -y skills@latest list -g --json >"$list_file" 2>"$list_err"; then
+        err "无法读取全局 skill 清单 (npx skills list)"
+        sed -n '1,20p' "$list_err" >&2
+        rm -f "$list_file" "$list_err" "$plugin_file" "$plugin_err"
+        return 1
+    fi
+    if ! claude plugin list --json >"$plugin_file" 2>"$plugin_err"; then
+        err "无法读取 plugin skill 的注册清单 (claude plugin list)"
+        sed -n '1,20p' "$plugin_err" >&2
+        rm -f "$list_file" "$list_err" "$plugin_file" "$plugin_err"
+        return 1
+    fi
+
+    local failed=0
+    local name repo skill agent scope note
+    while IFS=$'\t' read -r name repo skill agent scope note; do
+        [[ -n "$name" ]] || continue
+        local matched source_kind="npx" plugin_id plugin_path
+        matched="$(SKILLS_LIST_JSON="$list_file" SKILLS_LOCK_FILE="$HOME/.agents/.skill-lock.json" EXPECTED_REPO="$repo" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+repo = os.environ["EXPECTED_REPO"]
+expected_url = "https://github.com/" + repo.removesuffix(".git")
+seen = set()
+
+def emit(name, path):
+    path = Path(path)
+    key = (name, str(path))
+    if name and path.is_file() and key not in seen:
+        seen.add(key)
+        print(name + "\t" + str(path.parent))
+
+with open(os.environ["SKILLS_LIST_JSON"], encoding="utf-8") as fp:
+    items = json.load(fp)
+for item in items:
+    source = item.get("source") or ""
+    source_url = (item.get("sourceUrl") or "").removesuffix(".git")
+    if source == repo or source_url == expected_url:
+        path = item.get("path") or ""
+        skill_name = item.get("name") or ""
+        if skill_name and path:
+            emit(skill_name, Path(path) / "SKILL.md")
+
+# skills CLI versions can omit an installed agent from `list -g --json`.
+# Its global lock remains the source-of-truth for the installed path.
+lock_path = Path(os.environ["SKILLS_LOCK_FILE"])
+if lock_path.is_file():
+    with lock_path.open(encoding="utf-8") as fp:
+        lock = json.load(fp)
+    for skill_name, item in (lock.get("skills") or {}).items():
+        source = item.get("source") or ""
+        source_url = (item.get("sourceUrl") or "").removesuffix(".git")
+        skill_path = item.get("skillPath") or ""
+        if (source == repo or source_url == expected_url) and skill_path:
+            home_path = lock_path.parent.parent
+            candidates = [
+                home_path / skill_path,
+                home_path / ".claude" / skill_path,
+                lock_path.parent / skill_path,
+            ]
+            for candidate in candidates:
+                if candidate.is_file():
+                    emit(skill_name, candidate)
+                    break
+PY
+)"
+
+        if [[ -z "$matched" ]]; then
+            source_kind="plugin"
+            plugin_id="$(parse_plugins_toml "$PLUGINS_CONFIG" | awk -F '\t' -v expected_repo="$repo" '$2 == expected_repo && $3 == "claude-plugin" { print $1 "@" $4; exit }')"
+            if [[ -z "$plugin_id" ]]; then
+                err "skill source '$name' 既不在 npx 清单中，也没有对应 plugin: $repo"
+                failed=1
+                continue
+            fi
+            plugin_path="$(PLUGIN_LIST_JSON="$plugin_file" EXPECTED_PLUGIN_ID="$plugin_id" python3 - <<'PY'
+import json
+import os
+
+with open(os.environ["PLUGIN_LIST_JSON"], encoding="utf-8") as fp:
+    items = json.load(fp)
+expected = os.environ["EXPECTED_PLUGIN_ID"]
+for item in items:
+    if item.get("id") == expected and item.get("scope") == "user":
+        path = item.get("installPath") or ""
+        if path:
+            print(path)
+            break
+PY
+)"
+            if [[ -z "$plugin_path" || ! -d "$plugin_path" ]]; then
+                err "skill source '$name' 对应 plugin '$plugin_id' 缺少有效 installPath"
+                failed=1
+                continue
+            fi
+            matched="$(PLUGIN_SKILLS_ROOT="$plugin_path" python3 - <<'PY'
+import os
+from pathlib import Path
+
+root = Path(os.environ["PLUGIN_SKILLS_ROOT"])
+for skill_file in sorted(root.rglob("SKILL.md")):
+    name = ""
+    for line in skill_file.read_text(encoding="utf-8", errors="replace").splitlines()[:40]:
+        if line.startswith("name:"):
+            name = line[5:].strip()
+            break
+    if name:
+        print(name + "\t" + str(skill_file.parent))
+PY
+)"
+            if [[ -z "$matched" ]]; then
+                err "skill source '$name' 的 plugin '$plugin_id' 未找到有效 SKILL.md"
+                failed=1
+                continue
+            fi
+        fi
+
+        while IFS=$'\t' read -r actual_name actual_path; do
+            [[ -n "$actual_name" ]] || continue
+            if [[ ! -f "$actual_path/SKILL.md" ]]; then
+                err "skill '$actual_name' 缺少 SKILL.md: $actual_path"
+                failed=1
+                continue
+            fi
+            if ! awk -v expected="$actual_name" '
+                NR <= 40 && $0 ~ /^name:[[:space:]]*/ {
+                    value=$0
+                    sub(/^name:[[:space:]]*/, "", value)
+                    gsub(/[[:space:]]+$/, "", value)
+                    found=(value == expected)
+                }
+                END { exit(found ? 0 : 1) }
+            ' "$actual_path/SKILL.md"; then
+                err "skill '$actual_name' 的 SKILL.md frontmatter name 不匹配: $actual_path"
+                failed=1
+                continue
+            fi
+            # disable-model-invocation=true 的 Skill 仍应安装成功，但 Claude
+            # 不会把它加入 /context 的可调用 Skills 表（例如 grill-me）。
+            if grep -Eq '^disable-model-invocation:[[:space:]]*true[[:space:]]*$' \
+                "$actual_path/SKILL.md"; then
+                pass "skill '$actual_name' 已安装（disable-model-invocation=true，不要求出现在 /context）"
+                continue
+            fi
+            local context_skill_name="$actual_name"
+            local context_plugin_skill_name=""
+            if [[ "$source_kind" == "plugin" ]]; then
+                context_plugin_skill_name="${plugin_id%@*}:$actual_name"
+            fi
+            local context_skill_visible=false
+            if grep -Fq "| $context_skill_name |" "$context_file"; then
+                context_skill_visible=true
+            elif [[ -n "$context_plugin_skill_name" ]] &&
+                grep -Fq "| $context_plugin_skill_name |" "$context_file"; then
+                context_skill_visible=true
+            fi
+            if [[ "$context_skill_visible" != true ]]; then
+                err "skill '$actual_name' 未出现在 Claude -p /context 的 Skills 表"
+                failed=1
+                continue
+            fi
+            pass "skill '$actual_name' 已安装且在 Claude /context 中可见 (source=$name, via=$source_kind)"
+        done <<< "$matched"
+    done < <(parse_skills_toml "$SKILLS_CONFIG")
+
+    rm -f "$list_file" "$list_err" "$plugin_file" "$plugin_err"
+    return "$failed"
+}
+
+verify_settings_template_keys() {
+    local template="$REPO_ROOT/claude/settings.template.json"
+    local target="$CLAUDE_HOME/settings.json"
+    [[ -f "$template" ]] || { err "settings 模板不存在: $template"; return 1; }
+    [[ -f "$target" ]] || { err "settings.json 不存在: $target"; return 1; }
+
+    if ! TEMPLATE_SETTINGS="$template" TARGET_SETTINGS="$target" python3 - <<'PY'
+import json
+import os
+import sys
+
+with open(os.environ["TEMPLATE_SETTINGS"], encoding="utf-8") as fp:
+    template = json.load(fp)
+with open(os.environ["TARGET_SETTINGS"], encoding="utf-8") as fp:
+    target = json.load(fp)
+
+missing = []
+type_errors = []
+
+def check(template_value, target_value, path):
+    if template_value == "":
+        return
+    if isinstance(template_value, dict):
+        if not isinstance(target_value, dict):
+            type_errors.append(path + " (应为 object)")
+            return
+        # Claude may normalize a git marketplace source to the equivalent
+        # github/repo form after registration; both retain the marketplace.
+        if path.endswith(".source") and "url" in template_value and "repo" in target_value:
+            if target_value.get("source") == "github" and isinstance(target_value["repo"], str):
+                return
+        for key, value in template_value.items():
+            child = path + "." + key if path else key
+            if key not in target_value:
+                missing.append(child)
+            else:
+                check(value, target_value[key], child)
+    elif isinstance(template_value, list):
+        if not isinstance(target_value, list):
+            type_errors.append(path + " (应为 array)")
+    elif target_value is not None and type(template_value) is not type(target_value):
+        type_errors.append(path + " (类型不匹配)")
+
+check(template, target, "")
+if missing or type_errors:
+    if missing:
+        print("missing=" + ",".join(missing), file=sys.stderr)
+    if type_errors:
+        print("type_errors=" + ",".join(type_errors), file=sys.stderr)
+    sys.exit(1)
+PY
+    then
+        err "settings.json 未完整补齐模板中的非空键"
+        return 1
+    fi
+
+    local plugin_count
+    plugin_count="$(python3 - "$target" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as fp:
+    data = json.load(fp)
+plugins = data.get("enabledPlugins", {})
+print(sum(1 for key, value in plugins.items() if isinstance(key, str) and isinstance(value, bool)))
+PY
+)"
+    pass "settings.json 已补齐模板键并保留用户值 (enabledPlugins=$plugin_count)"
+}
+
+verify_registered_plugins() {
+    local list_file
+    list_file="$(mktemp)"
+    if ! claude plugin list --json >"$list_file" 2>&1; then
+        err "读取 claude plugin list --json 失败"
+        sed -n '1,30p' "$list_file" >&2
+        rm -f "$list_file"
+        return 1
+    fi
+
+    local failed=0
+    local name repo method marketplace command note
+    while IFS=$'\t' read -r name repo method marketplace command note; do
+        [[ -n "$name" ]] || continue
+        [[ "$method" == "claude-plugin" ]] || continue
+        local plugin_id="${name}@${marketplace}"
+        if PLUGIN_LIST_JSON="$list_file" EXPECTED_PLUGIN_ID="$plugin_id" python3 - <<'PY'
+import json
+import os
+import sys
+with open(os.environ["PLUGIN_LIST_JSON"], encoding="utf-8") as fp:
+    items = json.load(fp)
+expected = os.environ["EXPECTED_PLUGIN_ID"]
+for item in items:
+    if item.get("id") == expected and item.get("scope") == "user":
+        sys.exit(0)
+sys.exit(1)
+PY
+        then
+            pass "plugin '$plugin_id' 已注册 (scope=user)"
+        else
+            err "plugin '$plugin_id' 未注册或 scope 不是 user"
+            failed=1
+        fi
+    done < <(parse_plugins_toml "$PLUGINS_CONFIG")
+
+    rm -f "$list_file"
+    return "$failed"
 }
 
 run_context_smoke_test() {
@@ -1526,10 +1760,9 @@ run_context_smoke_test() {
         return 1
     fi
 
-    local timeout_seconds="${CLAUDE_CONTEXT_TIMEOUT:-10}"
-    if [[ "$timeout_seconds" =~ ^[0-9]+$ ]] && (( timeout_seconds > 10 )); then
-        timeout_seconds=10
-    fi
+    # 默认 15s；CI 冷启动（首次 claude 启动 + 代理握手）需要更长，可用
+    # CLAUDE_CONTEXT_TIMEOUT 放宽，不做硬性上限钳制。
+    local timeout_seconds="${CLAUDE_CONTEXT_TIMEOUT:-15}"
     local tmp
     tmp="$(mktemp)"
     set +e
@@ -1556,8 +1789,31 @@ run_context_smoke_test() {
         return 1
     fi
 
-    log "Claude -p /context 上下文注入检查通过"
+    # 验证 Skills 清单已注入：/context 的 Skills 段应至少含表头 + 一行数据。
+    # （/skills 是交互式 slash command，headless -p 模式下不可用，改用 /context
+    #  的 Skills 段验证已加载 skill 的可见性。）
+    local skill_rows
+    skill_rows="$(sed -n '/^### Skills$/,/^### /p' "$tmp" | grep -c '^| ' || true)"
+    if (( skill_rows < 2 )); then
+        err "Claude -p /context 的 Skills 段为空，skill 未被加载"
+        info "/context Skills 段诊断（最多 40 行）:"
+        sed -n '/^### Skills$/,/^### /p' "$tmp" | sed -n '1,40p' >&2
+        rm -f "$tmp"
+        return 1
+    fi
+
+    local skills_rc=0
+    if ! verify_installed_skills_context "$tmp"; then
+        skills_rc=1
+        info "/context Skills 段诊断（最多 40 行）:"
+        sed -n '/^### Skills$/,/^### /p' "$tmp" | sed -n '1,40p' >&2
+    fi
     rm -f "$tmp"
+    if [[ $skills_rc -ne 0 ]]; then
+        return 1
+    fi
+
+    log "Claude -p /context 上下文注入检查通过"
 }
 
 run_final_doctor() {
@@ -1566,12 +1822,8 @@ run_final_doctor() {
         return 0
     fi
 
-    info "运行 context-mode doctor..."
-    local previous_action="$ACTION"
-    ACTION="doctor"
-    run_installer context-mode "$NO_PATCH"
-    ACTION="$previous_action"
-
+    # 旧 context-mode install-*.sh 的 doctor 分支已随阶段 2 退役；
+    # context-mode 由 claude plugin 安装，下方 check-claude-doctor.sh 覆盖其运行状态检查。
     if [[ "$SMOKE_TEST" != true ]]; then
         info "跳过扩展冒烟测试 (--smoke-test 未启用)"
         return 0
@@ -1583,10 +1835,8 @@ run_final_doctor() {
         return 0
     fi
 
-    local doctor_timeout_seconds="${CLAUDE_DOCTOR_TIMEOUT:-10}"
-    if [[ "$doctor_timeout_seconds" =~ ^[0-9]+$ ]] && (( doctor_timeout_seconds > 10 )); then
-        doctor_timeout_seconds=10
-    fi
+    # 默认 15s；CI 冷启动需要更长，可用 CLAUDE_DOCTOR_TIMEOUT 放宽，不做硬性上限钳制。
+    local doctor_timeout_seconds="${CLAUDE_DOCTOR_TIMEOUT:-15}"
 
     info "运行最终 Claude doctor..."
     if timeout "$doctor_timeout_seconds" "$REPO_ROOT/script/check-claude-doctor.sh"; then
@@ -1602,50 +1852,63 @@ run_final_doctor() {
     fi
 
     info "运行 Claude -p /context 上下文注入检查..."
-    run_context_smoke_test
-    log "安装后冒烟测试通过: Claude doctor + Claude -p /context"
+    if ! run_context_smoke_test; then
+        err "Claude -p /context 逐项 skill 检查失败"
+        return 1
+    fi
+
+    info "运行 settings.json 模板键检查..."
+    if ! verify_settings_template_keys; then
+        return 1
+    fi
+
+    info "运行 claude plugin list 注册检查..."
+    if ! verify_registered_plugins; then
+        return 1
+    fi
+
+    log "安装后冒烟测试通过: Claude doctor + skills/context + settings + plugins"
     return 0
 }
 
 run_priority_module_actions() {
-    run_installer context-mode "$NO_PATCH"
-    run_installer omc
-    run_installer superpowers
-    run_installer ponytail
+    # 清单驱动的生命周期操作：install_external_skills + install_third_party_plugins
+    install_external_skills
+    install_third_party_plugins
 }
 
 run_install_flow() {
     phase "Phase 1: Claude Code"
     ensure_claude_code
 
-    phase "Phase 2: 第三方源码 + 核心配置"
-    ensure_third_party_sources
+    phase "Phase 2: 核心配置"
     ensure_core_config
     ensure_settings_json
-    merge_known_marketplaces
 
-    if [[ "$UPDATE" == true && "$FORCE" == false ]]; then
-        phase "Phase 3: CodeGraph + context-mode + OpenSpec 同步"
-        run_installer codegraph true
-        run_installer context-mode "$NO_PATCH"
-        run_installer openspec
-        phase "Phase 5: 最终验证"
-        verify_core_config
-        run_final_doctor
+    phase "Phase 3: 外部 skills（npx skills）"
+    if [[ "$SKIP_SKILLS" == true ]]; then
+        info "已跳过外部 skills 安装（--skip-skills）"
+    elif [[ ${#SELECTED_SKILLS[@]} -gt 0 ]]; then
+        install_external_skills "${SELECTED_SKILLS[@]}"
+    else
+        install_external_skills
+    fi
+
+    # --skill 是单项入口：没有同时指定 plugin 时，安装完成即退出，
+    # 不继续执行全量 plugin 安装和最终验证流程。
+    if [[ ${#SELECTED_SKILLS[@]} -gt 0 && ${#SELECTED_PLUGINS[@]} -eq 0 ]]; then
+        info "指定 skill 安装完成，跳过后续 plugins/验证流程"
         return 0
     fi
 
-    phase "Phase 3: 安装器编排"
-    run_installer codegraph "$UPDATE"
-    run_installer context-mode "$NO_PATCH"
-    run_installer openspec
-
-    phase "Phase 4: 后置安装器"
-    run_installer omc
-    run_installer superpowers
-
-    phase "Phase 4.5: Plugin registry 修复"
-    register_repository_plugins
+    phase "Phase 4: 第三方 plugins（claude plugin）"
+    if [[ "$SKIP_PLUGINS" == true ]]; then
+        info "已跳过第三方 plugins 安装（--skip-plugins）"
+    elif [[ ${#SELECTED_PLUGINS[@]} -gt 0 ]]; then
+        install_third_party_plugins "${SELECTED_PLUGINS[@]}"
+    else
+        install_third_party_plugins
+    fi
 
     phase "Phase 5: 最终验证"
     verify_core_config
@@ -1659,7 +1922,6 @@ run_core_flow() {
     phase "Phase 2: 核心配置"
     ensure_core_config
     ensure_settings_json
-    merge_known_marketplaces
 
     phase "Phase 3: 最终验证"
     verify_core_config
@@ -1673,7 +1935,102 @@ run_inspection_flow() {
     run_priority_module_actions
 }
 
-UNINSTALL=""
+# 只读列出统一资源：configs/ 清单声明的 remote skill/plugin + 仓库 skills/ 下的本地 skill。
+# 复用 resource-plan.py 的 9 列 tsv 输出，按 kind 分组展示。
+# exit 0 = 无冲突；2 = 存在未决冲突（列表仍完整输出）。
+run_list_flow() {
+    local out rc
+    out="$(python3 "$RESOURCE_PLANNER" --repo-root "$REPO_ROOT" --format tsv 2>&1)"
+    rc=$?
+    if [[ "$rc" -ne 0 && "$rc" -ne 2 ]]; then
+        err "资源计划失败 (exit $rc)"
+        return "$rc"
+    fi
+    if [[ -z "$out" ]]; then
+        info "未声明任何 skill/plugin 资源"
+        return 0
+    fi
+    python3 -c 'import sys
+from collections import OrderedDict
+groups = OrderedDict()
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    f = line.split("\t")
+    if len(f) != 9:
+        continue
+    kind, rid, source, name, repo, marketplace, path, action, conflict = f
+    where = repo or marketplace or path or "?"
+    groups.setdefault(kind, []).append((rid, source, where, conflict))
+for kind, items in groups.items():
+    print()
+    print(f"=== {kind}s ({len(items)}) ===")
+    for rid, source, where, conflict in items:
+        flag = "  [冲突]" if conflict == "1" else ""
+        print(f"  [{kind}] {rid}\t{source}\t{where}{flag}")' <<< "$out"
+    if [[ "$rc" == 2 ]]; then
+        warn "存在未决冲突；可用 --choose <kind>:<id>=local|remote|skip 指定来源"
+    fi
+    return "$rc"
+}
+
+# 检测 Claude Code CLI 本体安装状态（区别于 verify=核心配置 symlink、doctor=OMC 插件诊断）。
+# 检查: claude 存在性 → 版本/路径 → claude doctor 健康 → claude auth 认证状态。
+# exit 0 = 全部通过；1 = claude 缺失或 doctor 失败。
+run_check_flow() {
+    local failed=0
+
+    phase "Phase 1: Claude Code 存在性"
+    if ! command -v claude >/dev/null 2>&1; then
+        err "claude 命令未找到 (PATH 中无 claude)"
+        return 1
+    fi
+    local claude_bin claude_path
+    claude_bin="$(command -v claude)"
+    claude_path="$(readlink -f "$claude_bin" 2>/dev/null || echo "$claude_bin")"
+    pass "claude 可执行文件: $claude_path"
+
+    local version
+    version="$(claude --version 2>&1 | head -1)"
+    log "Claude Code 已安装: $version"
+
+    phase "Phase 2: claude doctor 健康检查"
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] claude doctor"
+    else
+        local doctor_out doctor_rc
+        doctor_out="$(claude doctor 2>&1)"
+        doctor_rc=$?
+        if [[ $doctor_rc -eq 0 && "$doctor_out" == *"No installation issues found."* ]]; then
+            pass "claude doctor: 无安装问题"
+        else
+            err "claude doctor 失败 (exit $doctor_rc):"
+            echo "$doctor_out" | sed 's/^/    /'
+            failed=1
+        fi
+    fi
+
+    phase "Phase 3: claude auth 认证状态"
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY-RUN] claude auth status --json"
+    else
+        local auth_out
+        auth_out="$(claude auth status --json 2>&1)"
+        if echo "$auth_out" | grep -q '"loggedIn": true'; then
+            local method
+            method="$(echo "$auth_out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("authMethod") or "unknown")' 2>/dev/null || echo "unknown")"
+            pass "claude 已登录 (authMethod=$method)"
+        else
+            warn "claude 未登录 — 安装可用但需认证才能使用"
+        fi
+    fi
+
+    [[ $failed -eq 0 ]]
+}
+
+UNINSTALL_LIST=()
+UNINSTALL_JOBS=3
 
 remove_symlink_if_ours() {
     local path="$1"
@@ -1747,9 +2104,73 @@ PYEOF
     log "已移除: $label"
 }
 
+uninstall_skill() {
+    local name="${1:?缺少 skill 名}"
+    [[ -f "$SKILLS_CONFIG" ]] || { err "无 skills.toml，无法卸载 skill '$name'"; return 1; }
+
+    local parsed
+    parsed="$(parse_skills_toml "$SKILLS_CONFIG")" || {
+        err "解析 skills.toml 失败"
+        return 1
+    }
+    local line repo skill agent scope note
+    while IFS=$'\t' read -r line repo skill agent scope note; do
+        [[ "$line" == "$name" ]] || continue
+        local scope_flag=""
+        [[ "$scope" == "global" ]] && scope_flag="-g"
+        info "卸载 skill: $name"
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] npx -y skills@latest remove $name -a ${agent:-claude-code} $scope_flag -y"
+            return 0
+        fi
+        if ! npx -y skills@latest remove "$name" -a "${agent:-claude-code}" $scope_flag -y; then
+            err "卸载 skill '$name' 失败"
+            return 1
+        fi
+        log "skill '$name' 已卸载"
+        return 0
+    done <<< "$parsed"
+
+    err "skills.toml 中找不到 skill: $name"
+    return 1
+}
+
+uninstall_plugin() {
+    local name="${1:?缺少 plugin 名}"
+    [[ -f "$PLUGINS_CONFIG" ]] || { err "无 plugins.toml，无法卸载 plugin '$name'"; return 1; }
+
+    local parsed
+    parsed="$(parse_plugins_toml "$PLUGINS_CONFIG")" || {
+        err "解析 plugins.toml 失败"
+        return 1
+    }
+    local line repo method marketplace command note
+    while IFS=$'\t' read -r line repo method marketplace command note; do
+        [[ "$line" == "$name" ]] || continue
+        if [[ "$method" == "npx" ]]; then
+            warn "plugin '$name' 是 npx 手动安装，需手动卸载: $command"
+            return 0
+        fi
+        info "卸载 plugin: $name"
+        if [[ "$DRY_RUN" == true ]]; then
+            info "[DRY-RUN] claude plugin uninstall ${name}@${marketplace} -s user -y"
+            return 0
+        fi
+        if ! claude plugin uninstall "${name}@${marketplace}" -s user -y; then
+            err "卸载 plugin '$name' 失败"
+            return 1
+        fi
+        log "plugin '$name' 已卸载"
+        return 0
+    done <<< "$parsed"
+
+    err "plugins.toml 中找不到 plugin: $name"
+    return 1
+}
+
 uninstall_core() {
     phase "Uninstall: 核心配置"
-    local repo="$REPO_ROOT/config/claude"
+    local repo="$REPO_ROOT/claude"
 
     if [[ -L "$CLAUDE_HOME/CLAUDE.md" ]]; then
         remove_symlink_if_ours "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink" "$repo/CLAUDE.md.ccfg"
@@ -1795,13 +2216,84 @@ remove_legacy_ecc_paths() {
     done
 }
 
+# 并发卸载一组目标（core/all 串行，清单项有限并发）。
+# 只移除 ~/.claude/skills/ 与 ~/.claude/plugins 下的安装副本，绝不触碰本仓库源文件。
+uninstall_multi() {
+    local -a targets=("$@")
+    [[ ${#targets[@]} -gt 0 ]] || { err "uninstall_multi: 空目标列表"; return 1; }
+
+    # 先串行处理全局操作 core/all
+    local t
+    for t in "${targets[@]}"; do
+        case "$t" in
+            core) uninstall_core ;;
+            all) uninstall_all ;;
+        esac
+    done
+
+    # 仅剩清单项时才需要并发；去重（core/all 已处理）
+    local -a items=()
+    local seen=""
+    for t in "${targets[@]}"; do
+        [[ "$t" == core || "$t" == all ]] && continue
+        [[ "$seen" == *"|$t|"* ]] && continue
+        seen+="|$t|"
+        items+=("$t")
+    done
+    [[ ${#items[@]} -gt 0 ]] || return 0
+
+    local jobs="${UNINSTALL_JOBS:-3}"
+    local -a pids=()
+    local failed=0
+    local pid
+    for t in "${items[@]}"; do
+        # 满槽时等最老的作业完成再放新作业（有限并发）
+        while ((${#pids[@]} >= jobs)); do
+            if ! wait "${pids[0]}"; then failed=1; fi
+            pids=("${pids[@]:1}")
+        done
+        uninstall_one "$t" &
+        pids+=("$!")
+    done
+    # 收尾：等全部剩余作业
+    for pid in "${pids[@]}"; do
+        if ! wait "$pid"; then failed=1; fi
+    done
+    return "$failed"
+}
+
+# 单个清单项卸载：根据它是 skill 还是 plugin 分发到对应函数
+# 支持 typed 目标 skill:NAME / plugin:NAME（由 --uninstall-skill/--uninstall-plugin 产生），
+# 规避同名 skill/plugin 被 skill-first 误分派；未带类型时保持旧 skill-first 兼容。
+uninstall_one() {
+    local name="${1:?缺少目标名}"
+    case "$name" in
+        skill:*)
+            uninstall_skill "${name#skill:}"
+            return ;;
+        plugin:*)
+            uninstall_plugin "${name#plugin:}"
+            return ;;
+        core|all)
+            err "uninstall_one: core/all 应串行处理，不应进入并发队列"
+            return 1 ;;
+    esac
+    if manifest_has_skill "$name"; then
+        uninstall_skill "$name"
+    elif manifest_has_plugin "$name"; then
+        uninstall_plugin "$name"
+    else
+        err "未知卸载目标: $name"
+        return 1
+    fi
+}
+
 uninstall_all() {
     uninstall_core
     remove_legacy_settings_entries "$CLAUDE_HOME/settings.json"
     remove_legacy_marketplace_entries "$CLAUDE_HOME/plugins/known_marketplaces.json"
     remove_legacy_installed_plugins_entries "$CLAUDE_HOME/plugins/installed_plugins.json"
     remove_legacy_ecc_paths
-    remove_symlink_if_ours "$CLAUDE_HOME/plugins/marketplaces/claude-plugins-official" "CPO marketplace" "$REPO_ROOT/external/claude-plugins-official"
     if [[ "$DRY_RUN" == true ]]; then
         info "[DRY-RUN] rm $CLAUDE_HOME/plugins/known_marketplaces.json"
     else
@@ -1820,33 +2312,169 @@ while [[ $# -gt 0 ]]; do
         --no-verify) NO_VERIFY=true; shift ;;
         --force) FORCE=true; shift ;;
         --update) UPDATE=true; shift ;;
-        --update-third-party) UPDATE=true; UPDATE_THIRD_PARTY_REMOTE=true; shift ;;
-        --no-patch) NO_PATCH=true; shift ;;
         --smoke-test) SMOKE_TEST=true; shift ;;
+        --skill)
+            SELECTED_SKILL="${2:-}"
+            [[ -n "$SELECTED_SKILL" ]] || { err "--skill 需要参数"; exit 1; }
+            SELECTED_SKILLS+=("$SELECTED_SKILL")
+            shift 2 ;;
+        --skill=*)
+            SELECTED_SKILL="${1#*=}"
+            [[ -n "$SELECTED_SKILL" ]] || { err "--skill 需要参数"; exit 1; }
+            SELECTED_SKILLS+=("$SELECTED_SKILL")
+            shift ;;
+        --plugin)
+            SELECTED_PLUGIN="${2:-}"
+            [[ -n "$SELECTED_PLUGIN" ]] || { err "--plugin 需要参数"; exit 1; }
+            SELECTED_PLUGINS+=("$SELECTED_PLUGIN")
+            shift 2 ;;
+        --plugin=*)
+            SELECTED_PLUGIN="${1#*=}"
+            [[ -n "$SELECTED_PLUGIN" ]] || { err "--plugin 需要参数"; exit 1; }
+            SELECTED_PLUGINS+=("$SELECTED_PLUGIN")
+            shift ;;
+        --skip-skills)
+            SKIP_SKILLS=true
+            shift ;;
+        --skip-plugins)
+            SKIP_PLUGINS=true
+            shift ;;
         --uninstall)
-            UNINSTALL="${2:-core}"
-            [[ "$UNINSTALL" =~ ^(core|all)$ ]] || { err "--uninstall 参数无效: $UNINSTALL (有效值: core, all)"; exit 1; }
+            _uninstall_target="${2:-}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall 需要参数 (core|all|清单中的 skill/plugin 名)"; exit 1; }
+            if [[ "$_uninstall_target" =~ ^(core|all)$ ]] || manifest_has_skill "$_uninstall_target" || manifest_has_plugin "$_uninstall_target"; then
+                UNINSTALL_LIST+=("$_uninstall_target")
+            else
+                err "--uninstall 参数无效: $_uninstall_target (有效值: core, all, 或清单中的 skill/plugin 名)"; exit 1
+            fi
             shift 2 ;;
         --uninstall=*)
-            UNINSTALL="${1#*=}"
-            [[ "$UNINSTALL" =~ ^(core|all)$ ]] || { err "--uninstall 参数无效: $UNINSTALL (有效值: core, all)"; exit 1; }
+            _uninstall_target="${1#*=}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall 需要参数 (core|all|清单中的 skill/plugin 名)"; exit 1; }
+            if [[ "$_uninstall_target" =~ ^(core|all)$ ]] || manifest_has_skill "$_uninstall_target" || manifest_has_plugin "$_uninstall_target"; then
+                UNINSTALL_LIST+=("$_uninstall_target")
+            else
+                err "--uninstall 参数无效: $_uninstall_target (有效值: core, all, 或清单中的 skill/plugin 名)"; exit 1
+            fi
+            shift ;;
+        --uninstall-skill)
+            _uninstall_target="${2:-}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall-skill 需要参数"; exit 1; }
+            manifest_has_skill "$_uninstall_target" || { err "--uninstall-skill 参数无效: $_uninstall_target (不在 skills.toml 中)"; exit 1; }
+            UNINSTALL_TYPED_LIST+=("skill:$_uninstall_target")
+            shift 2 ;;
+        --uninstall-skill=*)
+            _uninstall_target="${1#*=}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall-skill 需要参数"; exit 1; }
+            manifest_has_skill "$_uninstall_target" || { err "--uninstall-skill 参数无效: $_uninstall_target (不在 skills.toml 中)"; exit 1; }
+            UNINSTALL_TYPED_LIST+=("skill:$_uninstall_target")
+            shift ;;
+        --uninstall-plugin)
+            _uninstall_target="${2:-}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall-plugin 需要参数"; exit 1; }
+            manifest_has_plugin "$_uninstall_target" || { err "--uninstall-plugin 参数无效: $_uninstall_target (不在 plugins.toml 中)"; exit 1; }
+            UNINSTALL_TYPED_LIST+=("plugin:$_uninstall_target")
+            shift 2 ;;
+        --uninstall-plugin=*)
+            _uninstall_target="${1#*=}"
+            [[ -n "$_uninstall_target" ]] || { err "--uninstall-plugin 需要参数"; exit 1; }
+            manifest_has_plugin "$_uninstall_target" || { err "--uninstall-plugin 参数无效: $_uninstall_target (不在 plugins.toml 中)"; exit 1; }
+            UNINSTALL_TYPED_LIST+=("plugin:$_uninstall_target")
+            shift ;;
+        --uninstall-resource)
+            _uninstall_resource="${2:-}"
+            [[ -n "$_uninstall_resource" ]] || { err "--uninstall-resource 需要参数"; exit 1; }
+            UNINSTALL_RESOURCES+=("$_uninstall_resource")
+            shift 2 ;;
+        --uninstall-resource=*)
+            _uninstall_resource="${1#*=}"
+            [[ -n "$_uninstall_resource" ]] || { err "--uninstall-resource 需要参数"; exit 1; }
+            UNINSTALL_RESOURCES+=("$_uninstall_resource")
+            shift ;;
+        --update-skill)
+            UPDATE_SKILL="${2:-}"
+            [[ -n "$UPDATE_SKILL" ]] || { err "--update-skill 需要参数"; exit 1; }
+            [[ "$UPDATE_SKILL" =~ ^(core|all)$ ]] || manifest_has_skill "$UPDATE_SKILL" || { err "--update-skill 参数无效: $UPDATE_SKILL (有效值: core, all, 或 skills.toml 中的 skill 名)"; exit 1; }
+            UPDATE_SKILLS+=("$UPDATE_SKILL")
+            shift 2 ;;
+        --update-skill=*)
+            UPDATE_SKILL="${1#*=}"
+            [[ "$UPDATE_SKILL" =~ ^(core|all)$ ]] || manifest_has_skill "$UPDATE_SKILL" || { err "--update-skill 参数无效: $UPDATE_SKILL (有效值: core, all, 或 skills.toml 中的 skill 名)"; exit 1; }
+            UPDATE_SKILLS+=("$UPDATE_SKILL")
+            shift ;;
+        --update-local-skill)
+            UPDATE_LOCAL_SKILL="${2:-}"
+            [[ -n "$UPDATE_LOCAL_SKILL" ]] || { err "--update-local-skill 需要参数"; exit 1; }
+            [[ -f "$REPO_ROOT/skills/$UPDATE_LOCAL_SKILL/SKILL.md" ]] || { err "--update-local-skill 参数无效: $UPDATE_LOCAL_SKILL (仓库 skills 中不存在)"; exit 1; }
+            UPDATE_RESOURCES+=("skill:$UPDATE_LOCAL_SKILL")
+            shift 2 ;;
+        --update-local-skill=*)
+            UPDATE_LOCAL_SKILL="${1#*=}"
+            [[ -n "$UPDATE_LOCAL_SKILL" ]] || { err "--update-local-skill 需要参数"; exit 1; }
+            [[ -f "$REPO_ROOT/skills/$UPDATE_LOCAL_SKILL/SKILL.md" ]] || { err "--update-local-skill 参数无效: $UPDATE_LOCAL_SKILL (仓库 skills 中不存在)"; exit 1; }
+            UPDATE_RESOURCES+=("skill:$UPDATE_LOCAL_SKILL")
+            shift ;;
+        --update-plugin)
+            UPDATE_PLUGIN="${2:-}"
+            [[ -n "$UPDATE_PLUGIN" ]] || { err "--update-plugin 需要参数"; exit 1; }
+            [[ "$UPDATE_PLUGIN" =~ ^(core|all)$ ]] || manifest_has_plugin "$UPDATE_PLUGIN" || { err "--update-plugin 参数无效: $UPDATE_PLUGIN (有效值: core, all, 或 plugins.toml 中的 plugin 名)"; exit 1; }
+            UPDATE_PLUGINS+=("$UPDATE_PLUGIN")
+            shift 2 ;;
+        --update-plugin=*)
+            UPDATE_PLUGIN="${1#*=}"
+            [[ "$UPDATE_PLUGIN" =~ ^(core|all)$ ]] || manifest_has_plugin "$UPDATE_PLUGIN" || { err "--update-plugin 参数无效: $UPDATE_PLUGIN (有效值: core, all, 或 plugins.toml 中的 plugin 名)"; exit 1; }
+            UPDATE_PLUGINS+=("$UPDATE_PLUGIN")
+            shift ;;
+        --update-resource)
+            UPDATE_RESOURCE="${2:-}"
+            [[ -n "$UPDATE_RESOURCE" ]] || { err "--update-resource 需要参数"; exit 1; }
+            UPDATE_RESOURCES+=("$UPDATE_RESOURCE")
+            shift 2 ;;
+        --update-resource=*)
+            UPDATE_RESOURCE="${1#*=}"
+            [[ -n "$UPDATE_RESOURCE" ]] || { err "--update-resource 需要参数"; exit 1; }
+            UPDATE_RESOURCES+=("$UPDATE_RESOURCE")
+            shift ;;
+        --choose)
+            CHOICE="${2:-}"
+            [[ -n "$CHOICE" ]] || { err "--choose 需要参数"; exit 1; }
+            RESOURCE_CHOICES+=("$CHOICE")
+            shift 2 ;;
+        --choose=*)
+            CHOICE="${1#*=}"
+            [[ -n "$CHOICE" ]] || { err "--choose 需要参数"; exit 1; }
+            RESOURCE_CHOICES+=("$CHOICE")
+            shift ;;
+        --update-all)
+            UPDATE_ALL=true
             shift ;;
         -h|--help)
             echo "用法: ./setup.sh [action] [选项]"
-            echo "  action          install | update | reinstall | core | uninstall | verify | status | doctor"
+            echo "  action          install | update | reinstall | core | uninstall | verify | status | doctor | check | list"
             echo "  --ci            CI 模式 (跳过手动提示)"
             echo "  --dry-run       预览，不实际修改"
             echo "  --no-claude     跳过 Claude Code 安装"
             echo "  --no-verify     跳过验证"
             echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
             echo "  --update        兼容旧 flag：等价于 action=update"
-            echo "  --update-third-party  兼容别名：刷新配置中的第三方仓库到最新 shallow checkout"
-            echo "  --no-patch      跳过 context-mode routing.mjs strict-bash 补丁"
-            echo "  环境变量        CTX_INSTALL_MODE=auto|symlink|copy 控制 context-mode 安装方式 (默认 auto: symlink 失败自动 copy)"
             echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 扩展冒烟检查"
-            echo "  --uninstall [M] 兼容旧卸载模式 (core=核心配置, all=全部)"
+            echo "  --skill <name>  只安装指定外部 skill（可重复，读 configs/skills.toml）"
+            echo "  --plugin <name> 只安装指定第三方 plugin（可重复，读 configs/plugins.toml）"
+            echo "  --skip-skills   跳过外部 skills 安装"
+            echo "  --skip-plugins  跳过第三方 plugins 安装"
+            echo "  --uninstall T   卸载单个/多个目标 (core|all|清单中的 skill/plugin 名，可重复出现，列表并发卸载)"
+            echo "  --uninstall-skill N  卸载指定 skill（typed，规避同名 plugin）"
+            echo "  --uninstall-plugin N 卸载指定 plugin（typed，规避同名 skill）"
+            echo "  --uninstall-resource kind:spec  按统一资源 id 卸载（skill:<名> / plugin:<名>，冲突时需 --choose）"
+            echo "  --update-all    更新全部外部 skills + plugins (npx skills update + claude plugin update)"
+            echo "  --update-skill N 更新指定外部 skill（可重复；core/all=全部）"
+            echo "  --update-local-skill N 更新指定仓库自有 skill（可重复；创建/刷新 ~/.claude/skills 下的软链接）"
+            echo "  --update-plugin N 更新指定 plugin（可重复；core/all=全部）"
+            echo "  --update-resource kind:spec  按统一资源 id 更新（skill:<名> / plugin:<名>，冲突时需 --choose）"
+            echo "  --choose kind:id=local|remote|skip  解决同名 local/remote 资源冲突（可重复）"
+            echo "  --tui           启动交互式 TUI 安装器（需先构建 tools/installer-tui）"
             exit 0 ;;
-        install|update|reinstall|core|uninstall|verify|status|doctor)
+        install|update|reinstall|core|uninstall|verify|status|doctor|check|list)
             ACTION="$1"
             ACTION_EXPLICIT=true
             shift ;;
@@ -1858,6 +2486,17 @@ if [[ "$UPDATE" == true && "$ACTION_EXPLICIT" == false ]]; then
     ACTION="update"
 fi
 
+# 互斥校验：显式选择与整类跳过冲突；update-all 与单项更新冲突
+if [[ "$SKIP_SKILLS" == true && ${#SELECTED_SKILLS[@]} -gt 0 ]]; then
+    err "--skip-skills 与 --skill 不能同时使用"; exit 1
+fi
+if [[ "$SKIP_PLUGINS" == true && ${#SELECTED_PLUGINS[@]} -gt 0 ]]; then
+    err "--skip-plugins 与 --plugin 不能同时使用"; exit 1
+fi
+if [[ "$UPDATE_ALL" == true && (${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_LOCAL_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0 || ${#UPDATE_RESOURCES[@]} -gt 0) ]]; then
+    err "--update-all 与单项 skill/plugin 更新不能同时使用"; exit 1
+fi
+
 main() {
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -1865,14 +2504,20 @@ main() {
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
     echo ""
 
-    if [[ -n "$UNINSTALL" ]]; then
-        case "$UNINSTALL" in
-            core) uninstall_core ;;
-            all) uninstall_all ;;
-        esac
+    # --uninstall: 单个/多个目标卸载（core/all 串行，清单项有限并发）
+    # typed 目标（skill:NAME / plugin:NAME）并入同一列表，复用并发/去重/限流
+    local -a uninstall_targets=("${UNINSTALL_LIST[@]}" "${UNINSTALL_TYPED_LIST[@]}")
+    if [[ ${#uninstall_targets[@]} -gt 0 ]]; then
+        uninstall_multi "${uninstall_targets[@]}" || { err "卸载未全部完成"; return 1; }
         echo ""
-        log "卸载完成 ($UNINSTALL)"
+        log "卸载完成 (${uninstall_targets[*]})"
         [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 未实际修改文件"
+        return 0
+    fi
+    # 统一资源卸载入口：走同一 discover/conflict/select 流程。
+    if [[ ${#UNINSTALL_RESOURCES[@]} -gt 0 ]]; then
+        resource_uninstall || return $?
+        echo ""
         return 0
     fi
 
@@ -1880,6 +2525,56 @@ main() {
     [[ "$CI_MODE" == true ]] && info "CI 模式"
     [[ "$ACTION" == "update" && "$FORCE" == true ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库，并强制重跑安装器"
     [[ "$ACTION" == "update" && "$FORCE" == false ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库；不会重跑第三方安装器"
+
+    # --update-all / --update-skill / --update-plugin: 单独入口，跑完即退出。
+    # 任一项失败最终非零（失败聚合），不能后续项成功覆盖 rc。
+    local update_failed=0
+    if [[ "$UPDATE_ALL" == true ]]; then
+        phase "Phase 0: 更新全部"
+        update_all_skills || update_failed=1
+        update_all_plugins || update_failed=1
+        echo ""
+        if [[ "$update_failed" == 0 ]]; then
+            log "全部外部 skills + plugins 已更新"
+        else
+            err "部分更新失败，请检查上方日志"
+        fi
+        return "$update_failed"
+    fi
+    # 统一资源更新入口（含旧参数经兼容转换进入的 UPDATE_RESOURCES）。
+    if [[ ${#UPDATE_RESOURCES[@]} -gt 0 ]]; then
+        resource_update || return $?
+        echo ""
+        return 0
+    fi
+    if [[ ${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_LOCAL_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0 ]]; then
+        phase "Phase 0: 更新指定项"
+        local s ls p
+        for s in "${UPDATE_SKILLS[@]}"; do
+            if [[ "$s" == core || "$s" == all ]]; then
+                update_all_skills || update_failed=1
+            else
+                update_skill "$s" || update_failed=1
+            fi
+        done
+        for ls in "${UPDATE_LOCAL_SKILLS[@]}"; do
+            update_local_skill "$ls" || update_failed=1
+        done
+        for p in "${UPDATE_PLUGINS[@]}"; do
+            if [[ "$p" == core || "$p" == all ]]; then
+                update_all_plugins || update_failed=1
+            else
+                update_plugin "$p" || update_failed=1
+            fi
+        done
+        echo ""
+        if [[ "$update_failed" == 0 ]]; then
+            log "指定项更新完成 (外部 skills: ${UPDATE_SKILLS[*]:-无} / 仓库 skills: ${UPDATE_LOCAL_SKILLS[*]:-无} / plugins: ${UPDATE_PLUGINS[*]:-无})"
+        else
+            err "部分指定项更新失败，请检查上方日志"
+        fi
+        return "$update_failed"
+    fi
 
     if [[ "$ACTION" == "update" ]]; then
         phase "Phase 0: 仓库更新"
@@ -1917,6 +2612,12 @@ main() {
             ;;
         verify|status|doctor)
             run_inspection_flow
+            ;;
+        check)
+            run_check_flow
+            ;;
+        list)
+            run_list_flow
             ;;
         uninstall)
             uninstall_all

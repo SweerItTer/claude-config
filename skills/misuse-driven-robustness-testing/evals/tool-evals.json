@@ -1,0 +1,124 @@
+{
+  "name": "v0.2.5-deterministic-tool-regression",
+  "cases": [
+    {
+      "id": "T01",
+      "tool": "validator",
+      "args": [
+        "--strict",
+        {
+          "path": "examples/embedded-wifi-completed-campaign.md"
+        },
+        "--evidence-manifest",
+        {
+          "path": "examples/evidence-manifest.json"
+        },
+        "--require-artifacts"
+      ],
+      "expect": {
+        "exit_code": 0,
+        "stdout_contains": [
+          "PASS: 2 scenario(s)"
+        ]
+      }
+    },
+    {
+      "id": "T02",
+      "tool": "validator",
+      "args": [
+        "--strict",
+        {
+          "path": "examples/embedded-wifi-completed-campaign.md"
+        }
+      ],
+      "expect": {
+        "exit_code": 1,
+        "stdout_contains": [
+          "evidence manifest is required"
+        ]
+      }
+    },
+    {
+      "id": "T03",
+      "tool": "validator",
+      "args": [
+        "--strict",
+        {
+          "path": "examples/embedded-wifi-completed-campaign.md"
+        },
+        "--evidence-manifest",
+        {
+          "path": "evals/fixtures/tampered-evidence.json"
+        },
+        "--require-artifacts"
+      ],
+      "expect": {
+        "exit_code": 1,
+        "stdout_contains": [
+          "SHA-256 mismatch"
+        ]
+      }
+    },
+    {
+      "id": "T04",
+      "tool": "generator",
+      "args": [
+        {
+          "path": "examples/embedded-wifi-profile.json"
+        }
+      ],
+      "expect": {
+        "exit_code": 0,
+        "stdout_contains": [
+          "# 误用驱动鲁棒性测试活动"
+        ]
+      }
+    },
+    {
+      "id": "T05",
+      "tool": "generator",
+      "args": [
+        {
+          "path": "evals/fixtures/invalid-profile.json"
+        }
+      ],
+      "expect": {
+        "exit_code": 2,
+        "stderr_contains": [
+          "states must be an array of strings"
+        ]
+      }
+    },
+    {
+      "id": "T06",
+      "tool": "validator",
+      "args": [
+        {
+          "path": "examples/embedded-wifi-generated-campaign.md"
+        }
+      ],
+      "expect": {
+        "exit_code": 0,
+        "stdout_contains": [
+          "WARN:"
+        ]
+      }
+    },
+    {
+      "id": "T07",
+      "tool": "validator",
+      "args": [
+        "--strict",
+        {
+          "path": "examples/embedded-wifi-generated-campaign.md"
+        }
+      ],
+      "expect": {
+        "exit_code": 1,
+        "stdout_contains": [
+          "FAIL:"
+        ]
+      }
+    }
+  ]
+}

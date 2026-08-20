@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "campaign_id": "wifi-lifecycle-20260807",
+  "generated_at": "2026-08-07T04:35:00Z",
+  "evidence": [
+    {
+      "id": "EV-S01-ORACLE",
+      "type": "oracle-output",
+      "artifact": "artifacts/s01-oracle.log",
+      "sha256": "d39359205ec77fefc4a256a1b1e7d086ae0f1d9109570bf2a64941d21bf60796",
+      "captured_at": "2026-08-07T04:30:00Z",
+      "collector": "lab-harness/v0.2.4",
+      "source": "wifi.lifecycle:s01",
+      "parents": [],
+      "sensitivity": "INTERNAL",
+      "description": ""
+    },
+    {
+      "id": "EV-S01-LANDING",
+      "type": "perturbation-landing",
+      "artifact": "artifacts/s01-landing.log",
+      "sha256": "ffd08c8d2aae41ef0cbf48d219f9500b7cc588b6ccf5d95c7e304e8ae1ec2e5d",
+      "captured_at": "2026-08-07T04:30:00Z",
+      "collector": "lab-harness/v0.2.4",
+      "source": "wifi.call-audit:1842",
+      "parents": [],
+      "sensitivity": "INTERNAL",
+      "description": ""
+    },
+    {
+      "id": "EV-S02-ORACLE",
+      "type": "oracle-output",
+      "artifact": "artifacts/s02-oracle.log",
+      "sha256": "c1864bc59cc676a98fad783ec0e4d511693aec6a0b80d36622fd144f7b6d9cb0",
+      "captured_at": "2026-08-07T04:30:00Z",
+      "collector": "lab-harness/v0.2.4",
+      "source": "wifi.lifecycle:s02",
+      "parents": [],
+      "sensitivity": "INTERNAL",
+      "description": ""
+    },
+    {
+      "id": "EV-S02-LANDING",
+      "type": "perturbation-landing",
+      "artifact": "artifacts/s02-landing.log",
+      "sha256": "b6d90fd21791890a15a05025f8ab60a1be2d4aef2df5ef6814aad60261cfc40b",
+      "captured_at": "2026-08-07T04:30:00Z",
+      "collector": "lab-harness/v0.2.4",
+      "source": "wifi.event-relay:92017",
+      "parents": [],
+      "sensitivity": "INTERNAL",
+      "description": ""
+    },
+    {
+      "id": "EV-RECOVERY",
+      "type": "recovery",
+      "artifact": "artifacts/recovery.log",
+      "sha256": "4d6c70691fe62bdcdecf37405df6d7509884c512bf0ff6ef9ad21e754fc23f76",
+      "captured_at": "2026-08-07T04:30:00Z",
+      "collector": "lab-harness/v0.2.4",
+      "source": "wifi.lifecycle:post-campaign",
+      "parents": [
+        "EV-S01-ORACLE",
+        "EV-S02-ORACLE"
+      ],
+      "sensitivity": "INTERNAL",
+      "description": ""
+    }
+  ]
+}

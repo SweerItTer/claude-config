@@ -2,7 +2,7 @@ name: Test setup.sh
 
 on:
   push:
-    branches: [main, feat/abstract-plugin-registry-heal]
+    branches: [main, refactor/phase2, refactor/phase3-tui]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -16,12 +16,12 @@ jobs:
 
     steps:
       - name: Checkout with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -86,7 +86,7 @@ jobs:
           printf '%s\n' "$output" | grep -q '\[PASS\] CodeGraph 已就绪，跳过'
           printf '%s\n' "$output" | grep -q 'CodeGraph install 通过: codegraph v0.9.9'
           printf '%s\n' "$output" | grep -q 'CodeGraph configure 通过: .*/.claude.json 已包含期望的 mcpServers.codegraph 配置'
-          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 通过: claude mcp get codegraph 显示 ✓ Connected'
+          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 通过: claude mcp get codegraph 显示已连接:  ✓ Connected'
           printf '%s\n' "$output" | grep -q 'CodeGraph overall 通过: CLI、配置与离线发现均通过'
 
       - name: Verify install-codegraph.sh repairs missing Claude config
@@ -207,23 +207,66 @@ jobs:
 
           printf '%s\n' "$output" | grep -q 'CodeGraph install 通过: codegraph v0.9.9'
           printf '%s\n' "$output" | grep -q 'CodeGraph configure 通过: .*/.claude.json 已包含期望的 mcpServers.codegraph 配置'
-          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 失败: claude 已发现 codegraph，但未显示 ✓ Connected'
+          printf '%s\n' "$output" | grep -q 'CodeGraph offline_verify 失败: claude 已发现 codegraph，但未连接'
           printf '%s\n' "$output" | grep -q 'CodeGraph overall: CLI 与配置已通过，但离线发现失败'
+
+      - name: Build and test installer-tui with FTXUI 7.0.2
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y screen
+          ftxui_src="$RUNNER_TEMP/ftxui"
+          ftxui_prefix="$RUNNER_TEMP/ftxui-prefix"
+          git clone --branch v7.0.2 --depth 1 https://github.com/ArthurSonzogni/FTXUI.git "$ftxui_src"
+          cmake -S "$ftxui_src" -B "$ftxui_src/build" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$ftxui_src/build" --parallel
+          cmake --install "$ftxui_src/build" --prefix "$ftxui_prefix"
+          cmake -S ./tools/installer-tui -B ./build/installer-tui \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$ftxui_prefix"
+          cmake --build ./build/installer-tui --parallel
+          chmod +x ./tests/test-installer-tui.sh
+          ./tests/test-installer-tui.sh
+
+      - name: Verify Claude check regression script
+        run: |
+          chmod +x ./tests/test-claude-check.sh
+          ./tests/test-claude-check.sh
+
+      - name: Verify manifest parsing regression script
+        run: |
+          chmod +x ./tests/test-manifest-parsing.sh
+          ./tests/test-manifest-parsing.sh
+
+      - name: Verify resource plan regression script
+        run: |
+          chmod +x ./tests/test-resource-plan.sh
+          ./tests/test-resource-plan.sh
+
+      - name: Verify setup path and marketplace regression script
+        run: |
+          chmod +x ./tests/test-setup-path-and-marketplace.sh
+          ./tests/test-setup-path-and-marketplace.sh
+
+      - name: Verify setup resolver regression script
+        run: |
+          chmod +x ./tests/test-setup-resolver.sh
+          ./tests/test-setup-resolver.sh
 
       - name: Verify setup dependency bootstrap regression script
         run: |
-          chmod +x ./script/test-setup-dependencies.sh
-          ./script/test-setup-dependencies.sh
+          chmod +x ./tests/test-setup-dependencies.sh
+          ./tests/test-setup-dependencies.sh
 
       - name: Verify settings merge regression script
         run: |
-          chmod +x ./script/test-settings-merge.sh
-          ./script/test-settings-merge.sh
+          chmod +x ./tests/test-settings-merge.sh
+          ./tests/test-settings-merge.sh
 
-      - name: Verify plugin registry heal regression script
+      - name: Verify skill context source fallback regression script
         run: |
-          chmod +x ./script/test-plugin-registry-heal.sh
-          ./script/test-plugin-registry-heal.sh
+          chmod +x ./tests/test-skill-context-verification.sh
+          ./tests/test-skill-context-verification.sh
 
       - name: Run setup.sh smoke test
         run: |
@@ -231,10 +274,12 @@ jobs:
           ./setup.sh --ci --smoke-test
         env:
           REPO_ROOT: ${{ github.workspace }}
-          CTX_INSTALL_MODE: copy
           CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
           CLAUDE_MODEL: deepseek-v4-flash
+          # CI 冷环境（首次 claude 启动 + 代理握手）需要比本机更长的超时
+          CLAUDE_CONTEXT_TIMEOUT: 60
+          CLAUDE_DOCTOR_TIMEOUT: 30
 
       - name: Verify idempotency with second run
         run: |
@@ -244,20 +289,10 @@ jobs:
           while true; do
             echo "=== 第 ${attempt} 次幂等性检查 ==="
             set +e
-            output=$(./setup.sh --ci --force 2>&1)
+            output=$(./setup.sh --ci --force --smoke-test 2>&1)
             rc=$?
             set -e
             echo "$output"
-            if [[ "$rc" -ne 0 ]]; then
-              echo "=== 第三方 source 状态诊断 ==="
-              for repo in external/claude-plugins-official external/context-mode external/oh-my-claudecode external/superpowers; do
-                if [[ -d "$repo/.git" || -f "$repo/.git" ]]; then
-                  echo "--- $repo ---"
-                  git -C "$repo" status --short || true
-                fi
-              done
-            fi
-
             if printf '%s\n' "$output" | grep -q 'CLAUDE_HOME 未初始化，已后台启动 Claude Code' && [[ "$attempt" -lt 3 ]]; then
               echo "检测到 Claude 首次初始化，等待后重试..."
               sleep 5
@@ -270,13 +305,24 @@ jobs:
               exit "$rc"
             fi
 
-            pass_count=$(printf '%s\n' "$output" | grep -c '\[PASS\]' || true)
-            echo "检测到 $pass_count 个 [PASS] 标记"
-            if [[ "$pass_count" -ge 4 ]]; then
+            required_checks=(
+              "安装后冒烟测试通过: Claude doctor + skills/context + settings + plugins"
+              "settings.json 已补齐模板键并保留用户值"
+              "plugin 'claude-code-setup@claude-plugins-official' 已注册 (scope=user)"
+              "plugin 'context-mode@context-mode' 已注册 (scope=user)"
+            )
+            missing_checks=0
+            for check in "${required_checks[@]}"; do
+              if ! printf '%s\n' "$output" | grep -Fq -- "$check"; then
+                echo "FAIL: 第二次运行缺少验证证据: $check"
+                missing_checks=1
+              fi
+            done
+            if [[ "$missing_checks" -eq 0 ]]; then
               break
             fi
 
-            echo "FAIL: 第二次运行没有体现足够的幂等性"
+            echo "FAIL: 第二次运行未完成逐项安装后验证"
             exit 1
           done
         env:
@@ -285,3 +331,5 @@ jobs:
           CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_APIKEY }}
           CLAUDE_MODEL: deepseek-v4-flash
+          CLAUDE_CONTEXT_TIMEOUT: 60
+          CLAUDE_DOCTOR_TIMEOUT: 30

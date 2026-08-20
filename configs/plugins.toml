@@ -1,0 +1,101 @@
+# configs/plugins.toml — 第三方 plugin 清单
+#
+# 本文件声明第三方 plugin 的来源和安装方式，由 setup.sh 驱动：
+#   method = "claude-plugin"   → claude plugin marketplace add <repo> --scope user && claude plugin install <name>@<marketplace> -s user
+#   method = "npx"             → 手动安装，仅备注安装命令
+#
+# 对应 claude/settings.template.json 的 extraKnownMarketplaces + enabledPlugins。
+
+# ===== claude-plugin 自动安装 =====
+
+# anthropics/claude-plugins-official — 官方插件市场。
+# 注意：marketplace add 由各 plugin 条目在 install 前幂等执行，
+# 无需单独声明 marketplace 条目。要启用官方 plugin，为每个 plugin
+# 声明 [[plugins]] 条目（name = plugin 名，repo 指向市场仓库，
+# marketplace 指市场的注册名）。
+[[plugins]]
+name = "claude-code-setup"
+repo = "anthropics/claude-plugins-official"
+method = "claude-plugin"
+marketplace = "claude-plugins-official"
+note = "官方 plugin：Claude Code 环境自检与推荐"
+
+[[plugins]]
+name = "code-review"
+repo = "anthropics/claude-plugins-official"
+method = "claude-plugin"
+marketplace = "claude-plugins-official"
+note = "官方 plugin：代码审查"
+
+[[plugins]]
+name = "feature-dev"
+repo = "anthropics/claude-plugins-official"
+method = "claude-plugin"
+marketplace = "claude-plugins-official"
+note = "官方 plugin：功能开发流程"
+
+[[plugins]]
+name = "skill-creator"
+repo = "anthropics/claude-plugins-official"
+method = "claude-plugin"
+marketplace = "claude-plugins-official"
+note = "官方 plugin：创建/优化 skill"
+
+# oh-my-claudecode — OMC 插件（含 team 编排）
+[[plugins]]
+name = "oh-my-claudecode"
+repo = "Yeachan-Heo/oh-my-claudecode"
+method = "claude-plugin"
+marketplace = "omc"
+note = "OMC 插件，提供 team/autopilot 等编排命令"
+
+# context-mode — 上下文管理插件
+[[plugins]]
+name = "context-mode"
+repo = "mksglu/context-mode"
+method = "claude-plugin"
+marketplace = "context-mode"
+note = "上下文模式插件"
+
+# ponytail — 懒人开发风格插件
+[[plugins]]
+name = "ponytail"
+repo = "DietrichGebert/ponytail"
+method = "claude-plugin"
+marketplace = "ponytail"
+note = "Ponytail 开发风格插件"
+
+# superpowers — 超能力插件
+# 注意：obra/superpowers 仓库自带 marketplace 名是 superpowers-dev，
+# 若改用官方 superpowers marketplace（superpowers-marketplace）需同步调整。
+[[plugins]]
+name = "superpowers"
+repo = "obra/superpowers"
+method = "claude-plugin"
+marketplace = "superpowers-dev"
+note = "superpowers 插件（自带 marketplace 名 superpowers-dev）"
+
+# ===== npx/npm 手动安装（仅备注命令） =====
+# 若某个 plugin 没有 .claude-plugin/marketplace.json，无法用 claude plugin 装，
+# 用 method = "npx" 声明，并在 command 里写完整安装命令。
+# 示例：
+# [[plugins]]
+# name = "some-manual-plugin"
+# repo = "owner/some-repo"
+# method = "npx"
+# command = "npm i -g some-manual-plugin && some-plugin setup"
+# note = "手动安装：先装这个插件"
+
+[[plugins]]
+name = "CodeGraph"
+repo = "colbymchenry/codegraph"
+method = "npx"
+command = "npm i -g @colbymchenry/codegraph"
+note = "建立代码调用链"
+
+[[plugins]]
+name = "OpenSpec"
+repo = "Fission-AI/OpenSpec"
+method = "npx"
+command = "npm i -g @fission-ai/openspec@latest"
+note = "代码构思和实现"
