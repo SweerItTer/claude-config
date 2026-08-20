@@ -30,3 +30,10 @@ repo = "mattpocock/skills"
 skill = "grill-me"
 agent = "claude-code"
 scope = "global"
+
+[[sources]]
+name = "humanizer"
+repo = "blader/humanizer"
+skill = "humanizer"
+agent = "claude-code"
+scope = "global"
