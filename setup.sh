@@ -1887,6 +1887,13 @@ run_install_flow() {
         install_external_skills
     fi
 
+    # --skill 是单项入口：没有同时指定 plugin 时，安装完成即退出，
+    # 不继续执行全量 plugin 安装和最终验证流程。
+    if [[ ${#SELECTED_SKILLS[@]} -gt 0 && ${#SELECTED_PLUGINS[@]} -eq 0 ]]; then
+        info "指定 skill 安装完成，跳过后续 plugins/验证流程"
+        return 0
+    fi
+
     phase "Phase 4: 第三方 plugins（claude plugin）"
     if [[ "$SKIP_PLUGINS" == true ]]; then
         info "已跳过第三方 plugins 安装（--skip-plugins）"

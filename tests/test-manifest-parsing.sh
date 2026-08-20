@@ -39,15 +39,18 @@ assert_fail() {
 }
 
 # --- 真实 skills.toml ---
-# 声明 mattpocock/skills 仓库的两个 npx source（grilling / grill-me），
+# 声明 mattpocock/skills 仓库的 npx source（grilling / grill-me），以及 humanizer；
 # repo 指向仓库本体，skill 用 basename。空清单用例由下方临时清单单独验证。
 assert_ok "skills.toml 解析成功" python3 "$PARSER" skills --file "$REPO_ROOT/configs/skills.toml"
 skills_out="$(python3 "$PARSER" skills --file "$REPO_ROOT/configs/skills.toml")"
-[[ "$(wc -l <<< "$skills_out")" -eq 2 ]] || fail "skills.toml 应有 2 行，实际 $(wc -l <<< "$skills_out")"
+[[ "$(awk 'NF { count++ } END { print count + 0 }' <<< "$skills_out")" -ge 3 ]] \
+    || fail "skills.toml 应至少有 3 行，实际 $(awk 'NF { count++ } END { print count + 0 }' <<< "$skills_out")"
 [[ "$skills_out" == *$'grilling\tmattpocock/skills\tgrilling\tclaude-code\tglobal'* ]] \
     || fail "skills.toml 缺少 grilling 条目（repo 应为仓库本体、skill 为 basename）"
 [[ "$skills_out" == *$'grill-me\tmattpocock/skills\tgrill-me\tclaude-code\tglobal'* ]] \
     || fail "skills.toml 缺少 grill-me 条目（repo 应为仓库本体、skill 为 basename）"
+[[ "$skills_out" == *$'humanizer\tblader/humanizer\thumanizer\tclaude-code\tglobal'* ]] \
+    || fail "skills.toml 缺少 humanizer 条目"
 
 # --- 真实 plugins.toml ---
 # 验证结构不变量，不硬编码数量：claude-plugin 条目的 marketplace 正确，

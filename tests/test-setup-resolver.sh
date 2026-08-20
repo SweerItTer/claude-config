@@ -197,4 +197,24 @@ done
 grep -q 'npx .*skills.*update.*remote-source' "$EXEC_LOG" || fail "旧参数应调 npx skills update: $(<"$EXEC_LOG")"
 pass "旧参数整源更新仍工作"
 
+# ---- 11) --skill 单项安装完成后不继续 plugins/最终验证 ----
+FLOW_LOG="$fixture/install-flow.log"
+: > "$FLOW_LOG"
+phase() { printf 'phase %s\n' "$1" >> "$FLOW_LOG"; }
+ensure_claude_code() { echo ensure-claude >> "$FLOW_LOG"; }
+ensure_core_config() { echo ensure-core >> "$FLOW_LOG"; }
+ensure_settings_json() { echo ensure-settings >> "$FLOW_LOG"; }
+install_external_skills() { printf 'skills %s\n' "$*" >> "$FLOW_LOG"; }
+install_third_party_plugins() { echo plugins >> "$FLOW_LOG"; }
+verify_core_config() { echo verify-core >> "$FLOW_LOG"; }
+run_final_doctor() { echo doctor >> "$FLOW_LOG"; }
+SELECTED_SKILLS=(humanizer)
+SELECTED_PLUGINS=()
+SKIP_SKILLS=false
+SKIP_PLUGINS=false
+run_install_flow
+grep -q 'skills humanizer' "$FLOW_LOG" || fail "--skill 应安装指定 skill"
+! grep -q 'Phase 4\|plugins\|verify-core\|doctor' "$FLOW_LOG" || fail "--skill 不应继续 plugins/最终验证: $(<"$FLOW_LOG")"
+pass "--skill 单项安装完成后立即退出"
+
 echo "All setup resolver tests passed."
