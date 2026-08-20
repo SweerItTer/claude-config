@@ -1613,6 +1613,13 @@ PY
                 failed=1
                 continue
             fi
+            # disable-model-invocation=true 的 Skill 仍应安装成功，但 Claude
+            # 不会把它加入 /context 的可调用 Skills 表（例如 grill-me）。
+            if grep -Eq '^disable-model-invocation:[[:space:]]*true[[:space:]]*$' \
+                "$actual_path/SKILL.md"; then
+                pass "skill '$actual_name' 已安装（disable-model-invocation=true，不要求出现在 /context）"
+                continue
+            fi
             local context_skill_name="$actual_name"
             local context_plugin_skill_name=""
             if [[ "$source_kind" == "plugin" ]]; then
