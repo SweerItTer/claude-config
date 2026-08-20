@@ -71,6 +71,7 @@ mkdir -p "$fixture/bin"
 cat >"$fixture/bin/npx" <<'EOF'
 #!/usr/bin/env bash
 printf 'npx %s\n' "$*" >> "${EXEC_LOG:?}"
+[[ "${CONSUME_NPX_STDIN:-false}" == true ]] && cat >/dev/null
 [[ -n "${EXEC_EXIT:-}" ]] && exit "$EXEC_EXIT"
 exit 0
 EOF
@@ -197,7 +198,15 @@ done
 grep -q 'npx .*skills.*update.*remote-source' "$EXEC_LOG" || fail "旧参数应调 npx skills update: $(<"$EXEC_LOG")"
 pass "旧参数整源更新仍工作"
 
-# ---- 11) --skill 单项安装完成后不继续 plugins/最终验证 ----
+# ---- 11) npx 不应吞掉后续 skills.toml 行 ----
+: > "$EXEC_LOG"
+CONSUME_NPX_STDIN=true
+install_external_skills remote-source remote-same wildcard-src
+unset CONSUME_NPX_STDIN
+[[ "$(grep -c '^npx ' "$EXEC_LOG")" -eq 3 ]] || fail "外部 skill 安装不应因 npx stdin 跳过后续条目: $(<"$EXEC_LOG")"
+pass "外部 skill 安装逐项处理完整清单"
+
+# ---- 12) --skill 单项安装完成后不继续 plugins/最终验证 ----
 FLOW_LOG="$fixture/install-flow.log"
 : > "$FLOW_LOG"
 phase() { printf 'phase %s\n' "$1" >> "$FLOW_LOG"; }
