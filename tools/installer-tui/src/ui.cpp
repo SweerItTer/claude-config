@@ -256,7 +256,7 @@ std::vector<std::string> BuildInstallArgs(const Manifest& m, const Runner& r) {
 
 // UI 状态：跨组件树共享，存活于 RunUi 生命周期
 struct UiState {
-  int tab_selected = 0;     // 0=Install 1=Update 2=Uninstall 3=诊断
+  int tab_selected = 0;     // 0=Install 1=Update 2=Uninstall 3=诊断 4=Pi Skills
   int update_mode = 0;      // 0=全部 1=选中项
   int uninstall_mode = 0;   // 0=全部 1=core 2=选中项
   int diagnose_mode = 0;    // 0=verify 1=status 2=doctor
@@ -285,8 +285,8 @@ Component MakeLogView(Runner* runner) {
 Component MakeTabIndicator(UiState* state) {
   return Renderer([state] {
     Elements cells;
-    const char* names[] = {"1 Install", "2 Update", "3 Uninstall", "4 诊断"};
-    for (int i = 0; i < 4; ++i) {
+    const char* names[] = {"1 Install", "2 Update", "3 Uninstall", "4 诊断", "5 Pi Skills"};
+    for (int i = 0; i < 5; ++i) {
       cells.push_back(text(names[i]) | (i == state->tab_selected ? bold : dim));
       cells.push_back(text("   "));
     }
@@ -412,6 +412,36 @@ int RunUi(const std::filesystem::path& repo_root, const Manifest& manifest,
       Renderer([&] {
         return text(" 只读检查：核心配置状态 + 生命周期模块状态（与 CLI verify/status/doctor 相同）") |
                dim;
+      }),
+  });
+
+  // ---- Pi Skills 页：只安装 skills 到 ~/.pi/agent/skills/（pi 只支持 skills）----
+  // 复用外部 skills + 本地 skills 的勾选状态（与 Install 页同源，pi 不涉及 plugins）。
+  // 未勾选 = 全量；勾选 = 指定安装（外部 --skill / 本地 --update-local-skill）。
+  Components pi_local_cols, pi_skill_cols;
+  for (size_t i = 0; i < runner.local_skill_ids.size(); ++i) {
+    pi_local_cols.push_back(Checkbox("[local] " + runner.local_skill_ids[i],
+                                     &runner.local_selected[i].value));
+  }
+  for (size_t i = 0; i < manifest.skills.size(); ++i) {
+    pi_skill_cols.push_back(Checkbox(manifest.skills[i].name + "  " +
+                                         TruncateUtf8(manifest.skills[i].note, 36),
+                                     &runner.skills_selected[i].value));
+  }
+  auto pi_local_col = Container::Vertical(std::move(pi_local_cols));
+  auto pi_skill_col = Container::Vertical(std::move(pi_skill_cols));
+  Components pi_cols;
+  if (!runner.local_skill_ids.empty()) pi_cols.push_back(pi_local_col | flex);
+  if (!manifest.skills.empty()) pi_cols.push_back(pi_skill_col | flex);
+  if (pi_cols.empty()) {
+    // 空页：无 skills 可选时给占位，避免 Empty container 吞焦点
+    pi_cols.push_back(Renderer([] { return text("（无 skills 可安装）") | dim; }));
+  }
+  auto pi_page = Container::Vertical({
+      Container::Horizontal(std::move(pi_cols)) | flex,
+      Renderer([&] {
+        return text(" 只安装 skills → ~/.pi/agent/skills/（外部 npx -a pi + 仓库自有 symlink；"
+                    "不装 claude 配置/plugins）") | dim;
       }),
   });
 
@@ -547,6 +577,22 @@ int RunUi(const std::filesystem::path& repo_root, const Manifest& manifest,
         items = "all";  // 诊断是只读整体检查，无逐项选择
         break;
       }
+      case 4: {
+        action = "pi-install";
+        if (runner.SelectedSkillCount() == 0 && runner.SelectedLocalCount() == 0) {
+          items = "all";
+        } else {
+          for (size_t i = 0; i < runner.local_skill_ids.size(); ++i)
+            if (runner.local_selected[i].value)
+              items += (items.empty() ? "" : "\t") + std::string("skill:") +
+                       runner.local_skill_ids[i];
+          for (size_t i = 0; i < manifest.skills.size(); ++i)
+            if (runner.skills_selected[i].value)
+              items += (items.empty() ? "" : "\t") + std::string("skill:") +
+                       manifest.skills[i].name;
+        }
+        break;
+      }
     }
     PrintSelection(action, items);
 
@@ -662,6 +708,24 @@ int RunUi(const std::filesystem::path& repo_root, const Manifest& manifest,
         runner.Spawn(std::move(args), std::string("诊断: ") + diagnose_actions[state.diagnose_mode]);
         break;
       }
+      case 4: {
+        // Pi Skills：只装 skills 到 ~/.pi/agent/skills/（pi 只支持 skills）
+        std::vector<std::string> args = {"install", "--agents=pi", "--ci"};
+        if (runner.SelectedSkillCount() > 0 || runner.SelectedLocalCount() > 0) {
+          for (size_t i = 0; i < runner.local_skill_ids.size(); ++i)
+            if (runner.local_selected[i].value) {
+              args.push_back("--update-local-skill");
+              args.push_back(runner.local_skill_ids[i]);
+            }
+          for (size_t i = 0; i < manifest.skills.size(); ++i)
+            if (runner.skills_selected[i].value) {
+              args.push_back("--skill");
+              args.push_back(manifest.skills[i].name);
+            }
+        }
+        runner.Spawn(std::move(args), "安装 Pi skills");
+        break;
+      }
     }
   });
   auto modal_cancel = Button("取消", [&state] { state.show_modal = false; });
@@ -684,11 +748,12 @@ int RunUi(const std::filesystem::path& repo_root, const Manifest& manifest,
       });
 
   // ---- 根组件 ----
-  auto tabs = Container::Tab({install_page_full, update_page, uninstall_page, diagnose_page},
-                             &state.tab_selected);
+  auto tabs = Container::Tab(
+      {install_page_full, update_page, uninstall_page, diagnose_page, pi_page},
+      &state.tab_selected);
 
   auto status = std::make_shared<std::string>(
-      "[1/2/3/4] 切页  [a] 全选/取消  [e] 执行  [q] 退出");
+      "[1/2/3/4/5] 切页  [a] 全选/取消  [e] 执行  [q] 退出");
   bool user_quit = false;
 
   // Renderer(child, render) 保留 tabs 的焦点树；不能用无 child 的 Renderer，
@@ -734,6 +799,11 @@ int RunUi(const std::filesystem::path& repo_root, const Manifest& manifest,
           diagnose_page->TakeFocus();
           return true;
         }
+        if (e == Event::Character('5')) {
+          state.tab_selected = 4;
+          pi_page->TakeFocus();
+          return true;
+        }
         if (e == Event::Character('a') || e == Event::Character('A')) {
           if (state.tab_selected == 0) {
             const bool any_unchecked =
@@ -746,6 +816,19 @@ int RunUi(const std::filesystem::path& repo_root, const Manifest& manifest,
             std::fill(runner.skills_selected.begin(), runner.skills_selected.end(),
                       BoolSlot{any_unchecked});
             std::fill(runner.plugins_selected.begin(), runner.plugins_selected.end(),
+                      BoolSlot{any_unchecked});
+          } else if (state.tab_selected == 4) {
+            // Pi 页：只全选外部 + 本地 skills，不涉及 plugins
+            const bool any_unchecked =
+                std::any_of(runner.skills_selected.begin(),
+                            runner.skills_selected.end(),
+                            [](const BoolSlot& s) { return !s.value; }) ||
+                std::any_of(runner.local_selected.begin(),
+                            runner.local_selected.end(),
+                            [](const BoolSlot& s) { return !s.value; });
+            std::fill(runner.skills_selected.begin(), runner.skills_selected.end(),
+                      BoolSlot{any_unchecked});
+            std::fill(runner.local_selected.begin(), runner.local_selected.end(),
                       BoolSlot{any_unchecked});
           } else if (state.tab_selected == 2) {
             const bool any_unchecked =
@@ -785,6 +868,12 @@ int RunUi(const std::filesystem::path& repo_root, const Manifest& manifest,
               state.confirm_text =
                   std::string("运行 ") + diagnose_actions[state.diagnose_mode] +
                   "（只读检查），确认？";
+              break;
+            case 4:
+              state.confirm_text =
+                  runner.SelectedSkillCount() == 0 && runner.SelectedLocalCount() == 0
+                      ? "未勾选任何项 — 将全量安装所有 skills 到 ~/.pi/agent/skills/，确认？"
+                      : "安装选中的 skills 到 ~/.pi/agent/skills/（pi 只支持 skills，不装 claude 配置/plugins），确认？";
               break;
           }
           return true;

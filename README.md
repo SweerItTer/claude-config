@@ -29,6 +29,9 @@ cd ~/claude-config
 # 只读列出清单声明的外部 skills/plugins 与仓库本地 skills
 ./setup.sh list
 
+# 只安装 pi agents skills 到 ~/.pi/agent/skills/（pi 只支持 skills，跳过 claude 其余流程）
+./setup.sh --agents=pi
+
 # 交互式路径（可选）：构建 FTXUI TUI 后勾选安装，见「交互式 TUI 安装器」
 ./setup.sh --tui
 ```
@@ -182,9 +185,32 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ./setup.sh --ci           # CI 模式，跳过手动提示
 ./setup.sh --no-claude    # 跳过 Claude Code CLI 安装
 ./setup.sh --no-verify    # 跳过验证
+./setup.sh --agents=pi    # 只安装 pi agents skills 到 ~/.pi/agent/skills/（见「Pi agents skills」）
 ./setup.sh --tui          # 启动交互式 TUI 安装器（见下文）
 ./setup.sh -h             # 查看帮助
 ```
+
+### Pi agents skills
+
+`--agents=pi` 针对 **pi**（`~/.pi/agent/skills/`）安装 skills。pi 只支持 skills，因此该模式**只装 skills，其余全部跳过**：不装 Claude Code / 核心配置 / plugins，也不跑 claude 验证。
+
+安装来源两类，与 claude 模式一致：
+
+- **外部 skills**：`configs/skills.toml` 声明的 sources，经 `npx skills add -a pi -g` 装到 `~/.pi/agent/skills/`
+- **仓库自有 skills**：`skills/` 目录，symlink 到 `~/.pi/agent/skills/<name>`
+
+```bash
+# 全量：外部全部 + 仓库自有全部
+./setup.sh --agents=pi
+
+# 指定安装：只装外部 grilling（其余类别不装）
+./setup.sh --agents=pi --skill grilling
+
+# 指定安装：只装仓库自有 tmux-session-manager（其余类别不装）
+./setup.sh --agents=pi --update-local-skill tmux-session-manager
+```
+
+> 指定了任一 `--skill`/`--update-local-skill` 即进入「指定安装」模式：只装被指定的，未指定类别不装；都不指定 = 全量。
 
 ## 故障恢复
 
@@ -248,7 +274,7 @@ build/installer-tui/installer-tui --repo-root ~/claude-config
 
 TUI 与 CLI 共享同一套资源模型（`script/resource-plan.py`）：资源按 **identity**（`skill:<真实名>` / `plugin:<名>@<marketplace>`）统一管理，不区分「本地 skill / 外部 skill / plugin」入口。本地候选来自仓库 `skills/`，远程候选来自 `configs/` 清单；**只有当同一 identity 同时存在 local 与 remote 候选（冲突）时**才需要用户选择来源，普通唯一资源自动处理，绝不静默默认来源。
 
-### 四个页面
+### 五个页面
 
 | 页 | 功能 |
 |----|------|
@@ -256,6 +282,7 @@ TUI 与 CLI 共享同一套资源模型（`script/resource-plan.py`）：资源�
 | **2 Update** | 单选框：`全部外部 skills + plugins`（对应 `--update-all`）/ `选中的项目`（复用 Install 页勾选，本地 skill 走 symlink 同步，冲突走统一 resolver） |
 | **3 Uninstall** | 单选框：`完全卸载`（对应 `--uninstall all`）/ `仅 core` / `选中的项目`（本地 skill 卸载只删受控软链接，保留仓库源；冲突资源只能勾选一个来源） |
 | **4 诊断** | 单选框：`verify` / `status` / `doctor`（只读检查，对应 CLI 的 `verify`/`status`/`doctor`，执行 `setup.sh <action>`） |
+| **5 Pi Skills** | 只安装 pi skills 到 `~/.pi/agent/skills/`（pi 只支持 skills）。复用外部 + 本地 skills 勾选；全不勾选 = 全量，勾选 = 指定安装（对应 CLI `--agents=pi [--skill ...] [--update-local-skill ...]`），不涉及 plugins |
 
 ### 冲突处理
 
