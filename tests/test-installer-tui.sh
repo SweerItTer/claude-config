@@ -663,6 +663,19 @@ run_tui_case install-single-plugin 0 "install --ci --skip-skills --plugin claude
     "install	plugin:claude-code-setup" \
     $'\x1b[C' ' ' 'e' $'\r'
 
+# ---- 15b) Pi Skills 页：只装 skills 到 ~/.pi/agent/skills/ ----
+# 切到 Pi 页 (5) → 空格勾选第一个外部 skill → e → 回车。
+# 期望 setup.sh 收到 install --agents=pi --ci --skill omc-a（不传 plugin 参数），
+# stdout 机器记录 pi-install<TAB>skill:omc-a。
+run_tui_case pi-install-skill 0 "install --agents=pi --ci --skill omc-a" \
+    "pi-install	skill:omc-a" \
+    '5' ' ' 'e' $'\r'
+
+# ---- 15c) Pi Skills 页：未勾选 = 全量（只传 --agents=pi，不传 --skill/plugin）----
+run_tui_case pi-install-all 0 "install --agents=pi --ci" \
+    "pi-install	all" \
+    '5' 'e' $'\r'
+
 # ---- 16) 卸载单个外部 skill：选「选中的项目」勾选一项 ----
 # Uninstall 页 ↓↓ 空格选「选中的项目」→ 下箭头进 checks → 空格勾选第一个外部 skill → e → 回车。
 # 期望 setup.sh 收到 --ci --uninstall-resource skill:omc-a，
