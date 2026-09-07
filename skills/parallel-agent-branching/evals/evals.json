@@ -1,0 +1,29 @@
+{
+  "skill_name": "parallel-agent-branching",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We just finished a code review of MR56 and have 15 confirmed bugs across the peripheral subsystem, priorities P0 to P3. I want several agents to fix them in parallel, each bug as its own branch based on a develop branch cut from origin/main, merged back into develop one at a time as each finishes, and a reviewer to check the develop branch before you tell me it's done. Set up the branches and dispatch the work.",
+      "expected_output": "Creates develop/<topic> from latest origin/main, one worktree plus fix/<label> branch per bug (or a small P0 bundle grouped by atomic scope), assignments containing Target/Change/Acceptance/Constraints, explicit file-ownership boundaries, main session reserved for merges and reviewer pass, no orchestrator edits piled into the main workspace.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Agent 3 finished the lock-ctl fix and agent 5 finished the rtc doxygen fix while agent 1 is still mid-way through the key-input rename. Merge what's ready and make sure the tree still builds. Also agent 1 says it needs a helper function that agent 3's branch also touches.",
+      "expected_output": "Merges only the completed branches with --no-ff into develop, smoke-builds after each merge before the next, does not block on or touch the in-flight branch, and resolves the shared-helper conflict by serializing ownership at the orchestrator level (or re-scoping the task split) rather than letting agents pick sides.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "All the fix branches are merged into develop/periph-followups now. Before I push and open the MR, run our local CI in docker to make sure it passes, and do the review pass you promised.",
+      "expected_output": "Runs the local CI image gates (build.sh per product, cppcheck_changed.sh with explicit GIT_DIR/GIT_WORK_TREE because the worktree gitdir points back to the main repo, merge-base ancestry check), dispatches a read-only reviewer over git diff origin/main..develop/<topic>, lands each finding as its own fix/R-* branch merged back with --no-ff, and only reports success to the user after re-verification.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "I have two sequential tasks: first add a new peripheral event type to the enum, then wire a subscriber to consume it. They depend on each other. Plus one unrelated logging cleanup. How should I structure branches for parallel agents?",
+      "expected_output": "Explains the serial pair shares ONE branch with two commit nodes (branch = atomic task, prerequisites = multiple nodes) since parallelizing dependent work would break the merge model, while the unrelated logging cleanup gets its own independent branch and agent; develop integration order is cleanup and then the paired task.",
+      "files": []
+    }
+  ]
+}
