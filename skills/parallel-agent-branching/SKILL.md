@@ -1,4 +1,7 @@
 ---
+# ///TODO: fix compatibility 缩进续行不是 block scalar（普通标量跨行非法）：resource-plan.py 报
+# "缩进续行缺少 block scalar" 并退出 1，连带 ./setup.sh --tui 与 tests/test-installer-tui.sh 全线失败；
+# 改为 block scalar（>-）或并成一行后删除本标记。
 name: parallel-agent-branching
 description: >-
   Orchestrates multi-agent parallel development as a git pipeline: one
