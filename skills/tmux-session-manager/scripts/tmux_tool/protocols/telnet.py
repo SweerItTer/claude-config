@@ -415,7 +415,7 @@ class TelnetHelper:
         token = uuid.uuid4().hex
         start_marker = f"__TMUX_TOOL_TELNET_PROOF_START_{token}__"
         done_prefix = f"__TMUX_TOOL_TELNET_PROOF_DONE_{token}__="
-        done_re = re.compile(r"(?m)^" + re.escape(done_prefix) + r"(-?\d+)\r?$")
+        done_re = re.compile(r"(?m)^" + re.escape(done_prefix) + r"(-?\d+)[ \t]*\r?$")
         wrapped = isolated_job_command(proof_command, start_marker=start_marker, done_prefix=done_prefix)
         self.tmux.paste_text(pane_id, wrapped)
         self.tmux.send_keys(pane_id, "Enter")

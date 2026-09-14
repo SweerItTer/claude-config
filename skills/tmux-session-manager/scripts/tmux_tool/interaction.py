@@ -81,7 +81,7 @@ _PROTOCOL_AND_JOB_SUFFIXES = ("kind", "peer", "protocol_state", "remote", *_JOB_
 
 
 def _full_line_rc_pattern(prefix: str) -> re.Pattern[str]:
-    return re.compile(r"(?m)^" + re.escape(prefix) + r"(-?\d+)\r?$")
+    return re.compile(r"(?m)^" + re.escape(prefix) + r"(-?\d+)[ \t]*\r?$")
 
 
 def _full_line_marker_pattern(marker: str) -> re.Pattern[str]:
