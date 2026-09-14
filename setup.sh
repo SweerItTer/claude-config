@@ -814,11 +814,20 @@ update_repository() {
 SKILLS_CONFIG="$REPO_ROOT/configs/skills.toml"
 PLUGINS_CONFIG="$REPO_ROOT/configs/plugins.toml"
 
-# 目标 agent：默认 claude-code；--agents=pi 切换为 pi（只装 skills 到 ~/.pi/agent/skills，
-# 因为 pi 只支持 skills，无 plugins/core 概念）。install_external_skills / update_local_skill
+# 目标 agent：默认 claude-code（完整 claude 流程）。--agents=<非 claude> 时进入"仅 skills"模式：
+# 外部（npx skills -a universal -g）与仓库自有（symlink）统一落到 ~/.agents/skills —— 该目录是
+# npx skills 的 universal 全局目录，多个 agent（codex/gemini/cursor/…）共享同一份；不使用
+# -a '*'（会按各 agent 目录扩散副本），也不为某个 agent 单独适配。claude code / 核心配置 /
+# plugins / 验证在非 claude 模式下全部跳过。install_external_skills / update_local_skill
 # 据此选择 npx skills 的 -a 参数与 skills 目标目录。
 AGENTS_TARGET="claude-code"
-PI_SKILLS_HOME="${PI_SKILLS_HOME:-$HOME/.pi/agent/skills}"
+AGENTS_SKILLS_HOME="${AGENTS_SKILLS_HOME:-$HOME/.agents/skills}"
+# npx skills 全局 lock（记录每个 skill 的安装来源与 skillFolderHash），最新版比对的数据源。
+if [[ -n "${XDG_STATE_HOME:-}" ]]; then
+    SKILLS_LOCK_FILE="${SKILLS_LOCK_FILE:-$XDG_STATE_HOME/skills/.skill-lock.json}"
+else
+    SKILLS_LOCK_FILE="${SKILLS_LOCK_FILE:-$HOME/.agents/.skill-lock.json}"
+fi
 
 # 清单解析统一入口：Python 解析器输出 TSV（可安全处理值中的 "="）
 #   parse-manifests.py skills  --file $SKILLS_CONFIG   → name\trepo\tskill\tagent\tscope\tnote
@@ -828,6 +837,9 @@ MANIFEST_PARSER="$REPO_ROOT/script/parse-manifests.py"
 # 统一资源计划层：discover → normalize → conflict → select → validate → execute。
 # 本地 skill 只发现 repo_root/skills/<name>/SKILL.md；remote 从清单 + wildcard inventory 展开。
 RESOURCE_PLANNER="$REPO_ROOT/script/resource-plan.py"
+
+# skill 最新版比对器：读 manifest TSV → 输出逐项安装决定（up-to-date/outdated/missing/unknown）。
+SKILL_FRESHNESS_CHECK="$REPO_ROOT/script/check-skill-freshness.py"
 
 # 交互读取单行输入；无 TTY 时返回失败（由调用方按非交互规则处理）。
 resource_prompt() {
@@ -1074,8 +1086,34 @@ filter_matches() {
     return 1
 }
 
+# --agents 是否 claude 目标（缺省、claude、claude-code）。其余取值 = 只装 skills 模式。
+agents_is_claude() {
+    [[ "$AGENTS_TARGET" == "claude" || "$AGENTS_TARGET" == "claude-code" ]]
+}
+
+# npx skills 的 -a 取值：claude 目标用自身 key；非 claude 统一 universal
+# （universal 的全局目录就是 ~/.agents/skills，各 agent 共享同一份，不扩散副本）。
+skills_agent_key() {
+    if agents_is_claude; then
+        printf '%s\n' "$AGENTS_TARGET"
+    else
+        printf '%s\n' "universal"
+    fi
+}
+
+# skills 安装目录：claude 目标 = ~/.claude/skills；非 claude = ~/.agents/skills。
+skills_target_dir() {
+    if agents_is_claude; then
+        printf '%s\n' "$CLAUDE_HOME/skills"
+    else
+        printf '%s\n' "$AGENTS_SKILLS_HOME"
+    fi
+}
+
 # 安装外部 skills（读 skills.toml → npx skills add）
 # 参数：0 个或多个 name 过滤。无参 = 装全部；有参 = 只装命中的 name。
+# 已安装且与远端最新版一致（lock 的 skillFolderHash == 远端 tree oid）的项跳过安装；
+# 不存在的、有更新的、比对不了的（离线/限流/非 GitHub 源）照常安装，不因查不到而误跳过。
 install_external_skills() {
     local -a filters=("$@")
     [[ -f "$SKILLS_CONFIG" ]] || { info "无 skills.toml，跳过外部 skill"; return 0; }
@@ -1085,27 +1123,53 @@ install_external_skills() {
         err "解析 skills.toml 失败"
         return 1
     }
-    local line name repo skill agent scope
-    while IFS=$'\t' read -r name repo skill agent scope note; do
+
+    local target_dir agent_key
+    target_dir="$(skills_target_dir)"
+    agent_key="$(skills_agent_key)"
+
+    local -a plan_args=(--target-dir "$target_dir" --lock-file "$SKILLS_LOCK_FILE")
+    if [[ "$FORCE" == true ]]; then
+        plan_args+=(--force)
+    fi
+    plan_args+=("${filters[@]}")
+
+    local plan
+    plan="$(printf '%s\n' "$parsed" | python3 "$SKILL_FRESHNESS_CHECK" "${plan_args[@]}")" || {
+        err "生成 skill 安装计划失败"
+        return 1
+    }
+
+    local name repo skill manifest_agent scope status detail
+    local rc=0
+    while IFS=$'\t' read -r name repo skill manifest_agent scope status detail; do
         [[ -n "$name" ]] || continue
-        if [[ ${#filters[@]} -gt 0 ]] && ! filter_matches "$name" "${filters[@]}"; then
-            continue
+
+        case "$status" in
+            up-to-date)
+                pass "skill '$name' 已安装且为最新版，跳过 (hash $detail)"
+                continue ;;
+            outdated)
+                info "skill '$name' 有新版本，重新安装 ($detail)" ;;
+            missing)
+                info "skill '$name' 未安装，开始安装 ($detail)" ;;
+            *)
+                warn "skill '$name' 无法比对远端版本（$detail），按需安装" ;;
+        esac
+
+        # 兜底：外部 skill 只装到当前目标 agent 目录。npx skills 不带 -a 时会按已检测到的
+        # agent 扩散安装，-a '*' 更是装到所有 agent 目录，因此清单里的 agent 字段只作提示，
+        # 实际透传的恒为 $agent_key。
+        if agents_is_claude && [[ -n "$manifest_agent" && "$manifest_agent" != "$agent_key" ]]; then
+            warn "source '$name' 的 agent='$manifest_agent' 非 $agent_key，已按 $agent_key 安装"
         fi
 
         local scope_flag=""
         [[ "$scope" == "global" ]] && scope_flag="-g"
 
-        # 兜底：外部 skill 只装到当前目标 agent（$AGENTS_TARGET）。npx skills 不带 -a 时会检测环境
-        # 装到 ~/.agents/skills/（不加载），-a '*' 会扩散到 codex/gemini 等所有
-        # agent。因此 agent 字段被改动或漏写时强制回退 $AGENTS_TARGET，绝不装他处。
-        if [[ "${agent:-$AGENTS_TARGET}" != "$AGENTS_TARGET" ]]; then
-            warn "source '$name' 的 agent='${agent:-}' 非 $AGENTS_TARGET，已强制改为 $AGENTS_TARGET"
-            agent="$AGENTS_TARGET"
-        fi
-
-        info "安装外部 skill: $name ($repo, skill=$skill)"
+        info "安装外部 skill: $name ($repo, skill=$skill, agent=$agent_key)"
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] npx -y skills@latest add -y $repo -s $skill -a $agent $scope_flag"
+            info "[DRY-RUN] npx -y skills@latest add -y $repo -s $skill -a $agent_key $scope_flag"
             continue
         fi
 
@@ -1113,12 +1177,14 @@ install_external_skills() {
         #（跳过 "Proceed with installation?" 交互确认）。缺 add -y 时，非 agent 环境
         #（无 AI_AGENT/CLAUDE_* env 且无 TTY，如 cron/CI/普通 shell）skills CLI 会卡在确认提示
         # 不真正安装。update/remove 已带 -y，仅 add 有此问题。
-        if ! npx -y skills@latest add -y "$repo" -s "$skill" -a "$agent" $scope_flag </dev/null; then
+        if ! npx -y skills@latest add -y "$repo" -s "$skill" -a "$agent_key" $scope_flag </dev/null; then
             err "安装 skill '$name' 失败: $repo"
-            return 1
+            rc=1
+            continue
         fi
         log "skill '$name' 已安装"
-    done <<< "$parsed"
+    done <<< "$plan"
+    return "$rc"
 }
 
 # 安装第三方 plugins（读 plugins.toml → claude plugin install）
@@ -1239,16 +1305,13 @@ update_all_plugins() {
     return "$rc"
 }
 
-# 更新单个 skill（npx skills update <name>）
+# 安装/更新单个仓库自有 skill（symlink 到当前目标的 skills 目录）。
+# 仓库自有 skill 是源码 symlink，内容即改即生效，不存在版本比对；已是同一 symlink 时幂等跳过。
 update_local_skill() {
     local name="${1:?缺少本地 skill 名}"
     local src="$REPO_ROOT/skills/$name"
     local dst
-    if [[ "$AGENTS_TARGET" == "pi" ]]; then
-        dst="$PI_SKILLS_HOME/$name"
-    else
-        dst="$CLAUDE_HOME/skills/$name"
-    fi
+    dst="$(skills_target_dir)/$name"
     [[ -f "$src/SKILL.md" ]] || { err "仓库自有 skill 不存在或缺少 SKILL.md: $name"; return 1; }
     info "更新仓库自有 skill: $name (→ $dst)"
     ensure_symlink "$src" "$dst" "repo skill '$name'"
@@ -1888,9 +1951,10 @@ run_priority_module_actions() {
     install_third_party_plugins
 }
 
-run_pi_flow() {
-    # pi 只支持 skills：外部（skills.toml，npx skills -a pi）+ 仓库自有（skills/ symlink）。
-    # 都装/指定安装语义：无任何 --skill/--update-local-skill = 全量（外部全部 + 自有全部）；
+run_agents_flow() {
+    # 非 claude 目标只支持 skills：外部（skills.toml，npx skills -a universal）+ 仓库自有
+    # （skills/ symlink），统一落到 ~/.agents/skills。
+    # 全量/指定安装语义：无任何 --skill/--update-local-skill = 全量（外部全部 + 自有全部）；
     # 指定了任一 = 只装被指定的（外部按 --skill，自有按 --update-local-skill），未指定类别不装。
     # 非 skills 流程（claude code / core config / plugins / verify）一律不执行。
     local rc=0
@@ -1903,7 +1967,7 @@ run_pi_flow() {
         [[ "$r" == skill:* ]] && specified=true
     done
 
-    phase "Phase 1: Pi skills（外部，npx skills → $PI_SKILLS_HOME/）"
+    phase "Phase 1: Agents skills（外部，npx skills → $AGENTS_SKILLS_HOME/）"
     if [[ "$SKIP_SKILLS" == true ]]; then
         info "已跳过外部 skills 安装（--skip-skills）"
     elif [[ ${#SELECTED_SKILLS[@]} -gt 0 ]]; then
@@ -1914,11 +1978,11 @@ run_pi_flow() {
         install_external_skills || rc=1
     fi
 
-    phase "Phase 2: Pi skills（仓库自有，symlink → $PI_SKILLS_HOME/）"
+    phase "Phase 2: Agents skills（仓库自有，symlink → $AGENTS_SKILLS_HOME/）"
     local -a local_names=()
     if [[ ${#UPDATE_RESOURCES[@]} -gt 0 ]]; then
         # 指定安装：--update-local-skill 经参数解析已转为 skill:NAME；
-        # pi 模式下 UPDATE_RESOURCES 中的 skill: 一律视为仓库自有（外部指定走 --skill）。
+        # 非 claude 模式下 UPDATE_RESOURCES 中的 skill: 一律视为仓库自有（外部指定走 --skill）。
         for r in "${UPDATE_RESOURCES[@]}"; do
             [[ "$r" == skill:* ]] && local_names+=("${r#skill:}")
         done
@@ -1936,9 +2000,9 @@ run_pi_flow() {
     done
 
     if [[ "$rc" == 0 ]]; then
-        log "Pi skills 已就绪: $PI_SKILLS_HOME/"
+        log "Agents skills 已就绪: $AGENTS_SKILLS_HOME/"
     else
-        err "部分 Pi skill 安装失败，请检查上方日志"
+        err "部分 Agents skill 安装失败，请检查上方日志"
     fi
     return "$rc"
 }
@@ -2407,13 +2471,14 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         --agents)
             AGENTS_TARGET="${2:-}"
-            [[ -n "$AGENTS_TARGET" ]] || { err "--agents 需要参数 (当前仅支持 pi)"; exit 1; }
-            [[ "$AGENTS_TARGET" == "pi" ]] || { err "--agents 当前仅支持 pi，收到: $AGENTS_TARGET"; exit 1; }
+            [[ -n "$AGENTS_TARGET" ]] || { err "--agents 需要参数 (claude-code|<任意 agent 名>)"; exit 1; }
+            # claude 是 claude-code 的别名：npx skills 的 agent key 只有 claude-code
+            [[ "$AGENTS_TARGET" == "claude" ]] && AGENTS_TARGET="claude-code"
             shift 2 ;;
         --agents=*)
             AGENTS_TARGET="${1#*=}"
-            [[ -n "$AGENTS_TARGET" ]] || { err "--agents 需要参数 (当前仅支持 pi)"; exit 1; }
-            [[ "$AGENTS_TARGET" == "pi" ]] || { err "--agents 当前仅支持 pi，收到: $AGENTS_TARGET"; exit 1; }
+            [[ -n "$AGENTS_TARGET" ]] || { err "--agents 需要参数 (claude-code|<任意 agent 名>)"; exit 1; }
+            [[ "$AGENTS_TARGET" == "claude" ]] && AGENTS_TARGET="claude-code"
             shift ;;
         --uninstall)
             _uninstall_target="${2:-}"
@@ -2538,8 +2603,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --plugin <name> 只安装指定第三方 plugin（可重复，读 configs/plugins.toml）"
             echo "  --skip-skills   跳过外部 skills 安装"
             echo "  --skip-plugins  跳过第三方 plugins 安装"
-            echo "  --agents=pi     只安装 pi agents skills 到 ~/.pi/agent/skills/（pi 只支持 skills，"
-            echo "                  跳过 claude code/核心配置/plugins/验证；配合 --skill/--update-local-skill 指定安装）"
+            echo "  --agents=NAME   NAME=claude-code（claude 为别名）走完整 claude 流程（默认）；其余取值"
+            echo "                  = 只安装 skills 到 ~/.agents/skills/（跳过 claude code/核心配置/"
+            echo "                  plugins/验证，配合 --skill/--update-local-skill 指定安装）"
             echo "  --uninstall T   卸载单个/多个目标 (core|all|清单中的 skill/plugin 名，可重复出现，列表并发卸载)"
             echo "  --uninstall-skill N  卸载指定 skill（typed，规避同名 plugin）"
             echo "  --uninstall-plugin N 卸载指定 plugin（typed，规避同名 skill）"
@@ -2582,32 +2648,32 @@ main() {
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
     echo ""
 
-    # --agents=pi：pi 只支持 skills，拦截所有非安装参数，只跑 skills 安装流程后退出。
+    # 非 claude 目标：只支持 skills，拦截所有非安装参数，只跑 skills 安装流程后退出。
     # （claude code / core config / plugins / verify 一律不执行。）
     # 注：UPDATE_RESOURCES 允许——--update-local-skill 经参数解析转为 skill:NAME，
-    # 是 pi 模式下"指定安装仓库自有 skill"的入口，run_pi_flow 会按本地 skill 处理。
-    if [[ "$AGENTS_TARGET" == "pi" ]]; then
+    # 是该模式下"指定安装仓库自有 skill"的入口，run_agents_flow 会按本地 skill 处理。
+    if ! agents_is_claude; then
         if [[ ${#UNINSTALL_LIST[@]} -gt 0 || ${#UNINSTALL_TYPED_LIST[@]} -gt 0 || \
               ${#UNINSTALL_RESOURCES[@]} -gt 0 || "$UPDATE_ALL" == true || \
               ${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0 ]]; then
-            err "--agents=pi 仅支持安装，不支持 update/uninstall 参数"
+            err "--agents=$AGENTS_TARGET 仅支持安装，不支持 update/uninstall 参数"
             return 1
         fi
         [[ "$ACTION" == "install" || "$ACTION" == "update" || "$ACTION" == "reinstall" ]] || {
-            err "--agents=pi 仅支持 install/update/reinstall，收到 action: $ACTION"
+            err "--agents=$AGENTS_TARGET 仅支持 install/update/reinstall，收到 action: $ACTION"
             return 1
         }
 
         phase "Phase 0: 环境检测"
         ensure_system_dependencies || exit 1
-        run_pi_flow
+        run_agents_flow
         echo ""
         echo -e "${GREEN}============================================${NC}"
-        echo -e "${GREEN}  Pi agents skills 安装完成!${NC}"
+        echo -e "${GREEN}  Agents skills 安装完成! (--agents=$AGENTS_TARGET)${NC}"
         echo -e "${GREEN}============================================${NC}"
         echo ""
-        info "Pi 只支持 skills，未安装任何 claude 配置/plugins"
-        echo "验证: ls $PI_SKILLS_HOME/"
+        info "非 claude 模式只安装 skills，未安装任何 claude 配置/plugins"
+        echo "验证: ls $AGENTS_SKILLS_HOME/"
         return 0
     fi
 

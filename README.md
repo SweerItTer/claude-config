@@ -29,8 +29,8 @@ cd ~/claude-config
 # 只读列出清单声明的外部 skills/plugins 与仓库本地 skills
 ./setup.sh list
 
-# 只安装 pi agents skills 到 ~/.pi/agent/skills/（pi 只支持 skills，跳过 claude 其余流程）
-./setup.sh --agents=pi
+# 只安装 skills 到 ~/.agents/skills/（非 claude 目标：跳过 claude 其余流程）
+./setup.sh --agents=codex
 
 # 交互式路径（可选）：构建 FTXUI TUI 后勾选安装，见「交互式 TUI 安装器」
 ./setup.sh --tui
@@ -185,32 +185,46 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ./setup.sh --ci           # CI 模式，跳过手动提示
 ./setup.sh --no-claude    # 跳过 Claude Code CLI 安装
 ./setup.sh --no-verify    # 跳过验证
-./setup.sh --agents=pi    # 只安装 pi agents skills 到 ~/.pi/agent/skills/（见「Pi agents skills」）
+./setup.sh --agents=codex  # 只安装 skills 到 ~/.agents/skills/（见「非 claude 目标的 skills 安装」）
 ./setup.sh --tui          # 启动交互式 TUI 安装器（见下文）
 ./setup.sh -h             # 查看帮助
 ```
 
-### Pi agents skills
+### 非 claude 目标的 skills 安装
 
-`--agents=pi` 针对 **pi**（`~/.pi/agent/skills/`）安装 skills。pi 只支持 skills，因此该模式**只装 skills，其余全部跳过**：不装 Claude Code / 核心配置 / plugins，也不跑 claude 验证。
+`--agents=NAME` 的 `NAME` 为 `claude`/`claude-code`（缺省）时走完整 claude 流程；**其余任意取值**进入只装 skills 模式：skills 统一装到 `~/.agents/skills/`，**其余全部跳过**（不装 Claude Code / 核心配置 / plugins，也不跑 claude 验证）。
+
+`~/.agents/skills/` 是 `npx skills` 的 universal 全局目录，codex/gemini/cursor/github-copilot 等多个 agent 共享同一份，因此不需要为某个 agent 单独适配，也不会像 `-a '*'` 那样把 skill 扩散成各 agent 目录下的副本。
 
 安装来源两类，与 claude 模式一致：
 
-- **外部 skills**：`configs/skills.toml` 声明的 sources，经 `npx skills add -a pi -g` 装到 `~/.pi/agent/skills/`
-- **仓库自有 skills**：`skills/` 目录，symlink 到 `~/.pi/agent/skills/<name>`
+- **外部 skills**：`configs/skills.toml` 声明的 sources，经 `npx skills add -a universal -g` 装到 `~/.agents/skills/`
+- **仓库自有 skills**：`skills/` 目录，symlink 到 `~/.agents/skills/<name>`
 
 ```bash
 # 全量：外部全部 + 仓库自有全部
-./setup.sh --agents=pi
+./setup.sh --agents=codex
 
 # 指定安装：只装外部 grilling（其余类别不装）
-./setup.sh --agents=pi --skill grilling
+./setup.sh --agents=codex --skill grilling
 
 # 指定安装：只装仓库自有 tmux-session-manager（其余类别不装）
-./setup.sh --agents=pi --update-local-skill tmux-session-manager
+./setup.sh --agents=codex --update-local-skill tmux-session-manager
 ```
 
 > 指定了任一 `--skill`/`--update-local-skill` 即进入「指定安装」模式：只装被指定的，未指定类别不装；都不指定 = 全量。
+
+### skills 最新版比对（跳过已是最新的）
+
+外部 skills 安装前先比对已安装版本与远端最新版，**已存在且最新则跳过，不重复安装**：
+
+- 数据源是 `npx skills` 的全局 lock（`$XDG_STATE_HOME/skills/.skill-lock.json`，缺省 `~/.agents/.skill-lock.json`）里记录的 `skillFolderHash`，与远端仓库 tree 中该 skill 目录的 oid 比对（与 `npx skills update` 同一口径）
+- `lock` 无记录、来源不符、或目标目录缺 `SKILL.md` → 视为**未安装**，安装
+- 远端 sha 与记录不一致 → **有新版本**，重装
+- 比对不了（离线、GitHub API 限流、非 GitHub 源）→ **unknown，照常安装**，绝不因为查不到就误跳过
+- `--force` 跳过比对，全部重装
+
+仓库自有 skills 是源码 symlink，内容即改即生效，不存在版本比对；已是同一 symlink 时幂等跳过。
 
 ## 故障恢复
 
@@ -282,7 +296,7 @@ TUI 与 CLI 共享同一套资源模型（`script/resource-plan.py`）：资源�
 | **2 Update** | 单选框：`全部外部 skills + plugins`（对应 `--update-all`）/ `选中的项目`（复用 Install 页勾选，本地 skill 走 symlink 同步，冲突走统一 resolver） |
 | **3 Uninstall** | 单选框：`完全卸载`（对应 `--uninstall all`）/ `仅 core` / `选中的项目`（本地 skill 卸载只删受控软链接，保留仓库源；冲突资源只能勾选一个来源） |
 | **4 诊断** | 单选框：`verify` / `status` / `doctor`（只读检查，对应 CLI 的 `verify`/`status`/`doctor`，执行 `setup.sh <action>`） |
-| **5 Pi Skills** | 只安装 pi skills 到 `~/.pi/agent/skills/`（pi 只支持 skills）。复用外部 + 本地 skills 勾选；全不勾选 = 全量，勾选 = 指定安装（对应 CLI `--agents=pi [--skill ...] [--update-local-skill ...]`），不涉及 plugins |
+| **5 Agents Skills** | 只安装 skills 到 `~/.agents/skills/`（非 claude 目标）。复用外部 + 本地 skills 勾选；全不勾选 = 全量，勾选 = 指定安装（对应 CLI `--agents=<非 claude> [--skill ...] [--update-local-skill ...]`），不涉及 plugins |
 
 ### 冲突处理
 
