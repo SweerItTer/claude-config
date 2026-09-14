@@ -268,10 +268,10 @@ jobs:
           chmod +x ./tests/test-skill-context-verification.sh
           ./tests/test-skill-context-verification.sh
 
-      - name: Verify pi agents skills regression script
+      - name: Verify agents skills regression script
         run: |
-          chmod +x ./tests/test-pi-agents.sh
-          ./tests/test-pi-agents.sh
+          chmod +x ./tests/test-agents-skills.sh
+          ./tests/test-agents-skills.sh
 
       - name: Run setup.sh smoke test
         run: |

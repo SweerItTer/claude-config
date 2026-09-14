@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# ///TODO: fix 文件权限为 100644：./tests/test-claude-check.sh 直接执行会 Permission denied
+# （CI 靠显式 chmod +x 绕过）；改为 100755 与其余测试脚本一致后删除本标记。
 # Tests for setup.sh `check` action — Claude Code CLI 安装状态检测。
 #
 # 覆盖:
