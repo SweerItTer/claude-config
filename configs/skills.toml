@@ -37,3 +37,10 @@ repo = "blader/humanizer"
 skill = "humanizer"
 agent = "claude-code"
 scope = "global"
+
+[[sources]]
+name = "i-have-adhd"
+repo = "ayghri/i-have-adhd"
+skill = "i-have-adhd"
+agent = "claude-code"
+scope = "global"
