@@ -1560,6 +1560,8 @@ ensure_core_config() {
     ensure_symlink "$REPO_ROOT/claude/rules" "$CLAUDE_HOME/rules" "rules symlink" || failed=1
     ensure_symlink "$REPO_ROOT/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink" || failed=1
     ensure_symlink "$REPO_ROOT/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook" || failed=1
+    # 自定义 subagent 目录（原 claude/agents-custom 已并入 claude/agents）
+    ensure_symlink "$REPO_ROOT/claude/agents" "$CLAUDE_HOME/agents" "agents symlink" || failed=1
 
     # 自有 skill 位于顶层 skills/（npx skills 通用 agent 约定目录）。
     # 仓库内安装由 npx skills 从 GitHub 远程拉取到 ~/.claude/skills/；
@@ -1706,6 +1708,13 @@ verify_core_config() {
         pass "rules-loader hook"
     else
         err "rules-loader hook 缺失"
+        failed=1
+    fi
+
+    if symlink_points_to "$CLAUDE_HOME/agents" "$REPO_ROOT/claude/agents"; then
+        pass "agents symlink"
+    else
+        err "agents symlink 缺失"
         failed=1
     fi
 
@@ -2514,6 +2523,7 @@ uninstall_core() {
     remove_symlink_if_ours "$CLAUDE_HOME/rules" "rules/" "$repo/rules"
     remove_symlink_if_ours "$CLAUDE_HOME/rules-available" "rules-available/" "$repo/rules-available"
     remove_symlink_if_ours "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook" "$repo/hooks/rules-loader.sh"
+    remove_symlink_if_ours "$CLAUDE_HOME/agents" "agents/" "$repo/agents"
 
     local repo_skills_dir="$repo/skills"
     if [[ -d "$repo_skills_dir" && -d "$CLAUDE_HOME/skills" ]]; then
