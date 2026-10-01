@@ -32,9 +32,16 @@ agent = "claude-code"
 scope = "global"
 
 [[sources]]
-name = "humanizer"
-repo = "blader/humanizer"
-skill = "humanizer"
+name = "wayfinder"
+repo = "mattpocock/skills"
+skill = "wayfinder"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "code-review"
+repo = "mattpocock/skills"
+skill = "code-review"
 agent = "claude-code"
 scope = "global"
 
@@ -42,5 +49,12 @@ scope = "global"
 name = "i-have-adhd"
 repo = "ayghri/i-have-adhd"
 skill = "i-have-adhd"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "humanizer"
+repo = "blader/humanizer"
+skill = "humanizer"
 agent = "claude-code"
 scope = "global"
