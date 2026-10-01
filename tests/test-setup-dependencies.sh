@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 src = Path(sys.argv[1]).read_text(encoding='utf-8')
-start = src.index("RED='\\033[0;31m'")
+start = src.index("# 非 TTY（管道/CI/重定向）或 NO_COLOR 置位时不注入 ANSI 转义")
 end = src.index('\nsymlink_points_to() {')
 chunk = src[start:end].replace(
     '# shellcheck source=script/install-common.sh\nsource "$SCRIPT_DIR/install-common.sh"\n',

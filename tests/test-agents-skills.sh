@@ -151,7 +151,7 @@ RESOURCE_PLANNER="$REAL_REPO_ROOT/script/resource-plan.py"
 MANIFEST_PARSER="$REAL_REPO_ROOT/script/parse-manifests.py"
 SKILL_FRESHNESS_CHECK="$REAL_REPO_ROOT/script/check-skill-freshness.py"
 
-DRY_RUN=false; CI_MODE=false; FORCE=false
+DRY_RUN=false; CI_MODE=false; FORCE=false; VERBOSE=true
 SELECTED_SKILLS=(); UPDATE_RESOURCES=()
 AGENTS_TARGET="claude-code"
 

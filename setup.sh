@@ -5,11 +5,12 @@
 # ============================================================
 set -euo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# 非 TTY（管道/CI/重定向）或 NO_COLOR 置位时不注入 ANSI 转义，避免日志里全是控制码。
+if [[ -z "${NO_COLOR:-}" && -t 1 ]]; then
+    RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; BLUE=$'\033[0;34m'; NC=$'\033[0m'
+else
+    RED=""; GREEN=""; YELLOW=""; BLUE=""; NC=""
+fi
 
 # ponytail: 兼容 source — 直接执行用 $0, 被 source 时用 BASH_SOURCE 还原真实路径
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -56,6 +57,9 @@ NO_CLAUDE=false
 NO_VERIFY=false
 FORCE=false
 SMOKE_TEST=false
+VERBOSE=false
+YES=false
+SETUP_LOG=""
 UPDATE=false
 UPDATE_SKILL=""
 UPDATE_PLUGIN=""
@@ -87,12 +91,44 @@ NVM_INSTALL_VERSION="v0.40.4"
 MIN_SUPPORTED_NODE_MAJOR=20
 MAX_SUPPORTED_NODE_MAJOR=25
 
-log()   { echo -e "${GREEN}[OK]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()   { echo -e "${RED}[ERR]${NC} $*"; }
-info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-phase() { echo ""; echo -e "${BLUE}═══ $* ═══${NC}"; echo ""; }
-pass()  { echo -e "${BLUE}[PASS]${NC} $*"; }
+log()   { printf '%s✔ %s%s\n' "$GREEN"  "$*" "$NC"; }
+warn()  { printf '%s▲ %s%s\n' "$YELLOW" "$*" "$NC"; }
+err()   { printf '%s✖ %s%s\n' "$RED"    "$*" "$NC"; }
+# info 默认静默（-v 恢复），但 [DRY-RUN] 前缀的行恒打印：它们来自 script/install-common.sh
+# 的未改动 helper，恰好构成预览内容，被静默会让 --dry-run 少一段、预览不再可信。
+info()  { if [[ "$VERBOSE" == true || "$*" == *"[DRY-RUN]"* ]]; then printf '%s• %s%s\n' "$BLUE" "$*" "$NC"; fi; return 0; }
+phase() { printf '\n%s▸ %s%s\n' "$BLUE" "$*" "$NC"; }
+pass()  { [[ "$VERBOSE" == true ]] && printf '%s· %s%s\n' "$BLUE" "$*" "$NC"; return 0; }
+
+# dry-run 分支的打印点恒打印（预览必须可信，不能被 VERBOSE 静默）。
+dry()   { printf '%s[dry-run] %s%s\n' "$BLUE" "$*" "$NC"; }
+
+# 失败后给一条可直接粘贴的重试命令，替代无信息量的「请检查上方日志」。
+print_retry_hint() {
+    local hint="./setup.sh"
+    [[ ${#ORIGINAL_ARGS[@]} -gt 0 ]] && hint+=" ${ORIGINAL_ARGS[*]}"
+    [[ " $hint " == *" --force "* ]] || hint+=" --force"
+    printf '%s重试: %s%s\n' "$YELLOW" "$hint" "$NC"
+}
+
+# 裸跑（零参数）时的预执行摘要：先说清要装什么，再问一次。
+summarize_install_plan() {
+    local skills plugins
+    skills="$(parse_skills_toml "$SKILLS_CONFIG" | awk -F'\t' '{print $1}' | paste -sd' ' -)"
+    plugins="$(parse_plugins_toml "$PLUGINS_CONFIG" | awk -F'\t' '{print $1}' | paste -sd' ' -)"
+    printf '将执行: 核心配置 (CLAUDE.md / rules / settings.json)\n'
+    printf '  外部 skill   : %s\n' "${skills:-无}"
+    printf '  第三方 plugin: %s\n' "${plugins:-无}"
+}
+
+# $1=提示语；默认 Y。非 TTY / --ci / --dry-run / --yes 直接通过（自动化契约不变）。
+read_confirm() {
+    [[ "$CI_MODE" == true || "$DRY_RUN" == true || "$YES" == true || ! -t 0 ]] && return 0
+    local reply
+    printf '%s [Y/n] ' "$1"
+    IFS= read -r reply || return 0
+    case "$reply" in ''|y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
 
 detect_pkg_manager() {
     if command -v apt-get >/dev/null 2>&1; then
@@ -126,7 +162,7 @@ run_privileged_install() {
 
     if [[ "$CI_MODE" == true || ! -t 0 ]]; then
         warn "安装依赖需要 sudo 权限，但当前不是交互式终端，无法请求密码。"
-        info "请在交互式终端执行: $manual_cmd"
+        warn "请在交互式终端执行: $manual_cmd"
         return 1
     fi
 
@@ -145,7 +181,7 @@ run_package_install() {
     shift
 
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] 自动安装依赖: $pkg_mgr -> $*"
+        dry "自动安装依赖: $pkg_mgr -> $*"
         return 0
     fi
 
@@ -194,7 +230,7 @@ node_runtime_supported() {
 
 install_lts_node_with_nvm() {
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] 使用 Node 官方推荐脚本安装 nvm (${NVM_INSTALL_VERSION}) 并切换到最新 LTS Node.js（自带 npm）"
+        dry "使用 Node 官方推荐脚本安装 nvm (${NVM_INSTALL_VERSION}) 并切换到最新 LTS Node.js（自带 npm）"
         return 0
     fi
 
@@ -214,6 +250,8 @@ install_lts_node_with_nvm() {
     info "使用 Node 官方推荐脚本安装并切换到最新 LTS Node.js（自带 npm）..."
     if ! LTS_VERSION_FILE="$version_file" bash -lc "set -eo pipefail; ${install_cmd}; export NVM_DIR=\"${nvm_dir}\"; . \"${nvm_dir}/nvm.sh\"; nvm install --lts; nvm alias default 'lts/*' >/dev/null; node -p 'process.versions.node' > \"\$LTS_VERSION_FILE\"; node --version; npm --version"; then
         rm -f "$version_file"
+        err "nvm / LTS Node.js 安装失败"
+        warn "手动: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_INSTALL_VERSION}/install.sh | bash && nvm install --lts"
         return 1
     fi
 
@@ -355,7 +393,7 @@ ensure_system_dependencies() {
         done
 
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] 跳过依赖安装后的就绪复检"
+            dry "跳过依赖安装后的就绪复检"
             return 0
         fi
 
@@ -430,7 +468,7 @@ ensure_managed_block() {
     [[ -f "$src" ]] || return 0
 
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] merge $src into $dst as $block_name block"
+        dry "merge $src into $dst as $block_name block"
         return 0
     fi
 
@@ -547,17 +585,17 @@ ensure_symlink() {
     local label="$3"
 
     if symlink_points_to "$dst" "$src"; then
-        pass "$label 已就绪"
+        log "$label 已就绪"
         return 0
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
         if [[ -d "$dst" && ! -L "$dst" && "$FORCE" != true ]]; then
-            info "[DRY-RUN] would fail: $label 目标是已有目录，需 --force 才能替换 ($dst)"
+            dry "would fail: $label 目标是已有目录，需 --force 才能替换 ($dst)"
         elif [[ -e "$dst" || -L "$dst" ]]; then
-            info "[DRY-RUN] replace $dst with symlink to $src"
+            dry "replace $dst with symlink to $src"
         else
-            info "[DRY-RUN] ln -s $src -> $dst"
+            dry "ln -s $src -> $dst"
         fi
         return 0
     fi
@@ -568,11 +606,13 @@ ensure_symlink() {
     elif [[ -d "$dst" ]]; then
         if [[ "$FORCE" != true ]]; then
             err "$label 目标已存在且是目录: $dst。为避免删除用户维护内容，请先手动处理或使用 --force。"
+            warn "先手动处理该路径，或加 --force 强制替换"
             return 1
         fi
         rm -rf "$dst"
     elif [[ -e "$dst" ]]; then
         err "$label 目标已存在且类型不受支持: $dst"
+        warn "先手动处理该路径，或加 --force 强制替换"
         return 1
     fi
     ln -s "$src" "$dst"
@@ -755,7 +795,7 @@ ensure_claude_code() {
     if ! command -v claude >/dev/null 2>&1; then
         info "安装 Claude Code..."
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] npm install -g @anthropic-ai/claude-code"
+            dry "npm install -g @anthropic-ai/claude-code"
             return 0
         fi
         npm install -g @anthropic-ai/claude-code
@@ -768,7 +808,7 @@ ensure_claude_code() {
     log "Claude Code 已安装: $(claude --version 2>&1 | head -1)"
     if [[ ! -d "$CLAUDE_HOME" ]]; then
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] 后台启动 Claude Code 初始化 CLAUDE_HOME"
+            dry "后台启动 Claude Code 初始化 CLAUDE_HOME"
             return 0
         fi
         claude </dev/null >/dev/null 2>&1 &
@@ -793,8 +833,8 @@ update_repository() {
 
     info "更新当前仓库..."
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] git pull --ff-only"
-        info "[DRY-RUN] SETUP_UPDATE_REEXECED=true ./setup.sh ${ORIGINAL_ARGS[*]}"
+        dry "git pull --ff-only"
+        dry "SETUP_UPDATE_REEXECED=true ./setup.sh ${ORIGINAL_ARGS[*]}"
         return 0
     fi
 
@@ -840,6 +880,7 @@ RESOURCE_PLANNER="$REPO_ROOT/script/resource-plan.py"
 
 # skill 最新版比对器：读 manifest TSV → 输出逐项安装决定（up-to-date/outdated/missing/unknown）。
 SKILL_FRESHNESS_CHECK="$REPO_ROOT/script/check-skill-freshness.py"
+
 
 # 交互读取单行输入；无 TTY 时返回失败（由调用方按非交互规则处理）。
 resource_prompt() {
@@ -995,7 +1036,7 @@ resource_update() {
     if [[ "$rc" == 0 ]]; then
         log "指定资源更新完成"
     else
-        err "部分资源更新失败，请检查上方日志"
+        err "部分资源更新失败"; print_retry_hint
     fi
     return "$rc"
 }
@@ -1029,7 +1070,7 @@ resource_uninstall() {
     if [[ "$rc" == 0 ]]; then
         log "指定资源卸载完成"
     else
-        err "部分资源卸载失败，请检查上方日志"
+        err "部分资源卸载失败"; print_retry_hint
     fi
     return "$rc"
 }
@@ -1169,7 +1210,7 @@ install_external_skills() {
 
         info "安装外部 skill: $name ($repo, skill=$skill, agent=$agent_key)"
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] npx -y skills@latest add -y $repo -s $skill -a $agent_key $scope_flag"
+            dry "npx -y skills@latest add -y $repo -s $skill -a $agent_key $scope_flag"
             continue
         fi
 
@@ -1207,11 +1248,13 @@ install_third_party_plugins() {
 
         case "$method" in
             claude-plugin)
-                info "安装 plugin: $name (marketplace: $marketplace)"
                 if [[ "$DRY_RUN" == true ]]; then
-                    info "[DRY-RUN] claude plugin marketplace add $repo --scope user && claude plugin install ${name}@${marketplace} -s user"
+                    dry "安装 plugin: $name (marketplace: $marketplace)"
+                    dry "claude plugin marketplace add $repo --scope user && claude plugin install ${name}@${marketplace} -s user"
+                    dry "plugin '$name' 已安装"
                     continue
                 fi
+                pass "安装 plugin: $name (marketplace: $marketplace)"
                 claude plugin marketplace add "$repo" --scope user 2>/dev/null || \
                     warn "marketplace 添加失败（可能已存在）: $name"
                 if ! claude plugin install "${name}@${marketplace}" -s user; then
@@ -1241,7 +1284,7 @@ update_all_skills() {
     : "$parsed"
     info "更新所有外部 skills..."
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] npx -y skills@latest update -g -y"
+        dry "npx -y skills@latest update -g -y"
         return 0
     fi
     if ! npx -y skills@latest update -g -y; then
@@ -1270,7 +1313,7 @@ update_plugin() {
         fi
         info "更新 plugin: $name"
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] claude plugin update ${name}@${marketplace} -s user"
+            dry "claude plugin update ${name}@${marketplace} -s user"
             return 0
         fi
         if ! claude plugin update "${name}@${marketplace}" -s user; then
@@ -1315,6 +1358,7 @@ update_local_skill() {
     [[ -f "$src/SKILL.md" ]] || { err "仓库自有 skill 不存在或缺少 SKILL.md: $name"; return 1; }
     info "更新仓库自有 skill: $name (→ $dst)"
     ensure_symlink "$src" "$dst" "repo skill '$name'"
+    [[ "$DRY_RUN" == true ]] && return 0
     log "仓库自有 skill '$name' 已更新"
 }
 
@@ -1334,7 +1378,7 @@ update_skill() {
         [[ "$scope" == "global" ]] && scope_flag="-g"
         info "更新 skill: $name"
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] npx -y skills@latest update $name $scope_flag -y"
+            dry "npx -y skills@latest update $name $scope_flag -y"
             return 0
         fi
         if ! npx -y skills@latest update "$name" $scope_flag -y; then
@@ -1358,19 +1402,21 @@ ensure_core_config() {
 
     ensure_user_local_bin_path
 
-    ensure_symlink "$REPO_ROOT/claude/CLAUDE.md.ccfg" "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink"
+    local failed=0
+    ensure_symlink "$REPO_ROOT/claude/CLAUDE.md.ccfg" "$CLAUDE_HOME/CLAUDE.md" "CLAUDE.md symlink" || failed=1
     # ensure_symlink "$REPO_ROOT/claude/itp.md" "$CLAUDE_HOME/itp.md" "itp.md symlink"
     # ensure_symlink "$REPO_ROOT/claude/haiku-throttle.md" "$CLAUDE_HOME/haiku-throttle.md" "haiku-throttle.md symlink"
     remove_symlink_if_ours "$CLAUDE_HOME/AGENTS.md" "AGENTS.md 旧 symlink" "$REPO_ROOT/claude/AGENTS.md"
 
-    ensure_symlink "$REPO_ROOT/claude/rules" "$CLAUDE_HOME/rules" "rules symlink"
-    ensure_symlink "$REPO_ROOT/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink"
-    ensure_symlink "$REPO_ROOT/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook"
+    ensure_symlink "$REPO_ROOT/claude/rules" "$CLAUDE_HOME/rules" "rules symlink" || failed=1
+    ensure_symlink "$REPO_ROOT/claude/rules-available" "$CLAUDE_HOME/rules-available" "rules-available symlink" || failed=1
+    ensure_symlink "$REPO_ROOT/claude/hooks/rules-loader.sh" "$CLAUDE_HOME/hooks/rules-loader.sh" "rules-loader hook" || failed=1
 
     # 自有 skill 位于顶层 skills/（npx skills 通用 agent 约定目录）。
     # 仓库内安装由 npx skills 从 GitHub 远程拉取到 ~/.claude/skills/；
     # 开发时也可直接从本地 skills/ 读取。外部 skill 由
     # install_external_skills() 通过 npx skills 安装。
+    return "$failed"
 }
 
 ensure_settings_json() {
@@ -1391,7 +1437,7 @@ ensure_settings_json() {
     if [[ -f "$target" ]]; then
         info "合并现有 settings.json（保留已有值，仅补齐缺失项）..."
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] merge settings.json with template-backed migration keys"
+            dry "merge settings.json with template-backed migration keys"
             return 0
         fi
         mkdir -p "$CLAUDE_HOME"
@@ -1402,7 +1448,7 @@ ensure_settings_json() {
 
     info "生成 settings.json..."
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] write rendered settings.json"
+        dry "write rendered settings.json"
         return 0
     fi
 
@@ -1412,7 +1458,7 @@ ensure_settings_json() {
 }
 
 verify_repository_cleanliness() {
-    if [[ "$NO_VERIFY" == true || "$DRY_RUN" == true ]]; then
+    if [[ "$NO_VERIFY" == true ]]; then
         info "跳过仓库洁净验证"
         return 0
     fi
@@ -1446,7 +1492,7 @@ verify_repository_cleanliness() {
 }
 
 verify_core_config() {
-    if [[ "$NO_VERIFY" == true || "$DRY_RUN" == true ]]; then
+    if [[ "$NO_VERIFY" == true ]]; then
         info "跳过 setup 级验证"
         return 0
     fi
@@ -1550,6 +1596,7 @@ verify_installed_skills_context() {
 
     if ! npx -y skills@latest list -g --json >"$list_file" 2>"$list_err"; then
         err "无法读取全局 skill 清单 (npx skills list)"
+        warn "可手动执行: npx -y skills@latest list -g --json 查看原因"
         sed -n '1,20p' "$list_err" >&2
         rm -f "$list_file" "$list_err" "$plugin_file" "$plugin_err"
         return 1
@@ -1904,8 +1951,8 @@ run_final_doctor() {
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] script/check-claude-doctor.sh"
-        info "[DRY-RUN] claude -p /context"
+        dry "script/check-claude-doctor.sh"
+        dry "claude -p /context"
         return 0
     fi
 
@@ -2002,7 +2049,7 @@ run_agents_flow() {
     if [[ "$rc" == 0 ]]; then
         log "Agents skills 已就绪: $AGENTS_SKILLS_HOME/"
     else
-        err "部分 Agents skill 安装失败，请检查上方日志"
+        err "部分 Agents skill 安装失败"; print_retry_hint
     fi
     return "$rc"
 }
@@ -2012,7 +2059,7 @@ run_install_flow() {
     ensure_claude_code
 
     phase "Phase 2: 核心配置"
-    ensure_core_config
+    ensure_core_config || { print_retry_hint; return 1; }
     ensure_settings_json
 
     phase "Phase 3: 外部 skills（npx skills）"
@@ -2041,7 +2088,7 @@ run_install_flow() {
     fi
 
     phase "Phase 5: 最终验证"
-    verify_core_config
+    verify_core_config && log "核心配置验证通过"
     run_final_doctor
 }
 
@@ -2050,11 +2097,11 @@ run_core_flow() {
     ensure_claude_code
 
     phase "Phase 2: 核心配置"
-    ensure_core_config
+    ensure_core_config || { print_retry_hint; return 1; }
     ensure_settings_json
 
     phase "Phase 3: 最终验证"
-    verify_core_config
+    verify_core_config && log "核心配置验证通过"
 }
 
 run_inspection_flow() {
@@ -2127,7 +2174,7 @@ run_check_flow() {
 
     phase "Phase 2: claude doctor 健康检查"
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] claude doctor"
+        dry "claude doctor"
     else
         local doctor_out doctor_rc
         doctor_out="$(claude doctor 2>&1)"
@@ -2143,7 +2190,7 @@ run_check_flow() {
 
     phase "Phase 3: claude auth 认证状态"
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] claude auth status --json"
+        dry "claude auth status --json"
     else
         local auth_out
         auth_out="$(claude auth status --json 2>&1)"
@@ -2161,6 +2208,7 @@ run_check_flow() {
 
 UNINSTALL_LIST=()
 UNINSTALL_JOBS=3
+
 
 remove_symlink_if_ours() {
     local path="$1"
@@ -2182,7 +2230,7 @@ remove_symlink_if_ours() {
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] rm $path"
+        dry "rm $path"
         return 0
     fi
 
@@ -2205,7 +2253,7 @@ remove_managed_block() {
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] remove $block_name block from $path"
+        dry "remove $block_name block from $path"
         return 0
     fi
 
@@ -2250,7 +2298,7 @@ uninstall_skill() {
         [[ "$scope" == "global" ]] && scope_flag="-g"
         info "卸载 skill: $name"
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] npx -y skills@latest remove $name -a ${agent:-claude-code} $scope_flag -y"
+            dry "npx -y skills@latest remove $name -a ${agent:-claude-code} $scope_flag -y"
             return 0
         fi
         if ! npx -y skills@latest remove "$name" -a "${agent:-claude-code}" $scope_flag -y; then
@@ -2283,7 +2331,7 @@ uninstall_plugin() {
         fi
         info "卸载 plugin: $name"
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] claude plugin uninstall ${name}@${marketplace} -s user -y"
+            dry "claude plugin uninstall ${name}@${marketplace} -s user -y"
             return 0
         fi
         if ! claude plugin uninstall "${name}@${marketplace}" -s user -y; then
@@ -2338,7 +2386,7 @@ remove_legacy_ecc_paths() {
     for path in "$CLAUDE_HOME/ecc" "$CLAUDE_HOME/plugins/cache/ecc" "$CLAUDE_HOME/plugins/marketplaces/ecc" "$CLAUDE_HOME/skills/ecc"; do
         [[ -e "$path" || -L "$path" ]] || continue
         if [[ "$DRY_RUN" == true ]]; then
-            info "[DRY-RUN] rm -rf $path"
+            dry "rm -rf $path"
         else
             rm -rf -- "$path"
             log "已移除旧 ECC 路径: $path"
@@ -2425,7 +2473,7 @@ uninstall_all() {
     remove_legacy_installed_plugins_entries "$CLAUDE_HOME/plugins/installed_plugins.json"
     remove_legacy_ecc_paths
     if [[ "$DRY_RUN" == true ]]; then
-        info "[DRY-RUN] rm $CLAUDE_HOME/plugins/known_marketplaces.json"
+        dry "rm $CLAUDE_HOME/plugins/known_marketplaces.json"
     else
         rm -f "$CLAUDE_HOME/plugins/known_marketplaces.json"
         log "已移除 known_marketplaces.json"
@@ -2437,6 +2485,11 @@ uninstall_all() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=true; shift ;;
+        -y|--yes) YES=true; shift ;;
+        -v|--verbose) VERBOSE=true; shift ;;
+        --no-color) NO_COLOR=1
+            RED=""; GREEN=""; YELLOW=""; BLUE=""; NC=""
+            shift ;;
         --ci) CI_MODE=true; shift ;;
         --no-claude) NO_CLAUDE=true; shift ;;
         --no-verify) NO_VERIFY=true; shift ;;
@@ -2591,32 +2644,45 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         -h|--help)
             echo "用法: ./setup.sh [action] [选项]"
-            echo "  action          install | update | reinstall | core | uninstall | verify | status | doctor | check | list"
-            echo "  --ci            CI 模式 (跳过手动提示)"
-            echo "  --dry-run       预览，不实际修改"
-            echo "  --no-claude     跳过 Claude Code 安装"
-            echo "  --no-verify     跳过验证"
-            echo "  --force         强制重跑所有步骤 (忽略幂等检测)"
-            echo "  --update        兼容旧 flag：等价于 action=update"
-            echo "  --smoke-test    运行 Claude doctor 与 claude -p /context 扩展冒烟检查"
-            echo "  --skill <name>  只安装指定外部 skill（可重复，读 configs/skills.toml）"
-            echo "  --plugin <name> 只安装指定第三方 plugin（可重复，读 configs/plugins.toml）"
-            echo "  --skip-skills   跳过外部 skills 安装"
-            echo "  --skip-plugins  跳过第三方 plugins 安装"
-            echo "  --agents=NAME   NAME=claude-code（claude 为别名）走完整 claude 流程（默认）；其余取值"
-            echo "                  = 只安装 skills 到 ~/.agents/skills/（跳过 claude code/核心配置/"
-            echo "                  plugins/验证，配合 --skill/--update-local-skill 指定安装）"
-            echo "  --uninstall T   卸载单个/多个目标 (core|all|清单中的 skill/plugin 名，可重复出现，列表并发卸载)"
-            echo "  --uninstall-skill N  卸载指定 skill（typed，规避同名 plugin）"
-            echo "  --uninstall-plugin N 卸载指定 plugin（typed，规避同名 skill）"
-            echo "  --uninstall-resource kind:spec  按统一资源 id 卸载（skill:<名> / plugin:<名>，冲突时需 --choose）"
-            echo "  --update-all    更新全部外部 skills + plugins (npx skills update + claude plugin update)"
-            echo "  --update-skill N 更新指定外部 skill（可重复；core/all=全部）"
-            echo "  --update-local-skill N 更新指定仓库自有 skill（可重复；创建/刷新 ~/.claude/skills 下的软链接）"
-            echo "  --update-plugin N 更新指定 plugin（可重复；core/all=全部）"
-            echo "  --update-resource kind:spec  按统一资源 id 更新（skill:<名> / plugin:<名>，冲突时需 --choose）"
-            echo "  --choose kind:id=local|remote|skip  解决同名 local/remote 资源冲突（可重复）"
-            echo "  --tui           启动交互式 TUI 安装器（需先构建 tools/installer-tui）"
+            echo ""
+            echo "action: install | update | reinstall | core | uninstall | verify | status | doctor | check | list"
+            echo ""
+            echo "安装  --skill <name>  只安装指定外部 skill（可重复，读 configs/skills.toml）"
+            echo "      --plugin <name> 只安装指定第三方 plugin（可重复，读 configs/plugins.toml）"
+            echo "      --skip-skills   跳过外部 skills 安装"
+            echo "      --skip-plugins  跳过第三方 plugins 安装"
+            echo "      --agents=NAME   NAME=claude-code（claude 为别名）走完整 claude 流程（默认）；其余取值"
+            echo "                      = 只安装 skills 到 ~/.agents/skills/（跳过 claude code/核心配置/"
+            echo "                      plugins/验证，配合 --skill/--update-local-skill 指定安装）"
+            echo "      --force         强制重跑所有步骤 (忽略幂等检测)"
+            echo ""
+            echo "更新  --update                        兼容旧 flag：等价于 action=update"
+            echo "      --update-all                    更新全部外部 skills + plugins (npx skills update + claude plugin update)"
+            echo "      --update-resource kind:spec     按统一资源 id 更新（skill:<名> / plugin:<名>，冲突时需 --choose）"
+            echo "      --update-local-skill N          更新指定仓库自有 skill（legacy；--agents 模式即安装入口，"
+            echo "                                      装入 ~/.agents/skills）"
+            echo "      --update-skill N                更新指定外部 skill（legacy：等价于 --update-resource skill:N；"
+            echo "                                      需 skills.toml 有 source）"
+            echo "      --update-plugin N               更新指定 plugin（legacy：等价于 --update-resource plugin:N）"
+            echo ""
+            echo "卸载  --uninstall T                   卸载单个/多个目标 (core|all|清单中的 skill/plugin 名，可重复出现，列表并发卸载)"
+            echo "      --uninstall-resource kind:spec  按统一资源 id 卸载（skill:<名> / plugin:<名>，冲突时需 --choose）"
+            echo "      --uninstall-skill N             卸载指定 skill（legacy：等价于 --uninstall-resource skill:N；"
+            echo "                                      当前 skills.toml 为空清单，无合法值）"
+            echo "      --uninstall-plugin N            卸载指定 plugin（legacy：等价于 --uninstall-resource plugin:N）"
+            echo ""
+            echo "诊断  --smoke-test    运行 Claude doctor 与 claude -p /context 扩展冒烟检查"
+            echo "      --no-verify     跳过验证"
+            echo ""
+            echo "通用  --ci            CI 模式 (跳过手动提示，完整日志写入临时文件)"
+            echo "      --dry-run       预览，不实际修改（与真实运行同构）"
+            echo "      -y, --yes       跳过裸跑确认"
+            echo "      -v, --verbose   恢复逐项输出"
+            echo "      --no-color      关闭 ANSI 颜色"
+            echo "      --no-claude     跳过 Claude Code 安装"
+            echo "      --tui           启动交互式 TUI 安装器（需先构建 tools/installer-tui）"
+            echo ""
+            echo "高级  --choose kind:id=local|remote|skip  解决同名 local/remote 资源冲突（可重复）"
             exit 0 ;;
         install|update|reinstall|core|uninstall|verify|status|doctor|check|list)
             ACTION="$1"
@@ -2639,6 +2705,14 @@ if [[ "$SKIP_PLUGINS" == true && ${#SELECTED_PLUGINS[@]} -gt 0 ]]; then
 fi
 if [[ "$UPDATE_ALL" == true && (${#UPDATE_SKILLS[@]} -gt 0 || ${#UPDATE_LOCAL_SKILLS[@]} -gt 0 || ${#UPDATE_PLUGINS[@]} -gt 0 || ${#UPDATE_RESOURCES[@]} -gt 0) ]]; then
     err "--update-all 与单项 skill/plugin 更新不能同时使用"; exit 1
+fi
+
+# --ci 全量落盘：CI 里失败后只能拿到被截断的关键字片段，留完整日志便于事后定位。
+# BASH_SOURCE==$0 守卫必须有：测试会 source 本文件，否则会劫持测试进程的 stdout。
+if [[ "$CI_MODE" == true && "${BASH_SOURCE[0]}" == "$0" ]]; then
+    SETUP_LOG="${SETUP_LOG:-$(mktemp -t setup-ci-XXXXXX.log)}"
+    exec > >(tee -a "$SETUP_LOG") 2>&1
+    printf '%s完整日志: %s%s\n' "$BLUE" "$SETUP_LOG" "$NC"
 fi
 
 main() {
@@ -2670,6 +2744,7 @@ main() {
         echo ""
         echo -e "${GREEN}============================================${NC}"
         echo -e "${GREEN}  Agents skills 安装完成! (--agents=$AGENTS_TARGET)${NC}"
+        [[ "$DRY_RUN" == true ]] && dry "(dry-run 预览，未做任何修改)"
         echo -e "${GREEN}============================================${NC}"
         echo ""
         info "非 claude 模式只安装 skills，未安装任何 claude 配置/plugins"
@@ -2694,6 +2769,15 @@ main() {
         return 0
     fi
 
+    # 完全裸跑（零参数零 action）时先给预执行摘要，再确认一次；明确意图的调用不打扰。
+    if [[ ${#ORIGINAL_ARGS[@]} -eq 0 ]]; then
+        summarize_install_plan
+        if ! read_confirm "继续安装?"; then
+            log "已取消，未做任何修改"
+            return 0
+        fi
+    fi
+
     [[ "$DRY_RUN" == true ]] && warn "DRY-RUN — 不会实际修改文件"
     [[ "$CI_MODE" == true ]] && info "CI 模式"
     [[ "$ACTION" == "update" && "$FORCE" == true ]] && info "Update 模式 — 将更新仓库与配置中的第三方仓库，并强制重跑安装器"
@@ -2710,7 +2794,7 @@ main() {
         if [[ "$update_failed" == 0 ]]; then
             log "全部外部 skills + plugins 已更新"
         else
-            err "部分更新失败，请检查上方日志"
+            err "部分更新失败"; print_retry_hint
         fi
         return "$update_failed"
     fi
@@ -2744,7 +2828,7 @@ main() {
         if [[ "$update_failed" == 0 ]]; then
             log "指定项更新完成 (外部 skills: ${UPDATE_SKILLS[*]:-无} / 仓库 skills: ${UPDATE_LOCAL_SKILLS[*]:-无} / plugins: ${UPDATE_PLUGINS[*]:-无})"
         else
-            err "部分指定项更新失败，请检查上方日志"
+            err "部分指定项更新失败"; print_retry_hint
         fi
         return "$update_failed"
     fi
@@ -2759,12 +2843,21 @@ main() {
     ensure_system_dependencies || exit 1
     info "系统: $(uname -s) / $(uname -m)"
 
+    # 检查类 action 的输出本身就是产物，不能被 VERBOSE 静默。
+    # --ci 同理：workflow 会 grep 逐项验证证据（如「settings.json 已补齐模板键并保留用户值」），
+    # 静默会直接让 CI 判定缺少证据。
+    case "$ACTION" in
+        check|verify|status|doctor|list) VERBOSE=true ;;
+    esac
+    [[ "$CI_MODE" == true ]] && VERBOSE=true
+
     case "$ACTION" in
         install|update|reinstall)
             run_install_flow
             echo ""
             echo -e "${GREEN}============================================${NC}"
             echo -e "${GREEN}  Claude Code 配置迁移完成!${NC}"
+            [[ "$DRY_RUN" == true ]] && dry "(dry-run 预览，未做任何修改)"
             echo -e "${GREEN}============================================${NC}"
             echo ""
             if [[ "$CI_MODE" == true ]]; then
@@ -2780,6 +2873,7 @@ main() {
             echo ""
             echo -e "${GREEN}============================================${NC}"
             echo -e "${GREEN}  Claude Core 配置已同步!${NC}"
+            [[ "$DRY_RUN" == true ]] && dry "(dry-run 预览，未做任何修改)"
             echo -e "${GREEN}============================================${NC}"
             echo ""
             ;;

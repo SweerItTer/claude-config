@@ -65,6 +65,7 @@ context="$fixture/context.md"
 printf '%s\n' '### Skills' '' '| Skill | Source | Tokens |' '|-------|--------|--------|' '| context-mode-ops | User | < 20 |' >"$context"
 
 source "$REPO_ROOT/setup.sh"
+VERBOSE=true
 SKILLS_CONFIG="$fixture/repo/configs/skills.toml"
 PLUGINS_CONFIG="$fixture/repo/configs/plugins.toml"
 PATH="$fixture/bin:$PATH"

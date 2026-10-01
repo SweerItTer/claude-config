@@ -106,7 +106,7 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 安装时若同时给了 `--skill` 和 `--plugin`，则只装这些指定项，其余项不装。全不指定 = 全量安装所有 skills + plugins。
 
-> 互斥校验：`--skip-skills` 与 `--skill` 不能同时用，`--skip-plugins` 与 `--plugin` 不能同时用。
+> 互斥校验：`--skip-skills` 与 `--skill` 不能同时用，`--skip-plugins` 与 `--plugin` 不能同时用；`--update-all` 与 `--update-local-skill`、`--update-resource` 也不可同时用（与 `--update-skill`/`--update-plugin` 同一条校验）。
 
 ### 更新
 
@@ -144,8 +144,8 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ./setup.sh --uninstall-plugin oh-my-claudecode
 ./setup.sh --uninstall-plugin oh-my-claudecode --uninstall-plugin ponytail
 
-# 卸载仓库自有 skill（本地 skills/ 目录下的软链接）
-./setup.sh --uninstall-skill evidence-driven-analysis
+# 卸载仓库自有 skill（本地 skills/ 目录下的软链接）—— 走统一资源入口
+./setup.sh --uninstall-resource skill:evidence-driven-analysis
 
 # 卸载一个/多个指定 plugin（typed）
 ./setup.sh --uninstall-plugin code-review
@@ -181,14 +181,29 @@ ls ~/.claude/agents/ ~/.claude/commands/
 ### 通用选项
 
 ```bash
-./setup.sh --dry-run      # 预览，不实际修改
-./setup.sh --ci           # CI 模式，跳过手动提示
+./setup.sh --dry-run      # 预览，不实际修改（与真实运行同构，含 Phase 5 验证）
+./setup.sh --ci           # CI 模式，跳过手动提示，完整日志写入临时文件并打印路径
+./setup.sh -y / --yes     # 跳过裸跑确认
+./setup.sh -v / --verbose # 恢复逐项输出（默认只报每步一行）
+./setup.sh --no-color     # 关闭 ANSI 颜色（非 TTY 或 NO_COLOR=1 时自动关闭）
 ./setup.sh --no-claude    # 跳过 Claude Code CLI 安装
 ./setup.sh --no-verify    # 跳过验证
 ./setup.sh --agents=codex  # 只安装 skills 到 ~/.agents/skills/（见「非 claude 目标的 skills 安装」）
 ./setup.sh --tui          # 启动交互式 TUI 安装器（见下文）
-./setup.sh -h             # 查看帮助
+./setup.sh -h             # 查看帮助（按 安装/更新/卸载/诊断/通用/高级 分组）
 ```
+
+#### 输出约定
+
+- 默认每步一行：`✔` 完成/已就绪、`▲` 提醒、`✖` 失败、`▸` 阶段标题。
+- 幂等跳过合并成一行（`✔ 已是最新，跳过 N 个 skill: …`），不再逐项刷屏；`-v` 恢复逐项。
+- `check` / `verify` / `status` / `doctor` / `list` 的输出本身就是产物，始终完整打印，不受 `-v` 影响。
+- 失败时给出可直接粘贴的重试命令（`重试: ./setup.sh … --force`），取代「请检查上方日志」。
+- `--dry-run` 预览与真实运行逐字同构（含 Phase 5）；`--ci` 会把完整日志写入 `mktemp` 临时文件并打印路径，交互式路径不写日志。
+
+#### 裸跑确认
+
+零参数直接 `./setup.sh` 时，先打印预执行摘要（核心配置 + 外部 skill 名单 + 第三方 plugin 名单），再问一次 `继续安装? [Y/n]`。`--ci`、`--yes`、`--dry-run` 或非 TTY（如管道/重定向）下不询问，自动化契约不变。
 
 ### 非 claude 目标的 skills 安装
 

@@ -60,7 +60,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 # source setup.sh（复用 ensure_claude_code 等 helper），不触发 main
 source "$REPO_ROOT/setup.sh"
 REPO_ROOT="$REPO_ROOT"   # 保持真实仓库路径，list 等不需要
-DRY_RUN=false; CI_MODE=true; FORCE=false
+DRY_RUN=false; CI_MODE=true; FORCE=false; VERBOSE=true
 
 # ---- 1) claude 存在: check 应检测到并输出版本/路径 ----
 : > "$EXEC_LOG"
