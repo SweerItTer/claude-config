@@ -393,6 +393,8 @@ bash tests/test-installer-tui.sh           # TUI 集成测试（需先构建 FTX
   CLAUDE.md        → claude/CLAUDE.md.ccfg（或由 OMC 注入后的宿主文件）
   rules/           → claude/rules/
   rules-available/ → claude/rules-available/
+  agents/          → claude/agents/（自定义 subagent，原 claude/agents-custom）
+  hooks/rules-loader.sh → claude/hooks/rules-loader.sh
   skills/          → 自有 skill 由软链接安装（本地 skills/ 源）；外部 skill 现由 plugin 提供（见 plugins/）
   settings.json    ← 从 claude/settings.template.json 渲染并合并
   plugins/
