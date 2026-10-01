@@ -65,11 +65,54 @@ AGENTS_TARGET_DIR="$HOME/.agents/skills"
 export AGENTS_SKILLS_HOME="$AGENTS_TARGET_DIR"
 export SKILLS_LOCK_FILE="$HOME/.agents/.skill-lock.json"
 
-# fake npx：记录 argv
+# fake npx：记录 argv；可选模拟 skills CLI 的全局 lock "读-改-写"（无文件锁）、
+# 失败注入，以及 start/end 打点（用于验证并发度）。
 mkdir -p "$fixture/bin"
 cat > "$fixture/bin/npx" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "npx $*" >> "$EXEC_LOG"
+[[ -n "${FAKE_NPX_INTERVAL_LOG:-}" ]] && \
+    printf 'start %s %s\n' "$$" "$(date +%s%3N)" >> "$FAKE_NPX_INTERVAL_LOG"
+
+if [[ "${FAKE_NPX_LOCK:-0}" == 1 ]]; then
+    repo=""
+    skills=()
+    args=("$@")
+    for ((i = 0; i < ${#args[@]}; i++)); do
+        case "${args[i]}" in
+            -s) skills+=("${args[i + 1]}") ;;
+            add) repo="${args[i + 2]}" ;;
+        esac
+    done
+    lock_dir="${XDG_STATE_HOME:-$HOME/.local/state}/skills"
+    mkdir -p "$lock_dir"
+    sleep "${FAKE_NPX_DELAY:-0}"
+    if [[ -n "${FAKE_NPX_FAIL_REPO:-}" && "$repo" == "$FAKE_NPX_FAIL_REPO" ]]; then
+        [[ -n "${FAKE_NPX_INTERVAL_LOG:-}" ]] && \
+            printf 'end %s %s\n' "$$" "$(date +%s%3N)" >> "$FAKE_NPX_INTERVAL_LOG"
+        exit 1
+    fi
+    # 真实 CLI 会把该次调用里所有 -s 都装上并逐条写入 lock
+    python3 - "$lock_dir/.skill-lock.json" "$repo" "${skills[@]}" <<'PY'
+import json, os, sys
+
+path, repo, *skills = sys.argv[1:]
+try:
+    with open(path, encoding="utf-8") as fp:
+        data = json.load(fp)
+except Exception:
+    data = {"version": 3, "skills": {}}
+for skill in skills:
+    data.setdefault("skills", {})[skill] = {"source": repo, "skillFolderHash": "emulated"}
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fp:
+    json.dump(data, fp)
+os.replace(tmp, path)
+PY
+fi
+
+[[ -n "${FAKE_NPX_INTERVAL_LOG:-}" ]] && \
+    printf 'end %s %s\n' "$$" "$(date +%s%3N)" >> "$FAKE_NPX_INTERVAL_LOG"
 exit 0
 EOF
 chmod +x "$fixture/bin/npx"
@@ -164,7 +207,7 @@ install_external_skills >"$fixture/out1" 2>&1
 grep -q 'add -y blader/humanizer -s humanizer -a universal -g' "$EXEC_LOG" || \
     fail "humanizer 应带 -a universal -g: $(<"$EXEC_LOG")"
 grep -q 'mattpocock/skills' "$EXEC_LOG" && fail "最新的 grilling 不应重装: $(<"$EXEC_LOG")"
-grep -q "skill 'grilling' 已安装且为最新版，跳过" "$fixture/out1" || \
+grep -q "已是最新，跳过 1 个 skill: grilling" "$fixture/out1" || \
     fail "grilling 应报跳过: $(<"$fixture/out1")"
 pass "最新版比对：最新的跳过、有更新的重装"
 
@@ -226,7 +269,7 @@ install_fixture_skill_dir grilling
 install_fixture_skill_dir humanizer
 write_fixture_lock
 install_external_skills >"$fixture/out6" 2>&1
-grep -q "skill 'grilling' 已安装且为最新版，跳过" "$fixture/out6" || \
+grep -q "已是最新，跳过 1 个 skill: grilling" "$fixture/out6" || \
     fail "grilling 应报跳过: $(<"$fixture/out6")"
 grep -q 'mattpocock/skills' "$EXEC_LOG" && fail "grilling 不应重装: $(<"$EXEC_LOG")"
 pass "幂等：已就绪且最新的 skill 再次运行被跳过"
@@ -288,5 +331,218 @@ grep -q -- '-a universal -g' "$fixture/out12" || fail "dry-run 应显示 -a univ
 grep -q 'Agents skills 安装完成' "$fixture/out12" || fail "缺少完成横幅"
 grep -q -- '--agents=universal' "$fixture/out12" || fail "缺少 --agents=universal 标识"
 pass "CLI: 非 claude 目标 --dry-run 全量流程"
+
+# ---- 并行安装相关的 fixture：多仓库清单 + 并发度测量 ----
+# fake npx 模拟真实 CLI 的 lock 读-改-写（读→sleep→写）：若多个 worker 共写同一 lock，
+# 后写者会覆盖先写者（真实实测 4 并行只剩 3 条），合并后条目数即可暴露该缺陷。
+SKILL_LOCK_MERGER="$REAL_REPO_ROOT/script/merge-skill-locks.py"
+
+mkdir -p "$fixture/repo-par/configs"
+cat > "$fixture/repo-par/configs/skills.toml" <<'TOML'
+[[sources]]
+name = "alpha"
+repo = "org-a/repo-a"
+skill = "alpha"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "beta"
+repo = "org-b/repo-b"
+skill = "beta"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "gamma"
+repo = "org-c/repo-c"
+skill = "gamma"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "delta"
+repo = "org-d/repo-d"
+skill = "delta"
+agent = "claude-code"
+scope = "global"
+TOML
+
+# 解析 start/end 打点（按 pid 配对），打印最大并发数
+max_concurrency() {
+    python3 - "$1" <<'PY'
+import sys
+
+starts, intervals = {}, []
+with open(sys.argv[1], encoding="utf-8") as fp:
+    for line in fp:
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        kind, pid, ms = parts[0], parts[1], int(parts[2])
+        if kind == "start":
+            starts[pid] = ms
+        elif kind == "end" and pid in starts:
+            intervals.append((starts.pop(pid), ms))
+points = []
+for begin, end in intervals:
+    points += [(begin, 1), (end, -1)]
+points.sort()
+cur = peak = 0
+for _, delta in points:
+    cur += delta
+    peak = max(peak, cur)
+print(peak)
+PY
+}
+
+reset_parallel_case() {
+    SKILLS_CONFIG="$fixture/repo-par/configs/skills.toml"
+    AGENTS_TARGET="universal"
+    SELECTED_SKILLS=(); UPDATE_RESOURCES=()
+    FORCE=true
+    export FAKE_NPX_LOCK=1 FAKE_NPX_DELAY=0.3
+    export FAKE_NPX_INTERVAL_LOG="$fixture/intervals"
+    : > "$EXEC_LOG"
+    : > "$FAKE_NPX_INTERVAL_LOG"
+}
+
+lock_skill_names() {
+    python3 -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fp:
+    print(" ".join(sorted(json.load(fp).get("skills", {}))))
+' "$SKILLS_LOCK_FILE" 2>/dev/null || echo "(no lock)"
+}
+
+# ---- 13) 并发安装：4 组并行（默认 SKILLS_INSTALL_JOBS=3），lock 合并后无丢失 ----
+reset_parallel_case
+rm -f "$SKILLS_LOCK_FILE"
+install_external_skills >"$fixture/out13" 2>&1
+[[ "$(grep -c '^npx ' "$EXEC_LOG")" -eq 4 ]] || fail "应调用 4 次 npx: $(<"$EXEC_LOG")"
+[[ "$(lock_skill_names)" == "alpha beta delta gamma" ]] || \
+    fail "并行安装后 lock 条目不全: $(lock_skill_names)"
+peak="$(max_concurrency "$FAKE_NPX_INTERVAL_LOG")"
+[[ "$peak" -ge 2 ]] || fail "应观察到并发（峰值 $peak），实为串行"
+pass "并行安装：多组并发执行，lock 合并后 4 条齐全（峰值 $peak）"
+
+# ---- 14) 并发度可调：SKILLS_INSTALL_JOBS=1 时退化为串行 ----
+reset_parallel_case
+rm -f "$SKILLS_LOCK_FILE"
+old_jobs="$SKILLS_INSTALL_JOBS"
+SKILLS_INSTALL_JOBS=1
+install_external_skills >"$fixture/out14" 2>&1
+SKILLS_INSTALL_JOBS="$old_jobs"
+[[ "$(max_concurrency "$FAKE_NPX_INTERVAL_LOG")" -eq 1 ]] || \
+    fail "SKILLS_INSTALL_JOBS=1 应串行: $(max_concurrency "$FAKE_NPX_INTERVAL_LOG")"
+[[ "$(lock_skill_names)" == "alpha beta delta gamma" ]] || \
+    fail "串行模式 lock 条目不全: $(lock_skill_names)"
+pass "并发度可调：SKILLS_INSTALL_JOBS=1 退化为串行"
+
+# ---- 15) 同仓库多 skill 合并为一次 add（一次 clone、一次 lock 写入）----
+reset_parallel_case
+SKILLS_CONFIG="$fixture/repo/configs/skills-grouped.toml"
+cat > "$SKILLS_CONFIG" <<'TOML'
+[[sources]]
+name = "grill-me"
+repo = "mattpocock/skills"
+skill = "grill-me"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "grilling"
+repo = "mattpocock/skills"
+skill = "grilling"
+agent = "claude-code"
+scope = "global"
+TOML
+rm -f "$SKILLS_LOCK_FILE"
+install_external_skills >"$fixture/out15" 2>&1
+[[ "$(grep -c '^npx ' "$EXEC_LOG")" -eq 1 ]] || \
+    fail "同仓库多 skill 应合并为 1 次 add: $(<"$EXEC_LOG")"
+grep -q -- '-s grill-me' "$EXEC_LOG" || fail "合并调用缺 -s grill-me: $(<"$EXEC_LOG")"
+grep -q -- '-s grilling' "$EXEC_LOG" || fail "合并调用缺 -s grilling: $(<"$EXEC_LOG")"
+[[ "$(lock_skill_names)" == "grill-me grilling" ]] || \
+    fail "合并安装 lock 条目不全: $(lock_skill_names)"
+grep -q "skill 'grilling' 已安装" "$fixture/out15" || fail "缺少安装成功汇报"
+grep -q "skill 'grill-me' 已安装" "$fixture/out15" || fail "缺少安装成功汇报"
+pass "同仓库多 skill：合并为一次 add，逐项汇报"
+
+# ---- 16) 失败隔离：一组失败不阻塞其它组，整体 rc=1 ----
+reset_parallel_case
+rm -f "$SKILLS_LOCK_FILE"
+export FAKE_NPX_FAIL_REPO="org-b/repo-b"
+set +e
+install_external_skills >"$fixture/out16" 2>&1
+rc16=$?
+set -e
+unset FAKE_NPX_FAIL_REPO
+[[ "$rc16" -ne 0 ]] || fail "有组失败时 rc 应为非 0，实际 $rc16"
+grep -q "外部 skill 安装失败: beta" "$fixture/out16" || \
+    fail "失败组未点名: $(<"$fixture/out16")"
+[[ "$(lock_skill_names)" == "alpha delta gamma" ]] || \
+    fail "失败组不应污染其它组结果: $(lock_skill_names)"
+pass "失败隔离：失败组 rc=1，其它组照常安装并入 lock"
+
+# ---- 17) lock 合并：既有条目与顶层字段不被覆盖 ----
+reset_parallel_case
+mkdir -p "$HOME/.agents"
+cat > "$SKILLS_LOCK_FILE" <<'EOF'
+{
+  "version": 3,
+  "lastSelectedAgents": ["universal"],
+  "skills": {
+    "unrelated": {
+      "source": "someone/else",
+      "skillFolderHash": "keep-me"
+    }
+  }
+}
+EOF
+install_external_skills >"$fixture/out17" 2>&1
+[[ "$(lock_skill_names)" == "alpha beta delta gamma unrelated" ]] || \
+    fail "合并应保留既有条目: $(lock_skill_names)"
+python3 -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fp:
+    data = json.load(fp)
+assert data["skills"]["unrelated"]["skillFolderHash"] == "keep-me", "既有条目被覆盖"
+assert data["lastSelectedAgents"] == ["universal"], "顶层字段被覆盖"
+' "$SKILLS_LOCK_FILE" || fail "合并破坏了既有 lock 内容"
+pass "lock 合并：保留既有条目与顶层字段，仅覆盖本次安装项"
+
+# ---- 18) 跨仓库重名：只保留首个并告警（同名并发写同一目录是数据竞争）----
+reset_parallel_case
+SKILLS_CONFIG="$fixture/repo-par/configs/skills.toml"
+cat > "$SKILLS_CONFIG" <<'TOML'
+[[sources]]
+name = "dup-first"
+repo = "org-a/repo-a"
+skill = "dup-skill"
+agent = "claude-code"
+scope = "global"
+
+[[sources]]
+name = "dup-second"
+repo = "org-b/repo-b"
+skill = "dup-skill"
+agent = "claude-code"
+scope = "global"
+TOML
+rm -f "$SKILLS_LOCK_FILE"
+install_external_skills >"$fixture/out18" 2>&1
+[[ "$(grep -c '^npx ' "$EXEC_LOG")" -eq 1 ]] || \
+    fail "重名 skill 应只安装一次: $(<"$EXEC_LOG")"
+grep -q 'add -y org-a/repo-a -s dup-skill' "$EXEC_LOG" || \
+    fail "应保留首个声明: $(<"$EXEC_LOG")"
+grep -q "skill 'dup-skill' 已被其它 source 声明" "$fixture/out18" || \
+    fail "缺少重名告警: $(<"$fixture/out18")"
+pass "跨仓库重名：保留首个并告警，避免并发写同一目录"
+
+# 复原：后续若继续追加用例，按真实默认值走
+FORCE=false
+SKILLS_CONFIG="$fixture/repo/configs/skills.toml"
+unset FAKE_NPX_LOCK FAKE_NPX_DELAY FAKE_NPX_INTERVAL_LOG
 
 echo "All agents-skills tests passed."

@@ -881,6 +881,8 @@ RESOURCE_PLANNER="$REPO_ROOT/script/resource-plan.py"
 # skill 最新版比对器：读 manifest TSV → 输出逐项安装决定（up-to-date/outdated/missing/unknown）。
 SKILL_FRESHNESS_CHECK="$REPO_ROOT/script/check-skill-freshness.py"
 
+# skill lock 合并器：并行安装的 worker 各写独立 lock，收尾时合并回规范 lock。
+SKILL_LOCK_MERGER="$REPO_ROOT/script/merge-skill-locks.py"
 
 # 交互读取单行输入；无 TTY 时返回失败（由调用方按非交互规则处理）。
 resource_prompt() {
@@ -1151,10 +1153,50 @@ skills_target_dir() {
     fi
 }
 
+# 并行 worker：安装一个 skill 组（同仓库 + 同 scope 的多个 skill 合并为一次 npx skills add，
+# 一次 clone、一次 lock 写入）。每个 worker 用独立 XDG_STATE_HOME：npx skills 的全局 lock 是
+# "读-改-写"且无文件锁，多个 add 并行写同一 lock 会互相覆盖丢条目（实测 4 个并行只剩 3 条），
+# 而丢条目的 skill 会被下次最新版比对判成"未安装"反复重装。故各写各的 lock，结束后统一合并。
+# 参数：repo scope skills(空格分隔) agent_key 工作目录 组标签(空格分隔的 source 名)
+install_skill_group() {
+    local repo="$1" scope="$2" skills="$3" agent_key="$4" wdir="$5" label="$6"
+    mkdir -p "$wdir"
+
+    local -a skill_list=()
+    IFS=' ' read -r -a skill_list <<< "$skills"
+
+    local -a args=(add -y "$repo")
+    local s
+    for s in "${skill_list[@]}"; do
+        args+=(-s "$s")
+    done
+    args+=(-a "$agent_key")
+    [[ "$scope" == "global" ]] && args+=(-g)
+
+    # add 后必须再传 -y：第一个 -y 是 npx 的（自动确认下载包），add -y 才是 skills CLI 的
+    #（跳过 "Proceed with installation?" 交互确认）。缺 add -y 时，非 agent 环境
+    #（无 AI_AGENT/CLAUDE_* env 且无 TTY，如 cron/CI/普通 shell）skills CLI 会卡在确认提示
+    # 不真正安装。update/remove 已带 -y，仅 add 有此问题。
+    # 输出落 log 文件：并行时若直接写 stdout，多个 worker 的进度框会互相撕裂。
+    if ! XDG_STATE_HOME="$wdir/state" npx -y skills@latest "${args[@]}" </dev/null \
+            >"$wdir/out.log" 2>&1; then
+        return 1
+    fi
+
+    local -a name_list=()
+    IFS=' ' read -r -a name_list <<< "$label"
+    local n
+    for n in "${name_list[@]}"; do
+        log "skill '$n' 已安装"
+    done >"$wdir/result"
+    return 0
+}
+
 # 安装外部 skills（读 skills.toml → npx skills add）
 # 参数：0 个或多个 name 过滤。无参 = 装全部；有参 = 只装命中的 name。
 # 已安装且与远端最新版一致（lock 的 skillFolderHash == 远端 tree oid）的项跳过安装；
 # 不存在的、有更新的、比对不了的（离线/限流/非 GitHub 源）照常安装，不因查不到而误跳过。
+# 需要安装的项按 仓库+scope 分组后并发执行（默认 SKILLS_INSTALL_JOBS=3），避免逐条串行堵塞。
 install_external_skills() {
     local -a filters=("$@")
     [[ -f "$SKILLS_CONFIG" ]] || { info "无 skills.toml，跳过外部 skill"; return 0; }
@@ -1181,19 +1223,23 @@ install_external_skills() {
         return 1
     }
 
+    # 汇报比对结论，并把"需要安装"的项收集为 name/repo/skill/scope 四列
     local name repo skill manifest_agent scope status detail
-    local rc=0
+    local -a pending=()
+    # 幂等跳过合并为一行汇报：逐项一行在重跑时占满屏幕，且与 Phase 5 验证重复。
+    local -a skipped_names=()
     while IFS=$'\t' read -r name repo skill manifest_agent scope status detail; do
         [[ -n "$name" ]] || continue
 
         case "$status" in
             up-to-date)
+                skipped_names+=("$name")
                 pass "skill '$name' 已安装且为最新版，跳过 (hash $detail)"
                 continue ;;
             outdated)
-                info "skill '$name' 有新版本，重新安装 ($detail)" ;;
+                pass "skill '$name' 有新版本，重新安装 ($detail)" ;;
             missing)
-                info "skill '$name' 未安装，开始安装 ($detail)" ;;
+                pass "skill '$name' 未安装，开始安装 ($detail)" ;;
             *)
                 warn "skill '$name' 无法比对远端版本（$detail），按需安装" ;;
         esac
@@ -1205,26 +1251,129 @@ install_external_skills() {
             warn "source '$name' 的 agent='$manifest_agent' 非 $agent_key，已按 $agent_key 安装"
         fi
 
-        local scope_flag=""
-        [[ "$scope" == "global" ]] && scope_flag="-g"
-
-        info "安装外部 skill: $name ($repo, skill=$skill, agent=$agent_key)"
-        if [[ "$DRY_RUN" == true ]]; then
-            dry "npx -y skills@latest add -y $repo -s $skill -a $agent_key $scope_flag"
-            continue
-        fi
-
-        # add 后必须再传 -y：第一个 -y 是 npx 的（自动确认下载包），add -y 才是 skills CLI 的
-        #（跳过 "Proceed with installation?" 交互确认）。缺 add -y 时，非 agent 环境
-        #（无 AI_AGENT/CLAUDE_* env 且无 TTY，如 cron/CI/普通 shell）skills CLI 会卡在确认提示
-        # 不真正安装。update/remove 已带 -y，仅 add 有此问题。
-        if ! npx -y skills@latest add -y "$repo" -s "$skill" -a "$agent_key" $scope_flag </dev/null; then
-            err "安装 skill '$name' 失败: $repo"
-            rc=1
-            continue
-        fi
-        log "skill '$name' 已安装"
+        pending+=("$name"$'\t'"$repo"$'\t'"$skill"$'\t'"$scope")
     done <<< "$plan"
+
+    if [[ ${#skipped_names[@]} -gt 0 ]]; then
+        log "已是最新，跳过 ${#skipped_names[@]} 个 skill: ${skipped_names[*]}"
+    fi
+
+    [[ ${#pending[@]} -gt 0 ]] || return 0
+
+    # 同一 skill 名被不同仓库重复声明时只保留首个：remote skill 的 identity 就是真实 skill 名
+    # (resource-plan.py: id=skill)，同名并发写同一目标目录是数据竞争。wildcard 身份是 source
+    # alias，不参与去重。
+    local -a deduped=()
+    local claimed="" entry e_name e_repo e_skill e_scope
+    for entry in "${pending[@]}"; do
+        IFS=$'\t' read -r e_name e_repo e_skill e_scope <<< "$entry"
+        if [[ "$e_skill" != "*" && "$claimed" == *"|$e_skill|"* ]]; then
+            warn "skill '$e_skill' 已被其它 source 声明，跳过 '$e_name'（同名并发安装会互相覆盖）"
+            continue
+        fi
+        [[ "$e_skill" != "*" ]] && claimed+="|$e_skill|"
+        deduped+=("$entry")
+    done
+
+    [[ ${#deduped[@]} -gt 0 ]] || return 0
+
+    # 分组：repo+scope 相同 → 一次 add（一次 clone、一次 lock 写入），组间并发。
+    local grouped
+    grouped="$(printf '%s\n' "${deduped[@]}" | awk -F'\t' '
+        {
+            key = $2 "\t" $4
+            if (!(key in order_seen)) { order_seen[key] = 1; order[++n] = key }
+            if ($3 == "*") star[key] = 1
+            else if (index("|" sk[key] "|", "|" $3 "|") == 0) {
+                sk[key] = (sk[key] == "" ? $3 : sk[key] " " $3)
+            }
+            nm[key] = (nm[key] == "" ? $1 : nm[key] " " $1)
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                key = order[i]
+                print key "\t" (key in star ? "*" : sk[key]) "\t" nm[key]
+            }
+        }
+    ')" || { err "分组 skill 安装计划失败"; return 1; }
+
+    local jobs="${SKILLS_INSTALL_JOBS:-3}"
+    local work
+    work="$(mktemp -d)"
+    local -a pids=() pdirs=()
+    local rc=0 gidx=0
+    local grepo gscope gskills gnames
+
+    while IFS=$'\t' read -r grepo gscope gskills gnames; do
+        [[ -n "$grepo" ]] || continue
+        [[ -n "$gskills" ]] || continue
+
+        local -a skill_list=()
+        IFS=' ' read -r -a skill_list <<< "$gskills"
+
+        if [[ "$DRY_RUN" == true ]]; then
+            local scope_flag=""
+            [[ "$gscope" == "global" ]] && scope_flag="-g"
+            local g
+            for g in "${skill_list[@]}"; do
+                dry "npx -y skills@latest add -y $grepo -s $g -a $agent_key $scope_flag"
+            done
+            dry "skill 已安装: $gnames"
+            continue
+        fi
+
+        gidx=$((gidx + 1))
+        local wdir="$work/g$gidx"
+        printf '%s\n' "$gnames" >"$wdir.label"
+
+        # 满槽时等最老的作业完成再放新作业（有限并发）
+        while ((${#pids[@]} >= jobs)); do
+            if ! wait "${pids[0]}"; then
+                rc=1
+                err "外部 skill 安装失败: $(<"${pdirs[0]}.label")"
+                sed -n '1,40p' "${pdirs[0]}/out.log" 2>/dev/null || true
+            else
+                cat "${pdirs[0]}/result" 2>/dev/null || true
+            fi
+            pids=("${pids[@]:1}")
+            pdirs=("${pdirs[@]:1}")
+        done
+
+        install_skill_group "$grepo" "$gscope" "$gskills" "$agent_key" "$wdir" "$gnames" &
+        pids+=("$!")
+        pdirs+=("$wdir")
+    done <<< "$grouped"
+
+    # 收尾：等全部剩余作业，逐组汇报（按批次顺序，输出不交错）
+    local i
+    for i in "${!pids[@]}"; do
+        if ! wait "${pids[$i]}"; then
+            rc=1
+            err "外部 skill 安装失败: $(<"${pdirs[$i]}.label")"
+            sed -n '1,40p' "${pdirs[$i]}/out.log" 2>/dev/null || true
+        else
+            cat "${pdirs[$i]}/result" 2>/dev/null || true
+        fi
+    done
+
+    # 把各 worker 的独立 lock 合并回规范 lock（否则丢失的条目会让 skill 反复重装）
+    if [[ "$DRY_RUN" != true && "$gidx" -gt 0 ]]; then
+        local -a worker_locks=()
+        local lock_file
+        for lock_file in "$work"/g*/state/skills/.skill-lock.json; do
+            [[ -f "$lock_file" ]] && worker_locks+=("$lock_file")
+        done
+        if [[ ${#worker_locks[@]} -gt 0 ]]; then
+            if ! python3 "$SKILL_LOCK_MERGER" --target "$SKILLS_LOCK_FILE" \
+                    "${worker_locks[@]}" >/dev/null; then
+                err "合并 skill lock 失败: $SKILL_LOCK_FILE"
+                warn "删除该文件后重跑可重建: rm -f $SKILL_LOCK_FILE"
+                rc=1
+            fi
+        fi
+    fi
+
+    rm -rf "$work"
     return "$rc"
 }
 
@@ -2209,6 +2358,8 @@ run_check_flow() {
 UNINSTALL_LIST=()
 UNINSTALL_JOBS=3
 
+# 外部 skill 并行安装的并发度（同仓库多 skill 合并为一次 add，组间并发）。
+SKILLS_INSTALL_JOBS=3
 
 remove_symlink_if_ours() {
     local path="$1"

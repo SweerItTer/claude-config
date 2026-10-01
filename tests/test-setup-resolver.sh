@@ -203,8 +203,12 @@ pass "旧参数整源更新仍工作"
 CONSUME_NPX_STDIN=true
 install_external_skills remote-source remote-same wildcard-src
 unset CONSUME_NPX_STDIN
-[[ "$(grep -c '^npx ' "$EXEC_LOG")" -eq 3 ]] || fail "外部 skill 安装不应因 npx stdin 跳过后续条目: $(<"$EXEC_LOG")"
-pass "外部 skill 安装逐项处理完整清单"
+[[ "$(grep -c '^npx ' "$EXEC_LOG")" -eq 2 ]] || fail "外部 skill 安装不应因 npx stdin 跳过后续条目: $(<"$EXEC_LOG")"
+grep -q 'add -y owner/repo -s remote-a -s same -a claude-code -g' "$EXEC_LOG" || \
+    fail "同仓库两项应合并为一次 add 且都不丢: $(<"$EXEC_LOG")"
+grep -q 'add -y owner/wildcard -s \* -a claude-code -g' "$EXEC_LOG" || \
+    fail "wildcard 源应整源安装: $(<"$EXEC_LOG")"
+pass "外部 skill 安装不丢清单项（同仓库合并为一次 add）"
 
 # ---- 12) --skill 单项安装完成后不继续 plugins/最终验证 ----
 FLOW_LOG="$fixture/install-flow.log"
