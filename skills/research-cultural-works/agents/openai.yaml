@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cultural Work Research"
+  short_description: "Evidence-first research for games and narrative works"
+  default_prompt: "Use $research-cultural-works to research this work from current web sources and build a traceable evidence corpus."
