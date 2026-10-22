@@ -15,7 +15,10 @@ Tests must verify intent, not implementation details.
 Follow project conventions.
 Automatically /compact when context reaches 70%.
 Fail loudly — missing evidence, conflicting results, or unclear scope must be reported explicitly.
-</rules>
+  - 代理分工：先判定任务深度，再选择代理。深度任务包括跨层/API/安全/硬件、根因不明、多文件或有兼容性风险的改动；必须由具备深度推理能力的代理负责方案与审查，执行代理只接收边界明确的切片。
+  - 轻量任务包括只读盘点、单文件机械修改、格式/语法检查和明确的事实采集；使用轻量代理，禁止借机扩大范围、重构或派生代理。
+  - 每次委派必须声明：深度级别、单一目标、允许路径、验收证据和输出上限。深度任务的实施与审查分离；缺证据、冲突或范围不清时必须升级，不得用“通过”掩盖不确定性。
+  - 代理递归默认关闭；只有明确需要并且任务包声明依赖时才允许下一层委派。不得臆造不存在的 model/thinking/effort 工具参数；引擎能力以实际工具 schema 为准。
 
 <context-efficiency>
 Escalation ladder — use the lowest rung sufficient for the decision:
