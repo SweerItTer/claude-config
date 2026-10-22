@@ -1,6 +1,6 @@
 ---
 name: evidence-driven-analysis
-description: Use only when the user explicitly requests evidence-based root-cause analysis and provides concrete logs, code, tests, metrics, diffs, packets, traces, or documents. Do not trigger for ordinary debugging, explanations, reviews, brainstorming, or opinions unless the user asks for a traceable evidence report.
+description: Use when the user explicitly requests evidence-based root-cause analysis and provides concrete logs, code, tests, metrics, diffs, packets, traces, or documents. Also use for crash forensics on embedded/cross-compiled targets: SIGSEGV register dumps (epc/ra/pc/lr) needing symbolization, memory-corruption or overflow layout analysis, protocol-frame byte-level analysis. Do not trigger for ordinary debugging, explanations, reviews, brainstorming, or opinions unless the user asks for a traceable evidence report.
 ---
 
 # Evidence-Driven Analysis
@@ -11,6 +11,14 @@ Produce conclusions another engineer can verify and act on without re-investigat
 
 **Core rule:** never let an unverified claim inherit the confidence of a verified one.
 A log event may be verified while the explanation attached to it is still only an inference.
+
+When the evidence is a crash dump or memory corruption on an embedded target —
+SIGSEGV registers (`epc`/`ra`), overflow layout, protocol frames — also read
+`references/binary-forensics.md` before writing the report. It covers exact-version
+rebuild, cross-toolchain struct-layout probes (DWARF/offsetof), register
+symbolization, raw-byte capture with `od -c`, and how the evidence labels below map
+to binary claims. One hard rule from it applies everywhere: struct layout for a
+cross-compiled target comes only from the target toolchain, never the host compiler.
 
 ## Evidence Collection (Claude Code)
 

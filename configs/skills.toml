@@ -39,22 +39,27 @@ agent = "claude-code"
 scope = "global"
 
 [[sources]]
-name = "code-review"
-repo = "mattpocock/skills"
-skill = "code-review"
+name = "archify"
+repo = "tt-a1i/archify"
+skill = "archify"
 agent = "claude-code"
 scope = "global"
 
-[[sources]]
-name = "i-have-adhd"
-repo = "ayghri/i-have-adhd"
-skill = "i-have-adhd"
-agent = "claude-code"
-scope = "global"
-
-[[sources]]
-name = "humanizer"
-repo = "blader/humanizer"
-skill = "humanizer"
-agent = "claude-code"
-scope = "global"
+# [[sources]]
+# name = "code-review"
+# repo = "mattpocock/skills"
+# skill = "code-review"
+# agent = "claude-code"
+# scope = "global"
+# [[sources]]
+# name = "i-have-adhd"
+# repo = "ayghri/i-have-adhd"
+# skill = "i-have-adhd"
+# agent = "claude-code"
+# scope = "global"
+# [[sources]]
+# name = "humanizer"
+# repo = "blader/humanizer"
+# skill = "humanizer"
+# agent = "claude-code"
+# scope = "global"

@@ -95,7 +95,14 @@ note = "建立代码调用链"
 
 [[plugins]]
 name = "OpenSpec"
-repo = "Fission-AI/OpenSpec"
+repo = "mindfold-ai/Trellis"
 method = "npx"
-command = "npm i -g @fission-ai/openspec@latest"
+command = "npm install -g @mindfoldhq/trellis@latest"
 note = "代码构思和实现"
+
+# [[plugins]]
+# name = "OpenSpec"
+# repo = "Fission-AI/OpenSpec"
+# method = "npx"
+# command = "npm i -g @fission-ai/openspec@latest"
+# note = "代码构思和实现"
