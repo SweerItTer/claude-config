@@ -257,7 +257,7 @@ jobs:
             rc=$?
             set -e
             echo "$output"
-            if printf '%s\n' "$output" | grep -q 'CLAUDE_HOME 未初始化，已后台启动 Claude Code' && [[ "$attempt" -lt 3 ]]; then
+            if printf '%s\n' "$output" | grep -q 'Claude Code 已在后台启动初始化' && [[ "$attempt" -lt 3 ]]; then
               echo "检测到 Claude 首次初始化，等待后重试..."
               sleep 5
               attempt=$((attempt + 1))
