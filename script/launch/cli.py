@@ -508,6 +508,19 @@ def _valid_repo(repo: str) -> bool:
     return sep != "" and "/" not in name and owner != "" and name != ""
 
 
+def _reject_unsafe_names(names: list[str], what: str) -> list[str] | None:
+    """外部参数边界：拒绝会被 shell/npx skills 展开的形态。
+
+    npx skills 1.9.0 的 removeCommand 把字面 '*' 转成 --all；'-' 开头会被当 flag。
+    命中即 err 并返回 None，调用方直接失败，绝不把这些值透传给 npx 或写进 toml。
+    """
+    bad = [n for n in names if n.strip() in ("", "*") or n.startswith("-")]
+    if bad:
+        util.err(f"{what} 不能是通配符或 flag 形态（'*' 会被 npx skills 当 --all 全量执行）: {bad!r}")
+        return None
+    return names
+
+
 def _render_source_block(source: manifest.SkillSource) -> str:
     """SkillSource → [[sources]] TOML 块文本（字段序固定；note 可选，引号转义）。"""
     def q(v: str) -> str:
@@ -655,6 +668,8 @@ def cmd_add(repo: str, skills_names: list[str], args, agent) -> int:
         util.err(f"repo 必须是 owner/name 格式（恰好一个 '/'）: {repo!r}")
         util.info("用法: launch add <owner/repo> <skill...> [--agent claude|agents] [--note <text>]")
         return 2
+    if _reject_unsafe_names(skills_names, "add 的 skill 名") is None:
+        return 2
     args.skills = skills_names
     sources = _pending_adds(args, agent)
     if not sources:
@@ -680,6 +695,8 @@ def cmd_add(repo: str, skills_names: list[str], args, agent) -> int:
 
 def cmd_remove(names: list[str], args, agent) -> int:
     """remove <name...>：卸载已装副本 + 从 skills.toml 删条目；永不触碰仓库 skills/ 源。"""
+    if _reject_unsafe_names(names, "remove 的名字") is None:
+        return 2
     sources = manifest.load_skills(_config("skills.toml"))
     by_name = {s.name: s for s in sources}
     missing = [n for n in names if n not in by_name]
@@ -819,6 +836,12 @@ if __name__ == "__main__":
     assert not _valid_repo("a/b/c")              # 两个 '/'
     assert not _valid_repo("/name")              # owner 空
     assert not _valid_repo("owner/")             # name 空
+    # 通配符/flag 边界：'*' 会被 npx skills removeCommand 当 --all，'-' 开头当 flag
+    assert _reject_unsafe_names(["ok"], "t") == ["ok"]
+    assert _reject_unsafe_names(["*"], "t") is None
+    assert _reject_unsafe_names(["-y"], "t") is None
+    assert _reject_unsafe_names(["", "*"], "t") is None
+    assert _reject_unsafe_names(["skill-*"], "t") == ["skill-*"]  # 后缀通配放行（install 阶段自然失败）
     src = manifest.SkillSource(name="x\"y\\z", repo="o/r", skill="s",
                                agent="claude-code", scope="global", note='a"b')
     block = _render_source_block(src)
