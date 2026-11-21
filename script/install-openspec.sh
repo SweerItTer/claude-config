@@ -7,8 +7,30 @@ DRY_RUN="${2:-false}"
 FORCE="${3:-false}"
 ACTION="${ACTION:-install}"
 
-# shellcheck source=./install-common.sh
-source "$REPO_ROOT/script/install-common.sh"
+# 本文件原 source script/install-common.sh（已随 setup.sh 重写删除）；
+# 只内联 OpenSpec 用到的 6 个 helper。
+pass() { echo "  [PASS] $*"; }
+info() { echo "  [INFO] $*"; }
+ok()   { echo "  [OK] $*"; }
+warn() { echo "  [WARN] $*"; }
+err()  { echo "  [ERR] $*"; }
+
+run_module_action() {
+    local action="$1"
+    shift
+    case "$action" in
+        install|update) install "$@"; verify "$@" ;;
+        reinstall)      uninstall "$@"; install "$@"; verify "$@" ;;
+        uninstall)      uninstall "$@" ;;
+        verify)         verify "$@" ;;
+        status)         status "$@" ;;
+        doctor)         doctor "$@" ;;
+        *)
+            err "不支持的 ACTION: $action"
+            return 1
+            ;;
+    esac
+}
 
 OPENSPEC_PACKAGE="@fission-ai/openspec"
 OPENSPEC_INIT_ARGS=(--tools claude)

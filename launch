@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""launch — 顶层可执行 shim（替代 setup.sh）。
+
+用法: ./launch [子命令] [全局 flag...]（无参 = help，退出 0）
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "script"))
+
+from launch.cli import main
+
+sys.exit(main())

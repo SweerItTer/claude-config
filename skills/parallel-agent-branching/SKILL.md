@@ -1,7 +1,4 @@
 ---
-# ///TODO: fix compatibility 缩进续行不是 block scalar（普通标量跨行非法）：resource-plan.py 报
-# "缩进续行缺少 block scalar" 并退出 1，连带 ./setup.sh --tui 与 tests/test-installer-tui.sh 全线失败；
-# 改为 block scalar（>-）或并成一行后删除本标记。
 name: parallel-agent-branching
 description: >-
   Orchestrates multi-agent parallel development as a git pipeline: one
@@ -19,7 +16,8 @@ description: >-
   fit against the actual project (branch model, CI, repo rules) before
   committing to the scheme; skip it when unsuitable.
 license: CC-BY-SA-4.0
-compatibility: Requires git >= 2.30 (worktrees) and a task-delegation tool
+compatibility: >-
+  Requires git >= 2.30 (worktrees) and a task-delegation tool
   that can run background subagents. Optional: docker for local CI
   rehearsal.
 metadata:

@@ -9,7 +9,7 @@ timeout_seconds="${CLAUDE_DOCTOR_TIMEOUT:-120}"
 omc_cli="$(find "$claude_home/plugins/cache/omc/oh-my-claudecode" -mindepth 3 -maxdepth 3 -path '*/bridge/cli.cjs' -type f 2>/dev/null | sort -V | tail -1 || true)"
 
 if [[ -z "$omc_cli" ]]; then
-    echo "FAIL: OMC plugin 未安装 (cache/omc/oh-my-claudecode 下无 bridge/cli.cjs)。请先运行 ./setup.sh 安装 plugin。"
+    echo "FAIL: OMC plugin 未安装 (cache/omc/oh-my-claudecode 下无 bridge/cli.cjs)。请先运行 ./launch install 安装 plugin。"
     exit 1
 fi
 

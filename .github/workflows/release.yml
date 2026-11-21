@@ -22,10 +22,10 @@ jobs:
       - name: Run regression tests
         run: |
           set -euo pipefail
-          bash -n setup.sh
-          bash tests/test-manifest-parsing.sh
-          bash tests/test-resource-plan.sh
-          bash tests/test-setup-resolver.sh
+          python3 -m compileall script/launch
+          bash tests/test-launch-manifest.sh
+          bash tests/test-launch-plan.sh
+          bash tests/test-launch-settings.sh
 
       - name: Create GitHub Release
         env:

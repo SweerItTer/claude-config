@@ -1,6 +1,6 @@
 # Claude Code Configuration
 
-一键收敛 Claude Code 配置与插件栈。脚本幂等，可安全重复运行。
+一键收敛 Claude Code 配置与插件栈。入口是顶层 `./launch`（Python CLI），幂等，可安全重复运行。
 
 ## 快速开始
 
@@ -11,46 +11,39 @@ git clone --recurse-submodules git@github.com:SweerItTer/claude-config.git
 cd ~/claude-config
 ```
 
-### 2) 选择一种搭建路径
+### 2) 选择一种安装路径
 
 ```bash
 # 最小路径：只同步核心配置（CLAUDE.md / rules / settings；已存在的 settings.json 会保留并补齐缺失项）
-./setup.sh core
+./launch core
 
-# 推荐路径：完整安装核心配置、外部 skills 与第三方 plugins
-./setup.sh --force
+# 推荐路径：完整安装 Claude Code、核心配置、外部 skills 与第三方 plugins
+./launch install
 
-# 只做检查，不改动已有配置
-./setup.sh verify
+# 只读列出已安装 skills（~/.claude 与 ~/.agents 两组，==== 分隔）
+./launch list
 
-# 检测 Claude Code CLI 本体安装状态（版本/路径/doctor/auth）
-./setup.sh check
-
-# 只读列出清单声明的外部 skills/plugins 与仓库本地 skills
-./setup.sh list
+# 检测核心配置 + Claude Code CLI（版本/doctor/auth）+ plugin 注册
+./launch doctor
 
 # 只安装 skills 到 ~/.agents/skills/（非 claude 目标：跳过 claude 其余流程）
-./setup.sh --agents=codex
+./launch --agent agents install
 
-# 交互式路径（可选）：构建 FTXUI TUI 后勾选安装，见「交互式 TUI 安装器」
-./setup.sh --tui
+# 交互式路径（可选）：curses TUI 勾选安装
+./launch --tui
 ```
 
-### 3) setup 会先尝试补环境
+### 3) 环境依赖
 
-推荐系统已具备这些命令：`git` `curl` `tar` `node` `npm` `python3`。
+需要系统已具备：`git` `curl` `tar` `node` `npm` `python3`（Python ≥ 3.10）。
 
-如果缺少其中任意一个，`setup.sh` 会先尝试自动补环境：
-- `git` / `curl` / `tar` / `python3`：优先走系统包管理器（`apt-get` / `dnf` / `yum` / `brew` / `pacman`）
-- `node` / `npm`：改走 Node 官方推荐的脚本方式，先安装 `nvm`，再安装并切换到**最新 LTS** Node.js（自带 npm）；若当前已装的是不兼容的 current 版本，setup 会主动切回 LTS
-
-实在装不上，才会报错并提示你手动补装。
+`launch` 只检测并提示，不自动安装；缺失时给出可直接粘贴的安装命令（R9：砍掉 sudo/nvm 自动安装）。
 
 ### 4) 安装后验证
 
 ```bash
 claude --version
-./setup.sh verify
+./launch doctor
 ls ~/.claude/plugins/marketplaces/
 ```
 
@@ -61,155 +54,142 @@ grep "OMC:START" ~/.claude/CLAUDE.md
 ls ~/.claude/agents/ ~/.claude/commands/
 ```
 
-带 `--smoke-test` 的安装会执行清单驱动的安装后验证：
+带 `--smoke-test` 的 doctor 会执行扩展冒烟验证：
 
-- **skills**：`skills.toml` 中的 `name` 是 source 别名，`skill = "*"` 表示该仓库的全部 skills，不是单个实际 skill 名。setup 会用 `npx -y skills@latest list -g --json` 按 `source` 找到实际安装项，检查每个 `SKILL.md`，再逐项确认名称出现在 `claude -p /context` 的 Skills 表中。若当前 `skills` CLI 的 list 输出漏掉已安装 agent，验证器会使用该 CLI 自己维护的 `~/.agents/.skill-lock.json` 精确恢复 source/path，不会退化为模糊目录匹配。
+- **skills**：`skills.toml` 中的 `name` 是 source 别名，`skill = "*"` 表示该仓库的全部 skills。逐项确认名称出现在 `claude -p /context` 的 Skills 表中，并结合 `~/.claude/skills/` 的 frontmatter name 判定是否实际安装。
 - **plugins**：从 `plugins.toml` 逐项检查精确的 `<name>@<marketplace>`，并要求 `claude plugin list --json` 返回 `scope = "user"`；缓存目录存在不等于已注册。
-- **settings**：检查 `settings.template.json` 的非空键已存在于目标 `settings.json`。增量合并的“保留已有值、补齐缺失键、二次运行稳定”由 `tests/test-settings-merge.sh` 在隔离 fixture 中验证。
+- **settings**：检查 `settings.template.json` 的非空键已存在于目标 `settings.json`。增量合并的“保留已有值、补齐缺失键、二次运行稳定”由 `tests/test-launch-settings.sh` 在隔离 fixture 中验证。
 
-仓库顶层 `skills/` 下的 skill（包括 `misuse-driven-robustness-testing` 和 `project-governance`）是仓库自有源，不加入外部 `configs/skills.toml`；仅解压到仓库不会自动安装到 `~/.claude/skills`，也不会因此出现在当前用户的 `/context` 中。
+仓库顶层 `skills/` 下的 skill 是仓库自有源，不加入外部 `configs/skills.toml`；仅解压到仓库不会自动安装到 `~/.claude/skills`，也不会因此出现在当前用户的 `/context` 中。
 
 ## CLI 使用手册
 
-`setup.sh` 是一个幂等安装器：核心配置、外部 skills、第三方 plugins 三者分离，可整体安装，也可按类型、按单项精确操作。技能用 **skills.toml** 声明（`npx skills` 安装），插件用 **plugins.toml** 声明（`claude plugin` 安装）。
+`launch` 是一个幂等安装器：核心配置、外部 skills、第三方 plugins 三者分离，可整体安装，也可按类型、按单项精确操作。技能用 **skills.toml** 声明（`npx skills` 安装），插件用 **plugins.toml** 声明（`claude plugin` 安装）。
+
+### 命令面
+
+```text
+launch [--agent claude|agents] [--dry-run] [-y] [-v] [--no-color] [--ci]
+       [--no-verify] [--no-claude] [--force] [--skip SKILLS,PLUGINS]
+       [--smoke-test] [--choose KIND:ID=CHOICE] [--tui]
+       <command> [args...]
+
+install [names...] [--plugin N...]   装 skills（无 N=全量；--plugin 装第三方 plugin）
+uninstall <names...> [--all|--core]  卸载（裸名先 skill 后 plugin；typed skill:/plugin: 直通）
+update [names...]                    无 N = git pull + 全量更新；N 可重复 = 指定项
+list                                 列已安装 skills（默认双 agent，==== 分隔）
+core                                 仅同步 claude 核心配置（claude 目标专属）
+doctor [--smoke-test]                核心验证 + claude CLI/诊断/plugin 注册 + 冒烟
+```
+
+全局 flag 可放在子命令前或后（`launch install --dry-run` 与 `launch --dry-run install` 等价）。退出码：0 成功、1 部分失败、2 用法错误。无参数裸跑 `./launch` 只打印 help，退出 0，不改任何文件。
 
 ### 安装
 
 ```bash
-# 全自动完整安装：核心配置 + 所有外部 skills + 所有第三方 plugins
-./setup.sh
+# 全自动完整安装：Claude Code + 核心配置 + 所有外部 skills + 所有第三方 plugins
+./launch install
 
-# 只装核心配置（CLAUDE.md / rules / settings.json），不碰 skills/plugins
-./setup.sh core
+# 只装核心配置，不碰 skills/plugins
+./launch core
 
 # 强制重跑所有步骤（忽略幂等检测，适合修复异常）
-./setup.sh --force
+./launch install --force
 ```
 
-**按类型安装**：
+**按指定项安装**：
 
 ```bash
-# 只装 skills，跳过 plugins
-./setup.sh --skip-plugins
+# 只装指定的一个/多个 skill（可重复；名字取 configs/skills.toml 的 name 或仓库 skills/ 目录名）
+./launch install grilling evidence-driven-analysis
 
-# 只装 plugins，跳过 skills
-./setup.sh --skip-skills
+# 只装指定的第三方 plugin（名字取 configs/plugins.toml）
+./launch install --plugin context-mode --plugin code-review
 
-# 只装核心配置 + 指定的一个/多个 plugin（可重复，名字取 configs/plugins.toml）
-./setup.sh --plugin context-mode --plugin code-review
-
-# 混搭：只装指定 plugin 和仓库自有 skill（本地 skills/ 目录），其余跳过
-./setup.sh --plugin context-mode --update-local-skill evidence-driven-analysis
+# 混搭：--plugin 与位置参数 skill 可同时出现
+./launch install --plugin context-mode grilling
 ```
 
-> `--skill`（按 skills.toml 选外部 skill）当前无合法值：双源冲突治理后 `configs/skills.toml` 为空清单，外部 skill 全部经 `configs/plugins.toml` 的 claude plugin 机制提供（oh-my-claudecode / ponytail / superpowers 均为 plugin 条目）。若在 skills.toml 新增 npx source，`--skill <名字>` 恢复可用（名字取 source 的 `name`）。
+> 指定了任一 `--plugin` 或位置参数 skill 即进入「指定安装」模式：只装被指定的，未指定类别不装；全不指定 = 全量安装所有 skills + plugins。
 
-安装时若同时给了 `--skill` 和 `--plugin`，则只装这些指定项，其余项不装。全不指定 = 全量安装所有 skills + plugins。
-
-> 互斥校验：`--skip-skills` 与 `--skill` 不能同时用，`--skip-plugins` 与 `--plugin` 不能同时用；`--update-all` 与 `--update-local-skill`、`--update-resource` 也不可同时用（与 `--update-skill`/`--update-plugin` 同一条校验）。
+> `--plugin` 与 `--skip` 互斥；指定名安装与 `--skip` 也互斥（argparse 校验后报 exit 2）。
 
 ### 更新
 
 ```bash
-# 更新全部外部 skills + plugins
-./setup.sh --update-all
+# 更新仓库（git pull --ff-only）+ 全部外部 skills + plugins
+./launch update
 
-# 只更新一个/多个指定外部 skill（可重复；当前 skills.toml 为空清单，见下）
-# ./setup.sh --update-skill <skills.toml 中的 source 名>
+# 只更新一个/多个指定项（可重复；裸名先 skill 后 plugin 消歧，typed skill:/plugin: 直通）
+./launch update grilling
+./launch update skill:grilling plugin:code-review
 
-# 更新仓库自有 skill：创建/刷新 ~/.claude/skills 下的软链接（可重复）
-./setup.sh --update-local-skill evidence-driven-analysis \
-  --update-local-skill three-tier-orchestration
-
-# 只更新一个/多个指定 plugin（可重复）
-./setup.sh --update-plugin code-review
-
-# 指定项里混 plugins 和仓库自有 skill
-./setup.sh --update-plugin context-mode --update-local-skill evidence-driven-analysis
-
-# 更新某类型全部（core/all 也接受）
-./setup.sh --update-skill core
-./setup.sh --update-plugin all
+# 同名 local/remote 冲突用 --choose 解决（保留现语义）
+./launch update skill:evidence-driven-analysis --choose skill:evidence-driven-analysis=local
 ```
 
-- 外部 skill 走 `npx skills update`，仓库自有 skill 走 `--update-local-skill` 刷新软链接，plugin 走 `claude plugin update`；外部 skill 的更新现经 plugin 机制（`claude plugin update`）完成，`--update-skill` 仅在 skills.toml 有 npx source 时可用
+- 外部 skill 走 `npx skills update`，仓库自有 skill 重铺 symlink（源码即改即生效），plugin 走 `claude plugin update`
 - 任一项失败，最终退出码非零（失败聚合，不会因后续项成功而覆盖）
-- `--update-all` 与 `--update-skill`/`--update-plugin` 互斥，不能同时用
+- 无参 `update` 与指定项 `update <names...>` 是两条路径，不混用
 
 ### 卸载
 
 ```bash
-# 卸载一个/多个指定 plugin（typed，明确区分 skills/plugin）
-# （当前 skills.toml 为空清单，外部 skill 经 plugin 提供，`--uninstall-skill` 仅在 skills.toml 有 source 时可用）
-./setup.sh --uninstall-plugin oh-my-claudecode
-./setup.sh --uninstall-plugin oh-my-claudecode --uninstall-plugin ponytail
+# 卸载一个/多个指定目标（裸名先 skill 后 plugin 消歧；typed 精确指定来源）
+./launch uninstall oh-my-claudecode
+./launch uninstall plugin:oh-my-claudecode plugin:ponytail
+./launch uninstall skill:evidence-driven-analysis
 
-# 卸载仓库自有 skill（本地 skills/ 目录下的软链接）—— 走统一资源入口
-./setup.sh --uninstall-resource skill:evidence-driven-analysis
-
-# 卸载一个/多个指定 plugin（typed）
-./setup.sh --uninstall-plugin code-review
-./setup.sh --uninstall-plugin code-review --uninstall-plugin feature-dev
-
-# 卸载单个目标（无类型时按 skill-first 解析；context-mode 仅是 plugin，推荐使用 typed flag）
-./setup.sh --uninstall-plugin context-mode
-
-# 完全卸载：core 配置 + 全部 skills + plugins
-./setup.sh --uninstall all
+# 完全卸载：core 配置 + 清单全部 skills + plugins
+./launch uninstall --all
 
 # 只卸载 core 配置
-./setup.sh --uninstall core
+./launch uninstall --core
 ```
 
-- skill 走 `npx skills remove`，plugin 走 `claude plugin uninstall`；同一仓库只通过一种来源安装，避免 npx skill 与 plugin skill 重复声明
-- 多个清单项并发卸载（默认同时 3 个，`UNINSTALL_JOBS` 可调）；`core`/`all` 串行
-- **typed flags（`--uninstall-skill`/`--uninstall-plugin`）优先**：skill 与 plugin 由不同清单声明，即使名称相同也用 typed flag 精确指定来源；当前 `context-mode`、`oh-my-claudecode`、`ponytail`、`superpowers` 均为 plugin 条目（双源冲突治理后 skills.toml 为空清单）
-- 卸载只移除 `~/.claude/skills/` 下由 `npx skills` 安装的副本和 `claude plugin uninstall` 卸载的插件，不触碰本仓库源文件
+- skill 走 `npx skills remove`（+ 自有 symlink 移除），plugin 走 `claude plugin uninstall`
+- 多个目标并发卸载（默认同时 3 个）；`--all`/`--core` 串行先行
+- `--all` 与 `--core` 互斥；裸名在两个清单都未命中时报错 exit 2
+- 卸载只移除安装目标目录下的受控副本，不触碰仓库源文件
 - `settings.json` 默认保留，避免误删你的自定义配置。彻底重置：`rm ~/.claude/settings.json`
 
-### 验证 / 状态 / 诊断
+### 列表 / 诊断
 
 ```bash
-./setup.sh verify     # 检查核心配置是否齐全
-./setup.sh status     # 检查核心配置与模块状态
-./setup.sh doctor     # 诊断路径，排查安装异常
-./setup.sh check      # 检测 Claude Code CLI 本体安装状态（版本/路径/doctor/auth）
-./setup.sh list       # 只读列出声明的外部 skills/plugins 与仓库本地 skills（按资源类型分组，冲突项标注）
-./setup.sh --smoke-test   # 运行 doctor + 上下文注入检查
+./launch list              # ~/.claude 与 ~/.agents 两组，==== 分隔
+./launch list --agent agents   # 只列 ~/.agents/skills/
+./launch doctor            # 核心验证 + claude CLI（版本/doctor/auth）+ plugin 注册
+./launch doctor --smoke-test   # 扩展：OMC doctor 子进程 + claude -p /context 注入冒烟
 ```
 
 ### 通用选项
 
 ```bash
-./setup.sh --dry-run      # 预览，不实际修改（与真实运行同构，含 Phase 5 验证）
-./setup.sh --ci           # CI 模式，跳过手动提示，完整日志写入临时文件并打印路径
-./setup.sh -y / --yes     # 跳过裸跑确认
-./setup.sh -v / --verbose # 恢复逐项输出（默认只报每步一行）
-./setup.sh --no-color     # 关闭 ANSI 颜色（非 TTY 或 NO_COLOR=1 时自动关闭）
-./setup.sh --no-claude    # 跳过 Claude Code CLI 安装
-./setup.sh --no-verify    # 跳过验证
-./setup.sh --agents=codex  # 只安装 skills 到 ~/.agents/skills/（见「非 claude 目标的 skills 安装」）
-./setup.sh --tui          # 启动交互式 TUI 安装器（见下文）
-./setup.sh -h             # 查看帮助（按 安装/更新/卸载/诊断/通用/高级 分组）
+./launch --dry-run        # 预览，不实际修改
+./launch --ci             # CI 模式，跳过手动提示，完整日志写入临时文件并打印路径
+./launch -y / --yes       # 跳过确认
+./launch -v / --verbose   # 恢复逐项输出（默认只报每步一行）
+./launch --no-color       # 关闭 ANSI 颜色（非 TTY 或 NO_COLOR=1 时自动关闭）
+./launch --no-claude      # 跳过 Claude Code CLI 安装
+./launch --no-verify      # 跳过最终验证
+./launch --agent claude   # 完整 claude 目标（默认；别名 claude-code）
+./launch --agent agents   # 只装 skills 到 ~/.agents/skills/（见「非 claude 目标的 skills 安装」）
+./launch --tui            # 启动交互式 TUI（见下文）
+./launch -h               # 查看帮助
 ```
 
 #### 输出约定
 
 - 默认每步一行：`✔` 完成/已就绪、`▲` 提醒、`✖` 失败、`▸` 阶段标题。
-- 幂等跳过合并成一行（`✔ 已是最新，跳过 N 个 skill: …`），不再逐项刷屏；`-v` 恢复逐项。
-- `check` / `verify` / `status` / `doctor` / `list` 的输出本身就是产物，始终完整打印，不受 `-v` 影响。
-- 失败时给出可直接粘贴的重试命令（`重试: ./setup.sh … --force`），取代「请检查上方日志」。
-- `--dry-run` 预览与真实运行逐字同构（含 Phase 5）；`--ci` 会把完整日志写入 `mktemp` 临时文件并打印路径，交互式路径不写日志。
-
-#### 裸跑确认
-
-零参数直接 `./setup.sh` 时，先打印预执行摘要（核心配置 + 外部 skill 名单 + 第三方 plugin 名单），再问一次 `继续安装? [Y/n]`。`--ci`、`--yes`、`--dry-run` 或非 TTY（如管道/重定向）下不询问，自动化契约不变。
+- 幂等跳过合并成一行，不逐项刷屏；`-v` 恢复逐项。
+- `doctor` / `list` 的输出本身就是产物，始终完整打印，不受 `-v` 影响。
+- 失败时给出可操作提示；`--ci` 会把完整日志写入 `mktemp` 临时文件并打印路径。
 
 ### 非 claude 目标的 skills 安装
 
-`--agents=NAME` 的 `NAME` 为 `claude`/`claude-code`（缺省）时走完整 claude 流程；**其余任意取值**进入只装 skills 模式：skills 统一装到 `~/.agents/skills/`，**其余全部跳过**（不装 Claude Code / 核心配置 / plugins，也不跑 claude 验证）。
+`--agent agents` 进入只装 skills 模式：skills 统一装到 `~/.agents/skills/`，**其余全部跳过**（不装 Claude Code / 核心配置 / plugins，也不跑 claude 验证）。
 
-`~/.agents/skills/` 是 `npx skills` 的 universal 全局目录，codex/gemini/cursor/github-copilot 等多个 agent 共享同一份，因此不需要为某个 agent 单独适配，也不会像 `-a '*'` 那样把 skill 扩散成各 agent 目录下的副本。
+`~/.agents/skills/` 是 `npx skills` 的 universal 全局目录，codex/gemini/cursor/github-copilot 等多个 agent 共享同一份，因此不需要为某个 agent 单独适配。
 
 安装来源两类，与 claude 模式一致：
 
@@ -218,22 +198,17 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 ```bash
 # 全量：外部全部 + 仓库自有全部
-./setup.sh --agents=codex
+./launch --agent agents install
 
-# 指定安装：只装外部 grilling（其余类别不装）
-./setup.sh --agents=codex --skill grilling
-
-# 指定安装：只装仓库自有 tmux-session-manager（其余类别不装）
-./setup.sh --agents=codex --update-local-skill tmux-session-manager
+# 指定安装：只装这两个（其余类别不装）
+./launch --agent agents install grilling diagram-design
 ```
-
-> 指定了任一 `--skill`/`--update-local-skill` 即进入「指定安装」模式：只装被指定的，未指定类别不装；都不指定 = 全量。
 
 ### skills 最新版比对（跳过已是最新的）
 
 外部 skills 安装前先比对已安装版本与远端最新版，**已存在且最新则跳过，不重复安装**：
 
-- 数据源是 `npx skills` 的全局 lock（`$XDG_STATE_HOME/skills/.skill-lock.json`，缺省 `~/.agents/.skill-lock.json`）里记录的 `skillFolderHash`，与远端仓库 tree 中该 skill 目录的 oid 比对（与 `npx skills update` 同一口径）
+- 数据源是 `npx skills` 的全局 lock（`~/.agents/.skill-lock.json`，`SKILLS_LOCK_FILE` 可覆盖）里记录的 `skillFolderHash`，与远端仓库 tree 中该 skill 目录的 oid 比对（与 `npx skills update` 同一口径）
 - `lock` 无记录、来源不符、或目标目录缺 `SKILL.md` → 视为**未安装**，安装
 - 远端 sha 与记录不一致 → **有新版本**，重装
 - 比对不了（离线、GitHub API 限流、非 GitHub 源）→ **unknown，照常安装**，绝不因为查不到就误跳过
@@ -241,123 +216,21 @@ ls ~/.claude/agents/ ~/.claude/commands/
 
 仓库自有 skills 是源码 symlink，内容即改即生效，不存在版本比对；已是同一 symlink 时幂等跳过。
 
-## 故障恢复
-
-- **安装后异常**：
-  ```bash
-  ~/claude-config/setup.sh --force
-  ```
-- **只想检查，不想重装**：
-  ```bash
-  ~/claude-config/setup.sh verify
-  ```
-- **需要更深的检查**：
-  ```bash
-  ~/claude-config/setup.sh --smoke-test
-  ```
-- **插件 hook 报错**：先 `/reload-plugins`，仍有问题再重跑 setup
-- **自动补环境失败**：按 setup 输出的提示补装；其中 `node` / `npm` 建议继续走 Node 官方推荐脚本路径（`nvm` + 最新 LTS Node.js）
-- **版本回退**：
-  ```bash
-  git -C ~/claude-config log --oneline
-  git -C ~/claude-config checkout <commit>
-  ~/claude-config/setup.sh --force
-  ```
-
-## 交互式 TUI 安装器
-
-除了纯命令行，还提供基于 FTXUI 的交互式 TUI（`C++17`），让零基础用户不用读 CLI 文档就能勾选安装。
-
-### 构建
-
-TUI 不是默认构建的，需要先安装 FTXUI 并编译：
+### 交互式 TUI
 
 ```bash
-# 1) 安装 FTXUI 7.0.2（Ubuntu 24.04 官方源无 libftxui-dev，需从源码构建）
-git clone --depth 1 --branch v7.0.2 https://github.com/ArthurSonzogni/FTXUI.git /tmp/FTXUI
-cmake -S /tmp/FTXUI -B /tmp/FTXUI/build -DCMAKE_BUILD_TYPE=Release
-cmake --install /tmp/FTXUI/build
-
-# 2) 构建 TUI 二进制（输出到 build/installer-tui/installer-tui）
-cmake -S tools/installer-tui -B build/installer-tui
-cmake --build build/installer-tui
+./launch --tui
 ```
 
-> 仅支持 Linux x86_64。CMake 在配置期检查 `CMAKE_SYSTEM_NAME == Linux` 且处理器为 x86_64，否则直接 FATAL_ERROR。
+基于 curses 的面板式多选（无需额外依赖，Python 自带 curses）：available（可安装）/ installed（可卸载）/ update 候选三个面板，`↑/↓` 移动、`space` 勾选、`enter` 执行当前面板勾选批、`tab` 切面板、`a` 切换 agent 目标、`q` 退出、`?` 帮助。
 
-### 启动
+TUI 与 CLI 共享同一套驱动函数；无 TTY（stdin 非终端）时报错退出 2。Windows 无 curses：本仓库用户均为 Linux/macOS/WSL，不做替代实现。
 
-```bash
-./setup.sh --tui
-```
-
-`setup.sh` 在任意 argv 位置识别 `--tui`，找到已构建的二进制后 `exec` 进入 TUI；未构建时给出上面的构建命令并退出 2。
-
-也可以直接运行二进制（默认从 cwd 向上定位 `setup.sh`+`configs/`，或用 `--repo-root` 指定）：
-
-```bash
-build/installer-tui/installer-tui --repo-root ~/claude-config
-```
-
-### 统一资源语义
-
-TUI 与 CLI 共享同一套资源模型（`script/resource-plan.py`）：资源按 **identity**（`skill:<真实名>` / `plugin:<名>@<marketplace>`）统一管理，不区分「本地 skill / 外部 skill / plugin」入口。本地候选来自仓库 `skills/`，远程候选来自 `configs/` 清单；**只有当同一 identity 同时存在 local 与 remote 候选（冲突）时**才需要用户选择来源，普通唯一资源自动处理，绝不静默默认来源。
-
-### 五个页面
-
-| 页 | 功能 |
-|----|------|
-| **1 Install** | 统一资源分列勾选（本地 skills / 外部 skills / plugins）。全不勾选 = 全量安装；只勾部分则只装勾选的，未选类别自动跳过（对应 CLI `--skip-skills`/`--skip-plugins`）。页面顶部有冲突时显示冲突区块 |
-| **2 Update** | 单选框：`全部外部 skills + plugins`（对应 `--update-all`）/ `选中的项目`（复用 Install 页勾选，本地 skill 走 symlink 同步，冲突走统一 resolver） |
-| **3 Uninstall** | 单选框：`完全卸载`（对应 `--uninstall all`）/ `仅 core` / `选中的项目`（本地 skill 卸载只删受控软链接，保留仓库源；冲突资源只能勾选一个来源） |
-| **4 诊断** | 单选框：`verify` / `status` / `doctor`（只读检查，对应 CLI 的 `verify`/`status`/`doctor`，执行 `setup.sh <action>`） |
-| **5 Agents Skills** | 只安装 skills 到 `~/.agents/skills/`（非 claude 目标）。复用外部 + 本地 skills 勾选；全不勾选 = 全量，勾选 = 指定安装（对应 CLI `--agents=<非 claude> [--skill ...] [--update-local-skill ...]`），不涉及 plugins |
-
-### 冲突处理
-
-同一 identity 的 local（仓库 `skills/` 路径）与 remote（URL/repository）候选同时存在时，Install 页顶部列出冲突区块，每项显示 **local 路径 vs remote URL/repository**，radiobox 三选一：`local` / `remote` / `skip`。未解决冲突时不能确认执行；非交互环境（`--ci`、无 TTY）未解决冲突返回非零。
-
-### 操作
-
-```text
-[1] [2] [3] [4]  切页
-[a]           全选 / 取消全选（Install 与 Uninstall 页）
-[↑/↓] / [j/k] 移动高亮
-[Space]       勾选 Checkbox / 确认 Radiobox 当前高亮项
-[e] / [Enter] 打开确认弹窗
-[q]           退出
-```
-
-> 注意：Radiobox（Update 页、Uninstall 页、诊断页的模式选择）用方向键只移动高亮，**需再按空格**才会真正选中该项，然后按 `e` → `Enter` 确认。
-
-### 执行与输出契约
-
-- 按 `[e]` 弹出确认框，选「执行」后：
-  - 后台以子进程运行对应的 `setup.sh` 命令，输出实时显示在底部日志面板
-  - **stdout** 输出一行机器可读的 tab 分隔记录，格式：`<action>\t<items>`，items 以 tab 分隔
-  - 运行期间再按 `e` 会提示「任务正在执行」；`q` 会取消后台子进程并等待清理
-- 机器可读记录示例（items 里 `skill:`/`plugin:` 前缀明确区分类型）：
-
-```text
-install	all
-install	skill:context-mode	plugin:code-review
-update	all
-update	skill:context-mode
-uninstall	all
-uninstall	core
-uninstall	skill:context-mode	plugin:superpowers
-verify	all
-status	all
-doctor	all
-```
-
-- TUI 的 UI 全部输出到 **stderr**，stdout 只保留机器可读记录，方便脚本消费
-- `--print-selection` 提供无 UI 的纯打印模式：`build/installer-tui/installer-tui --print-selection` 直接输出统一资源计划的 9 列 TSV 记录（与 `resource-plan.py --format tsv` 一致），无冲突 exit 0、有未决冲突 exit 2，供脚本/测试使用
-- 无 TTY（stdin 非终端）时：有 `--help`/`--print-selection` 则正常处理，否则提示并退出 2，不会阻塞挂起
+> 旧 C++/FTXUI TUI（`tools/installer-tui`）已随 setup.sh 重写移除；统一资源冲突解析现经 `launch update --choose` 提供。
 
 ## 清单配置
 
-外部 skills 与 plugins 声明在 `configs/` 下，用 Python `parse-manifests.py` 解析（纯标准库，Python 3.10 无 tomllib 时自动回退）：
+外部 skills 与 plugins 声明在 `configs/` 下，由 `script/launch/manifest.py` 解析（纯标准库，兼容 Python 3.10）：
 
 ```text
 configs/skills.toml    → 每个 [[sources]] 声明一个外部 skill 源（当前为空清单）
@@ -365,41 +238,73 @@ configs/plugins.toml   → 每个 [[plugins]] 声明一个第三方 plugin
 ```
 
 - `skills.toml`：`npx -y skills@latest add <repo> -s <skill> -a claude-code -g`
-  - **当前为空**：外部 skill 全部经 plugins.toml 的 claude plugin 机制提供，避免同一 skill 同时出现在 npx source 与 plugin（双源冲突）。新增 npx source 时取消注释下方 vercel 示例并按需调整即可。
+  - **当前为空**：外部 skill 全部经 plugins.toml 的 claude plugin 机制提供，避免同一 skill 同时出现在 npx source 与 plugin（双源冲突）。新增 npx source 时按现有注释示例补充即可。
 - `plugins.toml`：`method = "claude-plugin"` → `claude plugin marketplace add + install`；`method = "npx"` → 手动安装，仅备注命令
-  - 官方市场（anthropics/claude-plugins-official）需**为每个 plugin 单独声明 `[[plugins]]` 条目**（如 skill-creator、code-review），只声明 marketplace 不会安装任何 plugin；marketplace add 由各条目在 install 前幂等执行
-
-测试：`bash tests/test-manifest-parsing.sh`
+  - 官方市场（anthropics/claude-plugins-official）需**为每个 plugin 单独声明 `[[plugins]]` 条目**，只声明 marketplace 不会安装任何 plugin；marketplace add 由各条目在 install 前幂等执行
 
 ## 运行测试
 
-测试脚本在 `tests/` 下，CI（`.github/workflows/test.yml`）与本地共用同一入口。各脚本都是幂等自包含的 bash 回归测试，隔离于 `$HOME`/`~/.claude`（settings-merge 用临时 fixture 验证增量合并）：
+测试脚本在 `tests/` 下，CI（`.github/workflows/test.yml`）与本地共用同一入口。各脚本都是幂等自包含的，隔离于临时 `$HOME`/fixture：
 
 ```bash
-bash tests/test-manifest-parsing.sh        # TOML 清单解析（skills.toml / plugins.toml）
-bash tests/test-resource-plan.sh           # 统一资源计划层（discover/normalize/conflict）
-bash tests/test-setup-resolver.sh          # setup.sh 统一 resolver 与旧 flags 兼容
-bash tests/test-setup-path-and-marketplace.sh  # repo 路径定位与 marketplace 解析
-bash tests/test-setup-dependencies.sh      # 依赖 bootstrap 回归
-bash tests/test-settings-merge.sh          # settings.json 增量合并语义
-bash tests/test-skill-context-verification.sh  # skill 上下文验证 source fallback
-bash tests/test-installer-tui.sh           # TUI 集成测试（需先构建 FTXUI，见「交互式 TUI 安装器」）
+bash tests/test-launch-manifest.sh    # TOML 清单解析（skills.toml / plugins.toml）
+bash tests/test-launch-plan.sh        # 统一资源计划层（discover/normalize/conflict）
+bash tests/test-launch-settings.sh    # settings.json 增量合并语义（core.merge_settings_json）
+bash tests/test-launch-doctor.sh      # doctor 模块：claude CLI/doctor/auth 检测（fixture claude）
+bash tests/test-launch-context-smoke.sh  # doctor /context 注入冒烟解析（fixture claude）
 ```
 
 ## 架构概要
 
 ```text
+./launch              → script/launch/cli.py（argparse + 子命令路由）
+script/launch/
+  core.py             → 核心配置同步/验证/卸载 + settings.json 渲染合并
+  manifest.py         → skills.toml / plugins.toml 解析
+  skills.py           → 外部（npx skills）+ 自有（symlink）skills 生命周期
+  freshness.py        → lock hash vs 远端 oid 最新版比对
+  plugins.py          → claude plugin marketplace 生命周期
+  plan.py             → 统一资源计划（local/remote 冲突、--choose 解析）
+  doctor.py           → 诊断面（核心验证 + claude CLI + plugin 注册 + 冒烟）
+  updater.py          → git pull --ff-only 仓库更新
+  agents.py           → claude / agents 双目标解析
+  util.py             → 日志/颜色/confirm/symlink/依赖检测
+
 ~/.claude/
   CLAUDE.md        → claude/CLAUDE.md.ccfg（或由 OMC 注入后的宿主文件）
   rules/           → claude/rules/
   rules-available/ → claude/rules-available/
-  agents/          → claude/agents/（自定义 subagent，原 claude/agents-custom）
+  agents/          → claude/agents/（自定义 subagent）
   hooks/rules-loader.sh → claude/hooks/rules-loader.sh
-  skills/          → 自有 skill 由软链接安装（本地 skills/ 源）；外部 skill 现由 plugin 提供（见 plugins/）
+  skills/          → 自有 skill 由软链接安装（本地 skills/ 源）；外部 skill 现由 plugin 提供
   settings.json    ← 从 claude/settings.template.json 渲染并合并
   plugins/
     marketplaces/{omc,superpowers,context-mode,ponytail,claude-plugins-official}
     cache/omc/{oh-my-claudecode,context-mode,ponytail,superpowers}/.../skills/ → 外部 skill 经 plugin 注入
-```
+~/.agents/skills/     → universal 共享 skills 目录（--agent agents 目标）
 
 外部 skills 与 plugins 的来源声明在 `configs/`（见上文清单配置），不由仓库直接管理。
+```
+
+## 故障恢复
+
+- **安装后异常**：
+  ```bash
+  ~/claude-config/launch install --force
+  ```
+- **只想检查，不想重装**：
+  ```bash
+  ~/claude-config/launch doctor
+  ```
+- **需要更深的检查**：
+  ```bash
+  ~/claude-config/launch doctor --smoke-test
+  ```
+- **插件 hook 报错**：先 `/reload-plugins`，仍有问题再重跑 `./launch install`
+- **依赖缺失**：按 `launch` 输出的提示手动补装（`node`/`npm` 建议 nvm + 最新 LTS）
+- **版本回退**：
+  ```bash
+  git -C ~/claude-config log --oneline
+  git -C ~/claude-config checkout <commit>
+  ~/claude-config/launch install --force
+  ```

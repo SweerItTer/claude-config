@@ -17,8 +17,7 @@ Thumbs.db
 openspec/
 .omc/
 external/
-# 统一资源计划层（script/resource-plan.py）是核心交付物，必须入库；
-# 只忽略运行时/临时产物，不再用宽松的 *plan* glob 误伤合法脚本。
+# launch CLI 运行时/临时产物
 *.plan.tmp
 *.plan.json
 plan.log
@@ -34,7 +33,7 @@ plan.log
 # Cache
 cache/
 
-# Python bytecode (tests/test-manifest-parsing.sh 用 py_compile 校验)
+# Python bytecode
 __pycache__/
 *.pyc
 
@@ -44,7 +43,7 @@ __pycache__/
 # Hook markers
 .dirty
 
-# CMake build output (tools/installer-tui)
+# Build output
 /build/
 
 .*/
