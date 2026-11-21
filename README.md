@@ -75,6 +75,8 @@ launch [--agent claude|agents] [--dry-run] [-y] [-v] [--no-color] [--ci]
        <command> [args...]
 
 install [names...] [--plugin N...]   装 skills（无 N=全量；--plugin 装第三方 plugin）
+add <owner/repo> <skill...>          试装第三方 skill，成功后追加 [[sources]] 进 skills.toml（--note 备注可选）
+remove <names...>                    卸载 skills.toml 条目并从清单删除（自有 skills/ 源不触碰）
 uninstall <names...> [--all|--core]  卸载（裸名先 skill 后 plugin；typed skill:/plugin: 直通）
 update [names...]                    无 N = git pull + 全量更新；N 可重复 = 指定项
 list                                 列已安装 skills（默认双 agent，==== 分隔）

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -107,6 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "子命令:\n"
             "  install [names...]    装 skills（无 N=全量；--plugin N... 装第三方 plugin）\n"
+            "  add <repo> <skill...> 试装第三方 skill，成功后追加 [[sources]] 进 skills.toml\n"
+            "  remove <names...>     卸载 skills.toml 条目并从清单删除\n"
             "  uninstall <names...>  卸载（裸名先 skill 后 plugin；typed skill:/plugin: 直通；--all/--core）\n"
             "  update [names...]     无 N = git pull + 全量更新；N 可重复 = 指定项\n"
             "  list                  列已安装 skills（默认双 agent，==== 分隔）\n"
@@ -122,6 +125,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("names", nargs="*", help="skill 名（可重复；无=全量）")
     p.add_argument("--plugin", nargs="+", default=[], metavar="N",
                    help="第三方 plugin 名（可重复）")
+
+    p = sub.add_parser("add", parents=[common()],
+                       help="试装第三方 skill 并把 [[sources]] 追加进 skills.toml")
+    p.add_argument("repo", metavar="OWNER/REPO", help="GitHub 仓库（owner/name 格式）")
+    p.add_argument("skills", nargs="+", metavar="SKILL",
+                   help="skill 名（SKILL.md frontmatter name 或目录 basename，可重复）")
+    p.add_argument("--note", default="", help="可选备注文本，写入 note 字段")
+
+    p = sub.add_parser("remove", parents=[common()],
+                       help="卸载 skills.toml 条目并从清单删除（自有 skills/ 源不触碰）")
+    p.add_argument("names", nargs="+", help="skills.toml 条目名（可重复）")
 
     p = sub.add_parser("uninstall", parents=[common()], help="卸载 skills / plugins / core")
     p.add_argument("names", nargs="*", help="目标名（可重复）")
@@ -486,6 +500,220 @@ def cmd_core(args, agent) -> int:
     return rc
 
 
+# ---------- add / remove ----------
+
+def _valid_repo(repo: str) -> bool:
+    """GitHub owner/name（恰好一个 '/'，两侧非空）。"""
+    owner, sep, name = repo.partition("/")
+    return sep != "" and "/" not in name and owner != "" and name != ""
+
+
+def _render_source_block(source: manifest.SkillSource) -> str:
+    """SkillSource → [[sources]] TOML 块文本（字段序固定；note 可选，引号转义）。"""
+    def q(v: str) -> str:
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    lines = ["[[sources]]",
+             f"name = {q(source.name)}",
+             f"repo = {q(source.repo)}",
+             f"skill = {q(source.skill)}",
+             f"agent = {q(source.agent)}",
+             f"scope = {q(source.scope)}"]
+    if source.note:
+        lines.append(f"note = {q(source.note)}")
+    return "\n".join(lines) + "\n"
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """tempfile + os.replace 原子替换（add 追加/remove 删块共用）。"""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            fp.write(text)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _append_source(config: Path, source: manifest.SkillSource) -> None:
+    """追加 [[sources]] 块到 skills.toml 文件尾（不重排、不破坏注释）。
+
+    Ctrl-C 安全：块文本一次性 write + fsync 后才关句柄，最多留一个已 fsync 的完整块；
+    老文件本身不动。绝不用全量重写（会破坏原文件格式）。"""
+    block = _render_source_block(source)
+    text = ""
+    if config.is_file():
+        text = config.read_text(encoding="utf-8")
+    sep = "" if (not text or text.endswith("\n\n")) else ("\n" if text.endswith("\n") else "\n\n")
+    with open(config, "a", encoding="utf-8") as fp:
+        fp.write(sep + block)
+        fp.flush()
+        os.fsync(fp.fileno())
+
+
+def _remove_source_blocks(config: Path, names: list[str]) -> tuple[int, int]:
+    """按块边界（[[sources]] 起、下一 [[ 或 EOF 止）从 skills.toml 移除目标 name 的块。
+
+    返回 (成功删除数, 畸形块数)。畸变块（块内无 name= 行）不删、由调用方置失败。
+    原子替换：读全文 → 剔块 → tempfile+os.replace 写回；注释与非目标块原样保留。
+    """
+    remaining: list[str] = []
+    removed = malformed = 0
+    if config.is_file():
+        text = config.read_text(encoding="utf-8")
+        # 预扫描畸变块：任一目标名所在块缺 name= 行 → 整体中止（保持文件不动）
+        for raw_block in text.split("[["):
+            if not raw_block.startswith("sources]]"):
+                continue
+            body = raw_block[len("sources]]"):]
+            head = body.split("[[", 1)[0]
+            stripped = head.strip()
+            if stripped.startswith("#") or not stripped:
+                continue
+            lines = [ln.strip() for ln in head.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+            if not any(ln.startswith("name ") or ln.startswith("name=") for ln in lines):
+                malformed += 1
+        if malformed:
+            return 0, malformed
+        lines = text.splitlines(keepends=True)
+        i = 0
+        in_sources = False
+        cur_block: list[str] | None = None
+        cur_name: str | None = None
+        name_re = re.compile(r'^\s*name\s*=\s*"(.*)"\s*$')
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            # 边界：真表头 [[...]]，或注释掉的表头（# ...[[...]]，注释候选块不能被前面的块删除吞掉）
+            is_table = stripped.startswith("[[") and stripped.endswith("]]")
+            is_commented_table = stripped.startswith("#") and "[[" in stripped
+            if is_table or is_commented_table:
+                # 上一个块收尾
+                if cur_block is not None:
+                    if in_sources and cur_name in names:
+                        removed += 1
+                    else:
+                        remaining.extend(cur_block)
+                if is_table:
+                    table = stripped[2:-2].strip()
+                    in_sources = (table == "sources")
+                    if in_sources:
+                        cur_block = [line]
+                        cur_name = None
+                    else:
+                        cur_block = None
+                        cur_name = None
+                else:  # 注释表头：当前块结束，注释行归 remaining
+                    in_sources = False
+                    cur_block = None
+                    cur_name = None
+                    remaining.append(line)
+                i += 1
+                continue
+            if in_sources and cur_block is not None:
+                cur_block.append(line)
+                m = name_re.match(line)
+                if m and cur_name is None:
+                    cur_name = m.group(1)
+            else:
+                remaining.append(line)
+            i += 1
+        if cur_block is not None:
+            if in_sources and cur_name in names:
+                removed += 1
+            else:
+                remaining.extend(cur_block)
+        if removed:
+            _atomic_write(config, "".join(remaining))
+    return removed, malformed
+
+
+def _pending_adds(args, agent) -> list[manifest.SkillSource]:
+    """add 的共享前置：repo 校验 + 名字冲突预检（原子性：任一冲突整体不加）。"""
+    sources = manifest.load_skills(_config("skills.toml"))
+    existing = {s.name for s in sources}
+    conflicts = [n for n in args.skills if n in existing]
+    if conflicts:
+        util.err(f"skills.toml 已有同名 skill，整体不加: {' '.join(sorted(set(conflicts)))}")
+        util.err(f"现有名: {' '.join(sorted(existing))}")
+        return []
+    agent_key = agent.npx_key
+    return [manifest.SkillSource(name=n, repo=args.repo, skill=n,
+                                 agent=agent_key, scope="global",
+                                 note=getattr(args, "note", "") or "") for n in args.skills]
+
+
+def cmd_add(repo: str, skills_names: list[str], args, agent) -> int:
+    """add <repo> <skill...>：试装校验后追加 [[sources]] 到 skills.toml。"""
+    if not _valid_repo(repo):
+        util.err(f"repo 必须是 owner/name 格式（恰好一个 '/'）: {repo!r}")
+        util.info("用法: launch add <owner/repo> <skill...> [--agent claude|agents] [--note <text>]")
+        return 2
+    args.skills = skills_names
+    sources = _pending_adds(args, agent)
+    if not sources:
+        return 1
+    if util.DRY_RUN:
+        for src in sources:
+            util.dry(f"试装: {' '.join(skills._add_args(src.repo, [src.skill], agent.npx_key, src.scope))}")
+            util.dry(f"将追加到 {_config('skills.toml')}:\n{_render_source_block(src)}")
+        util.info(f"后续: launch install {' '.join(s.name for s in sources)} / launch remove <name>")
+        return 0
+    rc = skills.install(sources, agent, names=[s.skill for s in sources])
+    if rc != 0:
+        util.err("试装失败，skills.toml 未改动")
+        return 1
+    config = _config("skills.toml")
+    for src in sources:
+        _append_source(config, src)
+        util.log(f"已追加到 skills.toml: {src.name}")
+    util.log("add 完成")
+    util.info(f"后续: launch install {' '.join(s.name for s in sources)} / launch remove <name>")
+    return 0
+
+
+def cmd_remove(names: list[str], args, agent) -> int:
+    """remove <name...>：卸载已装副本 + 从 skills.toml 删条目；永不触碰仓库 skills/ 源。"""
+    sources = manifest.load_skills(_config("skills.toml"))
+    by_name = {s.name: s for s in sources}
+    missing = [n for n in names if n not in by_name]
+    hits = [n for n in names if n in by_name]
+    if missing:
+        util.err(f"skills.toml 中不存在的 skill: {' '.join(missing)}")
+        util.err(f"合法名: {' '.join(sorted(by_name))}")
+    if not hits:
+        return 1
+    rc = 1 if missing else 0
+    if util.DRY_RUN:
+        for n in hits:
+            util.dry(f"卸载 skill: {n}")
+            util.dry(f"将删除 {_config('skills.toml')} 中 name = \"{n}\" 的 [[sources]] 块")
+        return rc
+    for n in hits:
+        if _uninstall_skill(n, agent):
+            rc = 1
+        removed, malformed = _remove_source_blocks(_config("skills.toml"), [n])
+        if malformed:
+            util.err(f"skills.toml 块格式畸变（缺 name= 行），跳过: {n}")
+            rc = 1
+        elif removed == 0:
+            util.err(f"skills.toml 未找到可删除的块: {n}")
+            rc = 1
+        else:
+            util.log(f"已从 skills.toml 删除条目: {n}")
+    if rc == 0:
+        util.log(f"remove 完成 ({' '.join(hits)})")
+    else:
+        util.err("remove 未全部完成")
+    return rc
+
+
 # ---------- main ----------
 
 def _route(args, agent) -> int:
@@ -497,6 +725,10 @@ def _route(args, agent) -> int:
         return 2
     if cmd == "install":
         return cmd_install(args, agent)
+    if cmd == "add":
+        return cmd_add(args.repo, args.skills, args, agent)
+    if cmd == "remove":
+        return cmd_remove(args.names, args, agent)
     if cmd == "uninstall":
         if args.all and args.core:
             util.err("--all 与 --core 不能同时使用")
@@ -581,4 +813,75 @@ if __name__ == "__main__":
     assert ns.dry_run and ns.names == ["grilling"]                  # 全局 flag 子命令后
     ns = p.parse_args(["--dry-run", "list"])
     assert ns.dry_run and ns.command == "list"
+    # add/remove 纯函数自检
+    assert _valid_repo("tt-a1i/archify")
+    assert not _valid_repo("archify")            # 缺 '/'
+    assert not _valid_repo("a/b/c")              # 两个 '/'
+    assert not _valid_repo("/name")              # owner 空
+    assert not _valid_repo("owner/")             # name 空
+    src = manifest.SkillSource(name="x\"y\\z", repo="o/r", skill="s",
+                               agent="claude-code", scope="global", note='a"b')
+    block = _render_source_block(src)
+    assert block.startswith("[[sources]]\nname = \"x\\\"y\\\\z\"\n")
+    assert 'note = "a\\"b"' in block
+    # 注意：3.10 手写解析器不 unescape，含引号/反斜杠值的往返只有 tomllib(≥3.11) 保证；
+    # 往返断言用普通值（真实 note 是中文散文，不含这些字符）。
+    plain = manifest.SkillSource(name="plain-name", repo="o/r", skill="s",
+                                 agent="claude-code", scope="global", note="中文备注")
+    ns = p.parse_args(["add", "o/r", "s1", "s2", "--note", "测试"])
+    assert ns.repo == "o/r" and ns.skills == ["s1", "s2"] and ns.note == "测试"
+    ns = p.parse_args(["remove", "a", "b"])
+    assert ns.names == ["a", "b"]
+    # remove 块删除：无文件 → 0 删 0 畸形；典型块 → 删 1；注释块/其他表不动；缺 name= 畸形
+    with tempfile.TemporaryDirectory() as tmpd:
+        cfg = Path(tmpd) / "skills.toml"
+        before = 0, 0
+        assert _remove_source_blocks(cfg, ["x"]) == before      # 文件不存在
+        cfg.write_text(
+            "# 头注释\n"
+            "[[sources]]\n"
+            'name = "grilling"\n'
+            'repo = "m/s"\n'
+            "\n"
+            "# [[sources]]\n"
+            '# name = "commented"\n'
+            '# repo = "m/s"\n'
+            "\n"
+            "[[sources]]\n"
+            'repo = "no-name"\n'
+            "\n"
+            "[[sources]]\n"
+            'name = "wayfinder"\n'
+            'repo = "m/s"\n'
+            'note = "尾块"\n',
+            encoding="utf-8")
+        removed, malformed = _remove_source_blocks(cfg, ["grilling"])
+        assert (removed, malformed) == (0, 1), (removed, malformed)  # 畸形块 → 整体中止
+        assert "grilling" in cfg.read_text(encoding="utf-8")
+        cfg.write_text(
+            "# 头注释\n"
+            "[[sources]]\n"
+            'name = "grilling"\n'
+            'repo = "m/s"\n'
+            "\n"
+            "# [[sources]]\n"
+            '# name = "commented"\n'
+            "\n"
+            "[[sources]]\n"
+            'name = "wayfinder"\n'
+            'repo = "m/s"\n'
+            'note = "尾块"\n',
+            encoding="utf-8")
+        original = cfg.read_text(encoding="utf-8")
+        removed, malformed = _remove_source_blocks(cfg, ["grilling", "not-there"])
+        assert (removed, malformed) == (1, 0), (removed, malformed)
+        after = cfg.read_text(encoding="utf-8")
+        assert 'name = "grilling"' not in after
+        assert "# 头注释" in after and 'name = "wayfinder"' in after
+        assert "# [[sources]]" in after                      # 注释块原样保留
+        assert original.count("[[sources]]") - after.count("[[sources]]") == 1
+        # _append_source：无文件从零建；已删块重加；中文 note 往返
+        _append_source(cfg, plain)
+        reloaded = manifest.load_skills(cfg)
+        assert reloaded[-1].name == "plain-name" and reloaded[-1].note == "中文备注"
     print("cli self-check ok", file=sys.stderr)

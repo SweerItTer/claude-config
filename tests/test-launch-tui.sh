@@ -16,15 +16,17 @@ python3 "$REPO_ROOT/script/launch/tui.py" \
 
 command -v script >/dev/null || { echo "SKIP: 无 script 命令，跳过 pty 冒烟"; exit 0; }
 
-# --- pty 冒烟：能启动、'q' 能退出（timeout 3 兜底；不追求键位覆盖）---
+# --- pty 冒烟：能启动、'q' 能退出（timeout 10 兜底；不追求键位覆盖）---
+# 启动会拉 freshness（GitHub API 逐 repo，最坏 3 分支尝试 × RTT），本地网络抖动
+# 就能吃掉数秒 → 3s 会把慢启动误判为挂死（rc=124 是「启动后没退出」非崩溃）。
 # timeout 默认在新进程组跑子进程，会与 pty 会话竞争输入 → 必须 --foreground。
-if printf 'q' | script -qec "timeout --foreground 3 $REPO_ROOT/launch --tui" /dev/null; then
+if printf 'q' | script -qec "timeout --foreground 10 $REPO_ROOT/launch --tui" /dev/null; then
     :
 else
     rc=$?
     # timeout 124 = 程序启动后没退出；其余非零 = TUI 崩溃
     if [ "$rc" -eq 124 ]; then
-        echo "FAIL: --tui 未在 3s 内响应 q 退出"
+        echo "FAIL: --tui 未在 10s 内响应 q 退出"
         exit 1
     fi
     echo "FAIL: pty 冒烟 --tui 退出码 $rc"
