@@ -334,6 +334,13 @@ def cmd_install(args, agent) -> int:
                                                force=getattr(args, "force", False)):
         rc = 1
 
+    # 仓库自有 skills（symlink）：与 agents 分支同一语义——指定名只装指定的，无参全量。
+    util.phase("Phase 3.5: 仓库自有 skills（symlink）")
+    if "skills" not in skip:
+        local = [n for n in names if n in set(local_names)] if names else local_names
+        if skills.install_local(local, agent):
+            rc = 1
+
     # 单项 skill 安装是单项入口：没同时指定 plugin 时，装完即退出，
     # 不继续全量 plugin 安装和验证流程（旧语义照搬）。
     if names and not args.plugin:

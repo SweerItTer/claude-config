@@ -26,7 +26,7 @@ import launch.util as util
 from launch.agents import LOCK_FILE, AgentSpec, resolve_agent
 from launch.freshness import check_freshness
 from launch.lockmerge import merge_locks
-from launch.manifest import SkillSource, load_skills
+from launch.manifest import SkillSource, load_skills, local_skill_names as manifest_local_names
 
 
 def _skills_config() -> Path:
@@ -219,10 +219,17 @@ def install_local(names: list[str], agent: AgentSpec) -> int:
 
 
 def uninstall(names: list[str], agent: AgentSpec) -> int:
-    """卸载外部 skills（npx skills remove）。typed skill:/plugin: 消歧在 cli 完成。"""
+    """卸载外部 skills（npx skills remove）。typed skill:/plugin: 消歧在 cli 完成。
+
+    仅仓库自有（不在 skills.toml）的名字静默跳过——由 uninstall_local 负责，
+    cli._uninstall_skill 两侧都调，不应因一侧不适用而置失败。
+    """
     by_name = {s.name: s for s in load_skills(_skills_config())}
+    local_only = set(manifest_local_names(util.repo_root()))
     failed = 0
     for name in names:
+        if name in local_only and name not in by_name:
+            continue
         src = by_name.get(name)
         if src is None:
             util.err(f"skills.toml 中找不到 skill: {name}")
