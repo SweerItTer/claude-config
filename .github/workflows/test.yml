@@ -231,6 +231,9 @@ jobs:
       - name: Verify launch context smoke regression script
         run: bash ./tests/test-launch-context-smoke.sh
 
+      - name: Verify launch tui regression script
+        run: bash ./tests/test-launch-tui.sh
+
       - name: Run launch smoke test
         run: ./launch --ci --smoke-test
         env:
