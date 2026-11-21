@@ -45,6 +45,13 @@ skill = "archify"
 agent = "claude-code"
 scope = "global"
 
+[[sources]]
+name = "diagram-design"
+repo = "cathrynlavery/diagram-design"
+skill = "diagram-design"
+agent = "claude-code"
+scope = "global"
+
 # [[sources]]
 # name = "code-review"
 # repo = "mattpocock/skills"
