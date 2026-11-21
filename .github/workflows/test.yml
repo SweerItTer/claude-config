@@ -235,7 +235,7 @@ jobs:
         run: bash ./tests/test-launch-tui.sh
 
       - name: Run launch smoke test
-        run: ./launch --ci --smoke-test
+        run: ./launch install --ci --smoke-test
         env:
           REPO_ROOT: ${{ github.workspace }}
           CLAUDE_BASE_URL: ${{ vars.CLAUDE_BASEURL }}
@@ -253,7 +253,7 @@ jobs:
           while true; do
             echo "=== 第 ${attempt} 次幂等性检查 ==="
             set +e
-            output=$(./launch --ci --force --smoke-test 2>&1)
+            output=$(./launch install --ci --force --smoke-test 2>&1)
             rc=$?
             set -e
             echo "$output"
